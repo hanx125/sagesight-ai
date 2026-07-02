@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试复选框布局</title>
+    <style>
+        .checkbox-scroll-container {
+            max-height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 4px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px 12px;
+            align-items: start;
+            background-color: white;
+        }
+        
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            flex-direction: row;
+            padding: 6px 8px;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+            min-height: 32px;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .checkbox-label {
+            font-size: 14px;
+            user-select: none;
+            text-align: left;
+            flex-grow: 1;
+            margin-right: 12px;
+            color: #333;
+            display: block;
+            min-width: 0;
+        }
+        
+        .checkbox-input {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            flex-shrink: 0;
+            margin: 0;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div style="padding: 20px;">
+        <h2>测试复选框布局</h2>
+        <div id="container"></div>
+    </div>
+    
+    <script>
+        const classes = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat'];
+        
+        const scrollContainer = document.createElement('div');
+        scrollContainer.className = 'checkbox-scroll-container';
+        
+        classes.forEach((className, index) => {
+            const checkboxItem = document.createElement('div');
+            checkboxItem.className = 'checkbox-item';
+            
+            const label = document.createElement('span');
+            label.className = 'checkbox-label';
+            label.textContent = className;
+            
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'checkbox-input';
+            checkbox.id = `class_${index}`;
+            checkbox.value = className;
+            
+            checkboxItem.appendChild(label);
+            checkboxItem.appendChild(checkbox);
+            scrollContainer.appendChild(checkboxItem);
+        });
+        
+        document.getElementById('container').appendChild(scrollContainer);
+    </script>
+</body>
+</html>

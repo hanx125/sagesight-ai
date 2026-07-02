@@ -1,0 +1,144 @@
+# ========================================
+# YOLO 目标检测配置文件
+# ========================================
+# 硬件配置：NVIDIA RTX 2070 (8GB) | CUDA 12.9 | Python 3.11 | 32GB RAM
+# 
+# 适用场景：
+# - 室内外场景（光照变化）
+# - 固定摄像头（背景稳定）
+# - 移动摄像头（背景变化）
+# 
+# 优势：
+# - 高精度目标检测
+# - 支持多种目标类别
+# - GPU 加速推理
+
+# ========================================
+# 检测器配置
+# ========================================
+
+detector:
+  # ONNX 模型路径
+  #model_path: "models/yolov11n.onnx"
+  
+  # 模型类型
+  # 可选值：yolov8n, yolo11n
+  #model_type: "yolo11n"
+  
+  # 推理后端
+  # 可选值：
+  # - onnx_cuda: ONNX Runtime + CUDA Execution Provider（默认）
+  # - onnx_tensorrt: ONNX Runtime + TensorRT Execution Provider（推荐，FP16 加速）
+  # - tensorrt: 直接加载 TensorRT Engine（需要 cuda-python）
+  backend: "onnx_tensorrt"
+  
+  # TensorRT 配置参数（扁平结构，与代码命名一致）
+  
+  # TensorRT Engine 缓存路径（首次运行会自动编译）
+  # 说明：使用 backend="onnx_tensorrt" 时，ONNX 模型会自动编译为 TensorRT Engine 并缓存
+  tensorrt_engine_cache_path: "./trt_cache"
+  
+  # 使用 FP16 精度（推荐，性能提升约 2.5x）
+  # 说明：FP16 可以显著提升推理速度，精度损失极小
+  use_fp16: true
+  
+  # TensorRT Engine 文件路径（backend="tensorrt" 时使用）
+  # 说明：如果使用 backend="onnx_tensorrt"，则不需要此配置（会自动生成）
+  # tensorrt_engine_path: "models/yolov11n_trt_fp16.engine"
+  
+  # TensorRT lib 目录路径（Windows 需要配置）
+  # 说明：如果已配置系统环境变量，则不需要此配置
+  tensorrt_lib_path: "D:\\TensorRT-10.5.0.18.Windows.win10.cuda-12.6\\TensorRT-10.5.0.18\\lib"
+  
+  # 全局置信度阈值（低于此值的检测结果将被过滤）
+  # 可以在 class_config 中为每个类别单独设置
+  conf_threshold: 0.25
+  
+  # NMS IoU 阈值（用于去除重叠框）
+  # 降低阈值以去除更多重叠框，减少 ID 分裂
+  iou_threshold: 0.35
+  
+  # 最小检测框面积（像素）
+  # 说明：过滤过小的检测框，减少噪声和误检
+  # 推荐值：10-500（小目标用小值，大目标用大值）
+  min_box_area: 50
+  
+  # 模型输入尺寸
+  # 说明：YOLO 模型期望的输入分辨率，必须与预处理器的 model_input_size 一致
+  # 通常为 640（YOLOv8n/YOLO11n）
+  input_width: 640
+  input_height: 640
+  
+  # GPU 配置
+  device_id: 0  # GPU 设备 ID
+  gpu_mem_limit: 6442450944  # 6GB 显存限制（字节）
+  
+  # 检测目标类别（从 COCO 数据集中选择）
+  # 常用类别：person(0), bicycle(1), car(2), motorcycle(3), bus(5), truck(7)
+  #target_classes: ['car', 'person']
+
+# ========================================
+# 预处理配置
+# ========================================
+
+preprocessor:
+  # 输入尺寸（解码器输出尺寸）
+  width: 640
+  height: 640
+  
+  # YOLO 模型输入尺寸（模型期望的输入分辨率）
+  # 说明：如果 width/height 与 model_input_size 不同，会在预处理时自动 resize
+  model_input_size: 640
+  
+  # 归一化配置
+  # 说明：YOLO 模型通常使用简单的 [0, 1] 归一化，不需要均值和标准差
+  # 如果需要自定义归一化，可以设置以下参数（代码会自动使用）
+  rgb_mean: [0.0, 0.0, 0.0]
+  rgb_std: [1.0, 1.0, 1.0]
+
+# ========================================
+# 解码器配置
+# ========================================
+
+decoder:
+  # 解码器配置
+  width: 640
+  height: 640
+  hwaccel: "dxva2"  # 硬件加速：dxva2, cuda, qsv, none
+  rtsp_transport: "tcp"
+  reconnect: true
+  reconnect_delay: 5
+  buffer_size: 1048576
+  frame_queue_size: 30
+
+  # ========================================
+  # 新架构：环形缓冲区 + 索引队列（零拷贝）
+  # ========================================
+  # 说明：启用此架构可以实现真正的零拷贝和数据解耦
+  # 优势：
+  #   - 零拷贝：SharedMemory负责数据传输，FrameQueue负责调度
+  #   - 环形缓冲区：多帧存储，新帧不覆盖正在读取的帧
+  #   - 索引队列：只存储索引，不存储完整数据，内存占用低
+  #   - 生产者-消费者解耦：数据和调度分离
+  # 
+  # 性能对比：
+  #   - 新架构：0次内存拷贝，高并发，低延迟
+  #   - 旧架构：0次内存拷贝（SharedMemory零拷贝），但单帧存储
+  use_ring_buffer: true  # 启用新架构
+
+  # 环形缓冲区块数量（推荐值：3-10）
+  # 说明：块数量越多，可以缓存的帧越多，但内存占用越大
+  # - 太少：容易丢帧（检测速度跟不上时）
+  # - 太多：内存占用增加，但更稳定
+  # 推荐值：
+  #   - 实时性优先：3-5块
+  #   - 稳定性优先：8-10块
+  ring_buffer_block_count: 5
+
+  # 索引队列大小（推荐值：10-50）
+  # 说明：索引队列用于调度和同步，只存储索引（不存储数据）
+  # - 太小：容易丢帧
+  # - 太大：增加延迟（但不会丢失帧）
+  # 推荐值：30-50
+  index_queue_size: 30
+

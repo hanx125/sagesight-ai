@@ -1,0 +1,744 @@
+{% extends "base.html" %}
+
+{% block title %}任务管理{% endblock %}
+
+{% block content %}
+<div class="page-container">
+    <!-- 页面标题 -->
+    <div class="page-header">
+        <div class="page-header-left">
+            <h2>任务管理</h2>
+            <p>管理检测任务，一个任务可同时检测多个摄像机</p>
+        </div>
+        <div class="page-header-right">
+            <button class="btn btn-primary" onclick="openCreateModal()">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                </svg>
+                创建任务
+            </button>
+        </div>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="stats-cards">
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-total">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statTotal">0</div>
+                <div class="stat-label">总任务数</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-running">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statRunning">0</div>
+                <div class="stat-label">运行中</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-cameras">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statCameras">0</div>
+                <div class="stat-label">摄像机数</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-bindings">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17 20.41L18.41 19 17 17.59 15.59 19 17 20.41zM7.5 17h6l2-2H7.5v2zm0-4h6l2-2H7.5v2zm0-4h6l2-2H7.5v2z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statBindings">0</div>
+                <div class="stat-label">绑定数</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 筛选区域 -->
+    <div class="filter-section">
+        <div class="filter-group">
+            <label>状态：</label>
+            <select id="filterStatus" onchange="loadTasks()">
+                <option value="">全部</option>
+                <option value="running">运行中</option>
+                <option value="stopped">已停止</option>
+                <option value="error">错误</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>算法：</label>
+            <select id="filterAlgorithm" onchange="loadTasks()">
+                <option value="">全部</option>
+                <option value="yolov11">YOLOv11</option>
+                <option value="yolov8">YOLOv8</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>搜索：</label>
+            <input type="text" id="filterSearch" name="task_search" placeholder="搜索任务名称..." autocomplete="off" readonly onfocus="this.removeAttribute('readonly');">
+        </div>
+        <div class="filter-actions">
+            <button class="btn btn-secondary" onclick="resetFilters()">重置</button>
+        </div>
+    </div>
+
+    <!-- 任务列表 -->
+    <div class="tasks-container">
+        <div class="tasks-header">
+            <h3>任务列表</h3>
+            <div class="view-toggle">
+                <button class="view-btn active" onclick="setView('card')" title="卡片视图">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M4 11h5V5H4v6zm0 7h5v-6H4v6zm6 0h5v-6h-5v6zm6 0h5v-6h-5v6zm-6-7h5V5h-5v6zm6-6v6h5V5h-5z"/>
+                    </svg>
+                </button>
+                <button class="view-btn" onclick="setView('list')" title="列表视图">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        
+        <div id="tasksList" class="tasks-list">
+            <!-- 任务卡片将通过 JavaScript 动态加载 -->
+        </div>
+    </div>
+</div>
+
+<!-- 创建/编辑任务模态框 -->
+<div id="taskModal" class="modal">
+    <div class="modal-content modal-xlarge">
+        <div class="modal-header">
+            <h3 id="modalTitle">创建任务</h3>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body task-modal-body">
+            <form id="taskForm" style="display: flex; width: 100%;">
+                <input type="hidden" id="taskId">
+
+                <!-- 左列：任务参数配置 -->
+                <div class="task-config-column">
+                    <!-- 基本信息 -->
+                    <div class="form-section">
+                        <h4 class="form-section-title">基本信息</h4>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="taskName">任务名称 <span class="required">*</span></label>
+                                <input type="text" id="taskName" name="task_name" required placeholder="输入任务名称">
+                            </div>
+                            <div class="form-group">
+                                <label for="taskEnabled">启用状态</label>
+                                <select id="taskEnabled" name="enabled">
+                                    <option value="true">启用</option>
+                                    <option value="false">禁用</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 检测配置 -->
+                    <div class="form-section">
+                        <h4 class="form-section-title">检测配置</h4>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="detectionType">检测类型 <span class="required">*</span></label>
+                                <select id="detectionType" name="detection_type">
+                                    <option value="realtime">实时检测</option>
+                                    <option value="polling">轮询检测</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="algorithmConfig">算法配置 <span class="required">*</span></label>
+                                <select id="algorithmConfig" name="algorithm_config" onchange="onAlgorithmConfigChange()">
+                                    <option value="">-- 请选择算法配置 --</option>
+                                </select>
+                                <input type="hidden" id="algorithm" name="algorithm">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="modelPath">模型路径</label>
+                                <input type="text" id="modelPath" name="model_path" readonly placeholder="自动填充">
+                            </div>
+                            <div class="form-group">
+                                <label for="targetClassesInput">目标类别 <span class="required">*</span></label>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <input type="text" id="targetClassesInput" name="target_classes_input" readonly placeholder="点击选择按钮选择目标类别" style="flex-grow: 1;">
+                                    <button type="button" id="selectClassesBtn" onclick="openClassesSelectDialog()" style="min-width: 80px; max-width: 80px; width: 80px; white-space: nowrap; text-align: center; padding: 8px 0; display: inline-block; background-color: #007bff; color: white; border: 1px solid #007bff; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 400;">选择</button>
+                                </div>
+                                <input type="hidden" id="targetClassesHidden" name="target_classes">
+                            </div>
+                        </div>
+                        <!-- 功能开关 -->
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="motionDetectionEnabled">运动检测</label>
+                                <select id="motionDetectionEnabled" name="motion_detection_enabled">
+                                    <option value="false">禁用</option>
+                                    <option value="true">启用</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="trackingEnabled">目标跟踪</label>
+                                <select id="trackingEnabled" name="tracking_enabled">
+                                    <option value="true">启用</option>
+                                    <option value="false">禁用</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右列：设备通道检测池 -->
+                <div class="task-cameras-column">
+                    <div class="cameras-column-header">
+                        <h4>设备通道检测池</h4>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <select id="filterChannelSource" onchange="filterChannelsBySource()" style="padding: 4px 8px; font-size: 13px;">
+                                <option value="">全部来源</option>
+                                <option value="local_platform">本地平台</option>
+                                <option value="edge_platform">边缘平台</option>
+                            </select>
+                            <button type="button" class="btn btn-sm btn-secondary" onclick="openChannelSelectModal()">
+                                <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;margin-right:4px;">
+                                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                                </svg>
+                                添加通道
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 添加通道快捷方式 -->
+                    <div class="cameras-quick-add">
+                        <input type="text" id="quickAddChannelSearch" placeholder="搜索已有通道..." oninput="filterChannelList()">
+                    </div>
+
+                    <!-- 设备池列表 -->
+                    <div class="task-camera-pool" id="taskChannelPool">
+                        <!-- 通道列表将通过 JavaScript 动态加载 -->
+                        <p class="empty-cameras-tip">点击上方"添加通道"按钮选择设备</p>
+                    </div>
+
+                    <!-- 设备池统计 -->
+                    <div class="camera-pool-stats">
+                        <span id="poolChannelCount">已选择 0 个通道</span>
+                    </div>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="saveTask()">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 设备通道选择模态框 -->
+<div id="cameraSelectModal" class="modal">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h3>选择设备通道</h3>
+            <button class="modal-close" onclick="closeChannelSelectModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <!-- 设备通道列表 -->
+            <div class="camera-select-section">
+                <div class="camera-select-list" id="cameraSelectList">
+                    <!-- 设备通道列表将通过 JavaScript 动态加载 -->
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeChannelSelectModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="confirmChannelSelection()">确认选择</button>
+        </div>
+    </div>
+</div>
+
+<!-- 删除确认模态框 -->
+<div id="deleteModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>确认删除</h3>
+            <button class="modal-close" onclick="closeDeleteModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>确定要删除任务 "<span id="deleteTaskName"></span>" 吗？</p>
+            <p class="warning-text">此操作将同时解除该任务与所有摄像机的绑定，不可恢复。</p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">取消</button>
+            <button type="button" class="btn btn-danger" onclick="confirmDelete()">删除</button>
+        </div>
+    </div>
+</div>
+
+<!-- 参数配置模态框 -->
+<div id="configModal" class="modal">
+    <div class="modal-content modal-xlarge">
+        <div class="modal-header">
+            <h3 id="configModalTitle">参数配置</h3>
+            <button class="modal-close" onclick="closeConfigModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="configForm" style="display: flex; flex-direction: column; width: 100%; gap: 20px;">
+                <input type="hidden" id="configTaskId">
+
+                <!-- 解码器配置 -->
+                <div class="form-section">
+                    <h4 class="form-section-title">解码器配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="decoderWidth">输出宽度</label>
+                            <input type="number" id="decoderWidth" name="decoder_width" placeholder="640">
+                        </div>
+                        <div class="form-group">
+                            <label for="decoderHeight">输出高度</label>
+                            <input type="number" id="decoderHeight" name="decoder_height" placeholder="640">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="decoderHwaccel">硬件加速</label>
+                            <select id="decoderHwaccel" name="decoder_hwaccel">
+                                <option value="dxva2">DXVA2 (Windows)</option>
+                                <option value="cuda">CUDA (NVIDIA)</option>
+                                <option value="qsv">QSV (Intel)</option>
+                                <option value="none">无加速</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="decoderOutputFormat">输出格式</label>
+                            <select id="decoderOutputFormat" name="decoder_output_format">
+                                <option value="auto">自动</option>
+                                <option value="nv12">NV12 (推荐)</option>
+                                <option value="yuv420p">YUV420p</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="decoderRtspTransport">RTSP传输协议</label>
+                            <select id="decoderRtspTransport" name="decoder_rtsp_transport">
+                                <option value="tcp">TCP (稳定)</option>
+                                <option value="udp">UDP (低延迟)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="decoderReconnect">自动重连</label>
+                            <select id="decoderReconnect" name="decoder_reconnect">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="decoderReconnectDelay">重连延迟(秒)</label>
+                            <input type="number" id="decoderReconnectDelay" name="decoder_reconnect_delay" placeholder="5">
+                        </div>
+                        <div class="form-group">
+                            <label for="decoderBufferSize">缓冲区大小(字节)</label>
+                            <input type="number" id="decoderBufferSize" name="decoder_buffer_size" placeholder="1048576">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="decoderFrameQueueSize">帧队列大小</label>
+                            <input type="number" id="decoderFrameQueueSize" name="decoder_frame_queue_size" placeholder="30">
+                        </div>
+                        <div class="form-group">
+                            <label for="decoderUseRingBuffer">启用环形缓冲区</label>
+                            <select id="decoderUseRingBuffer" name="decoder_use_ring_buffer">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="decoderRingBufferBlockCount">环形缓冲区块数</label>
+                            <input type="number" id="decoderRingBufferBlockCount" name="decoder_ring_buffer_block_count" placeholder="5">
+                        </div>
+                        <div class="form-group">
+                            <label for="decoderIndexQueueSize">索引队列大小</label>
+                            <input type="number" id="decoderIndexQueueSize" name="decoder_index_queue_size" placeholder="30">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="decoderSharedMemoryTotalSize">共享内存大小</label>
+                            <input type="text" id="decoderSharedMemoryTotalSize" name="decoder_shared_memory_total_size" placeholder="null (自动计算)">
+                        </div>
+                        <div class="form-group">
+                            <label for="decoderSharedMemoryMaxRetries">最大重试次数</label>
+                            <input type="number" id="decoderSharedMemoryMaxRetries" name="decoder_shared_memory_max_retries" placeholder="3">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 检测器配置 -->
+                <div class="form-section">
+                    <h4 class="form-section-title">检测器配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="detectorBackend">推理后端</label>
+                            <select id="detectorBackend" name="detector_backend">
+                                <option value="onnx_cuda">ONNX+CUDA</option>
+                                <option value="onnx_tensorrt">ONNX+TensorRT</option>
+                                <option value="tensorrt">TensorRT</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="detectorUseFp16">FP16精度</label>
+                            <select id="detectorUseFp16" name="detector_use_fp16">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="detectorConfThreshold">置信度阈值</label>
+                            <input type="number" id="detectorConfThreshold" name="detector_conf_threshold" step="0.01" min="0" max="1" placeholder="0.25">
+                        </div>
+                        <div class="form-group">
+                            <label for="detectorIouThreshold">NMS IoU阈值</label>
+                            <input type="number" id="detectorIouThreshold" name="detector_iou_threshold" step="0.01" min="0" max="1" placeholder="0.35">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="detectorMinBoxArea">最小框面积</label>
+                            <input type="number" id="detectorMinBoxArea" name="detector_min_box_area" placeholder="50">
+                        </div>
+                        <div class="form-group">
+                            <label for="detectorDeviceId">GPU设备ID</label>
+                            <input type="number" id="detectorDeviceId" name="detector_device_id" placeholder="0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="detectorGpuMemLimit">显存限制(MB)</label>
+                            <input type="number" id="detectorGpuMemLimit" name="detector_gpu_mem_limit" placeholder="6144">
+                        </div>
+                        <div class="form-group">
+                            <!-- 占位，保持布局对齐 -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 跟踪器配置 -->
+                <div class="form-section">
+                    <h4 class="form-section-title">跟踪器配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="trackerTrackThresh">高分检测阈值</label>
+                            <input type="number" id="trackerTrackThresh" name="tracker_track_thresh" step="0.01" min="0" max="1" placeholder="0.30">
+                        </div>
+                        <div class="form-group">
+                            <label for="trackerMatchThresh">匹配阈值</label>
+                            <input type="number" id="trackerMatchThresh" name="tracker_match_thresh" step="0.01" min="0" max="1" placeholder="0.50">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="trackerMaxAge">最大丢失帧数</label>
+                            <input type="number" id="trackerMaxAge" name="tracker_max_age" placeholder="45">
+                        </div>
+                        <div class="form-group">
+                            <label for="trackerNInit">确认帧数</label>
+                            <input type="number" id="trackerNInit" name="tracker_n_init" placeholder="2">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="trackerMaxHistoryLength">轨迹历史长度</label>
+                            <input type="number" id="trackerMaxHistoryLength" name="tracker_max_history_length" placeholder="30">
+                        </div>
+                        <div class="form-group">
+                            <!-- 占位，保持布局对齐 -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 运动检测配置 -->
+                <div class="form-section">
+                    <h4 class="form-section-title">运动检测配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="motionHistory">历史帧数</label>
+                            <input type="number" id="motionHistory" name="motion_history" placeholder="500">
+                        </div>
+                        <div class="form-group">
+                            <label for="motionVarThreshold">方差阈值</label>
+                            <input type="number" id="motionVarThreshold" name="motion_var_threshold" step="0.1" placeholder="16.0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="motionMinArea">最小区域面积</label>
+                            <input type="number" id="motionMinArea" name="motion_min_area" placeholder="500">
+                        </div>
+                        <div class="form-group">
+                            <label for="motionConfidenceBoost">置信度增益</label>
+                            <input type="number" id="motionConfidenceBoost" name="motion_confidence_boost" step="0.01" min="0" max="1" placeholder="0.15">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="motionConfidencePenalty">置信度惩罚</label>
+                            <input type="number" id="motionConfidencePenalty" name="motion_confidence_penalty" step="0.01" min="0" max="1" placeholder="0.05">
+                        </div>
+                        <div class="form-group">
+                            <!-- 占位，保持布局对齐 -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 事件输出配置 -->
+                <div class="form-section">
+                    <h4 class="form-section-title">事件输出配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="eventEnabled">启用事件输出</label>
+                            <select id="eventEnabled" name="event_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="eventImageMethod">图片输出方式</label>
+                            <select id="eventImageMethod" name="event_image_method">
+                                <option value="both">上传+本地保存</option>
+                                <option value="minio">仅上传MinIO</option>
+                                <option value="ftp">仅上传FTP</option>
+                                <option value="local">仅本地保存</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="eventLocalBackup">本地备份</label>
+                            <select id="eventLocalBackup" name="event_local_backup">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="eventMinConfidence">最小置信度</label>
+                            <input type="number" id="eventMinConfidence" name="event_min_confidence" step="0.01" min="0" max="1" placeholder="0.5">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="eventImageOutputDir">图片保存目录</label>
+                            <input type="text" id="eventImageOutputDir" name="event_image_output_dir" placeholder="output/images">
+                        </div>
+                        <div class="form-group">
+                            <label for="eventGifOutputDir">GIF保存目录</label>
+                            <input type="text" id="eventGifOutputDir" name="event_gif_output_dir" placeholder="output/gifs">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 显示配置 -->
+                <div class="form-section">
+                    <h4 class="form-section-title">显示配置</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayEnabled">启用调试窗口</label>
+                            <select id="displayEnabled" name="display_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="displayTargetFps">目标FPS</label>
+                            <input type="number" id="displayTargetFps" name="display_target_fps" placeholder="15">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayAIStreamEnabled">启用AI视频流</label>
+                            <select id="displayAIStreamEnabled" name="display_ai_stream_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="displayAIStreamInterval">AI流帧间隔</label>
+                            <input type="number" id="displayAIStreamInterval" name="display_ai_stream_interval" placeholder="2">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayShowBoxes">显示检测框</label>
+                            <select id="displayShowBoxes" name="display_show_boxes">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="displayShowTracks">显示跟踪框</label>
+                            <select id="displayShowTracks" name="display_show_tracks">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayShowTrajectories">显示轨迹</label>
+                            <select id="displayShowTrajectories" name="display_show_trajectories">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="displayShowMotionRegions">显示运动区域</label>
+                            <select id="displayShowMotionRegions" name="display_show_motion_regions">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayTrajectoryHistory">轨迹历史长度</label>
+                            <input type="number" id="displayTrajectoryHistory" name="display_trajectory_history" placeholder="30">
+                        </div>
+                        <div class="form-group">
+                            <!-- 占位 -->
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayBoxColor">检测框颜色(BGR)</label>
+                            <input type="text" id="displayBoxColor" name="display_box_color" placeholder="0,255,0">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayBoxThickness">检测框线宽</label>
+                            <input type="number" id="displayBoxThickness" name="display_box_thickness" placeholder="2">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayBoxFontScale">检测框字体大小</label>
+                            <input type="number" id="displayBoxFontScale" name="display_box_font_scale" step="0.1" placeholder="0.5">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayBoxLabelColor">检测框标签颜色(BGR)</label>
+                            <input type="text" id="displayBoxLabelColor" name="display_box_label_color" placeholder="0,255,0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayTrackColor">跟踪框颜色(BGR)</label>
+                            <input type="text" id="displayTrackColor" name="display_track_color" placeholder="255,0,0">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayTrackThickness">跟踪框线宽</label>
+                            <input type="number" id="displayTrackThickness" name="display_track_thickness" placeholder="2">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayTrackFontScale">跟踪框字体大小</label>
+                            <input type="number" id="displayTrackFontScale" name="display_track_font_scale" step="0.1" placeholder="0.5">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayTrackLabelColor">跟踪框标签颜色(BGR)</label>
+                            <input type="text" id="displayTrackLabelColor" name="display_track_label_color" placeholder="255,0,0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayTrajectoryColor">轨迹颜色(BGR)</label>
+                            <input type="text" id="displayTrajectoryColor" name="display_trajectory_color" placeholder="0,255,255">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayTrajectoryThickness">轨迹线宽</label>
+                            <input type="number" id="displayTrajectoryThickness" name="display_trajectory_thickness" placeholder="1">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayTrajectoryPointSize">轨迹点大小</label>
+                            <input type="number" id="displayTrajectoryPointSize" name="display_trajectory_point_size" placeholder="2">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayTrajectoryPointColor">轨迹点颜色(BGR)</label>
+                            <input type="text" id="displayTrajectoryPointColor" name="display_trajectory_point_color" placeholder="0,0,255">
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeConfigModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="saveConfig()">保存配置</button>
+        </div>
+    </div>
+</div>
+
+<!-- 目标类别选择对话框（独立对话框，不继承modal样式） -->
+<div id="classesSelectDialog" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); z-index: 99999;">
+    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 500px; min-width: 400px; background-color: white; border-radius: 8px; box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3); z-index: 100000;">
+        <div style="padding: 15px 20px; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; font-size: 18px; font-weight: 600;">选择目标类别</h3>
+            <button type="button" onclick="closeClassesSelectDialog()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666; padding: 0;">×</button>
+        </div>
+        <div style="padding: 20px;">
+            <div id="classesSelectContainer" style="max-height: 300px; overflow-y: auto;"></div>
+            <div style="margin-top: 10px; display: flex; gap: 8px;">
+                <button type="button" onclick="selectAllClasses()" style="min-width: 70px; padding: 6px 12px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">全选</button>
+                <button type="button" onclick="deselectAllClasses()" style="min-width: 70px; padding: 6px 12px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">取消全选</button>
+            </div>
+        </div>
+        <div style="padding: 15px 20px; border-top: 1px solid #e0e0e0; display: flex; justify-content: flex-end; gap: 10px;">
+            <button type="button" onclick="closeClassesSelectDialog()" style="min-width: 70px; padding: 6px 12px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">取消</button>
+            <button type="button" onclick="confirmClassesSelection()" style="min-width: 70px; padding: 6px 12px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">确定</button>
+        </div>
+    </div>
+</div>
+
+<!-- 任务详情模态框 -->
+<div id="taskDetailModal" class="modal">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h3 id="taskDetailTitle">任务详情</h3>
+            <button class="modal-close" onclick="closeTaskDetailModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="taskDetailContent">
+                <!-- 任务详情将通过 JavaScript 动态加载 -->
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeTaskDetailModal()">关闭</button>
+            <button type="button" class="btn btn-primary" onclick="editCurrentTask()">编辑</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/tasks.js') }}"></script>
+<script src="{{ url_for('static', filename='js/config_modal.js') }}"></script>
+{% endblock %}

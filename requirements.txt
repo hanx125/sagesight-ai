@@ -1,0 +1,68 @@
+# requirements.txt
+# 硬件配置：NVIDIA RTX 2070 (8GB) | CUDA 12.9 | Python 3.11 | 32GB RAM
+# 针对 YOLO 检测通道优化的依赖清单
+
+# ========== 核心依赖 ==========
+# 数值计算（1.26+ 支持 Python 3.11，优化 AVX2 指令集）
+numpy>=1.26.0,<2.0.0
+
+# 图像处理（4.8+ 支持 CUDA 加速预处理）
+opencv-python>=4.8.0
+
+# GPU 推理引擎（ONNX Runtime 1.17+ 支持 CUDA 12.x）
+# RTX 2070 性能优化版本：启用 TensorRT 加速（可选）
+onnxruntime-gpu>=1.17.0
+
+# ========== 跟踪算法依赖 ==========
+# 匈牙利算法（1.11+ 支持 Python 3.11，性能优化）
+scipy>=1.11.0
+
+# ========== 配置管理 ==========
+# YAML 配置文件解析
+pyyaml>=6.0.1
+
+# ========== 性能监控（推荐） ==========
+# NVIDIA GPU 监控（支持 RTX 20 系列）
+pynvml>=11.5.0
+
+# CPU/内存监控
+psutil>=5.9.5
+
+# ========== Web 应用依赖 ==========
+# Web 框架
+flask>=3.0.0
+flask-socketio>=5.3.0
+flask-cors>=4.0.0
+
+# 实时通信
+python-socketio>=5.10.0
+python-engineio>=4.8.0
+eventlet>=0.34.0  # 推荐用于生产环境
+
+# ========== 摄像机管理依赖 ==========
+# ONVIF 协议支持（用于摄像机控制和PTZ操作）
+onvif-zeep>=0.2.12
+# ONVIF协议的SOAP客户端
+zeep>=4.2.0
+
+# ========== 语音对讲依赖（WebRTC双向音频）==========
+# WebRTC Python实现（用于服务器端WebRTC连接）
+aiortc>=1.6.0
+
+# 音频处理（aiortc依赖）
+# 注意：aiortc会自动安装以下依赖：
+# - opencv-python-headless（如果未安装opencv-python）
+# - av>=10.0.0（音视频处理库）
+
+# ========== 数据库依赖 ==========
+# SQLite支持（Python自带，无需额外安装）
+
+# ========== 可选优化依赖 ==========
+# TensorRT 加速（可选，需额外安装 TensorRT）
+# tensorrt>=8.6.0  # 如果启用 TensorRT 加速
+
+# 注意：
+# - onnxruntime-gpu 会自动使用 CUDA 12.9 的 CuDNN 8.9+ 和 TensorRT 8.6+
+# - CUDA Graph 可降低内核启动开销，提升小批量推理性能
+# - aiortc 用于WebRTC语音对讲功能，支持Opus/PCMU编码
+# - onvif-zeep 用于摄像机PTZ控制和音频能力检测

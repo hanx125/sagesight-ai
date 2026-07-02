@@ -1,0 +1,185 @@
+# ========================================
+# 系统级配置文件
+# ========================================
+# 
+# 说明：
+# - 此文件包含系统级配置（日志、监控、数据库等）
+# - 与业务模块配置分离，便于统一管理
+# - 修改后需重启系统生效
+#
+# ========================================
+
+# ----------------------------------------
+# 日志配置
+# ----------------------------------------
+logging:
+  # 日志级别：DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  
+  # 日志文件路径
+  file: "logs/system.log"
+  
+  # 是否输出到控制台
+  console: true
+  
+  # 日志格式
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # 日志文件最大大小（MB）
+  max_size: 10
+  
+  # 日志文件备份数量
+  backup_count: 5
+
+# ----------------------------------------
+# 性能监控配置
+# ----------------------------------------
+monitoring:
+  # 是否启用性能监控
+  enabled: true
+  
+  # 统计信息打印间隔（秒）
+  stats_interval: 5
+  
+  # GPU 监控（需要 pynvml）
+  gpu_monitoring: true
+  
+  # CPU 监控
+  cpu_monitoring: true
+  
+  # 内存监控
+  memory_monitoring: true
+  
+  # 监控数据保存路径
+  data_path: "logs/monitoring"
+
+# ----------------------------------------
+# 数据库配置
+# ----------------------------------------
+database:
+  # 数据库类型
+  type: "sqlite"
+  
+  # 数据库文件路径
+  path: "data/sagesight.db"
+  
+  # 是否启用连接池
+  pool_enabled: false
+  
+  # 连接池大小（如果启用）
+  pool_size: 5
+
+# ----------------------------------------
+# Web 服务配置
+# ----------------------------------------
+web_server:
+  # Web 服务端口
+  port: 5555
+  
+  # 是否启用调试模式
+  debug: false
+  
+  # 是否启用 CORS
+  cors_enabled: true
+  
+  # 静态文件目录
+  static_dir: "static"
+  
+  # 模板文件目录
+  template_dir: "templates"
+
+# ----------------------------------------
+# 流媒体服务器配置（ZLMediaKit）
+# ----------------------------------------
+media_server:
+  # ZLMediaKit API 地址
+  api_url: "http://127.0.0.1:80"
+  
+  # ZLMediaKit Secret
+  secret: "035c73f7-bb6b-4889-c7af-364410af2b54"
+  
+  # 是否自动启动流代理
+  auto_start_stream: true
+  
+  # 流代理超时时间（秒）
+  stream_timeout: 10
+
+# ----------------------------------------
+# 任务管理配置
+# ----------------------------------------
+task_manager:
+  # 最大并发任务数
+  max_concurrent_tasks: 5
+  
+  # 任务状态检查间隔（秒）
+  status_check_interval: 2
+  
+  # 任务异常重启延迟（秒）
+  restart_delay: 5
+  
+  # 是否启用任务监控线程
+  enable_monitor_thread: true
+
+# ----------------------------------------
+# 全局存储配置（MinIO 和 FTP）
+# ----------------------------------------
+# 说明：
+# - 这是系统级存储配置，用于事件输出（图片、GIF等）
+# - 所有任务共享同一套存储配置
+# - MinIO用于对象存储，FTP用于传统文件传输
+#
+storage:
+  # MinIO 配置（图片和 GIF 共用）
+  minio:
+    enabled: true
+    endpoint: "localhost:9000"
+    access_key: "minioadmin"
+    secret_key: "minioadmin"
+    secure: false
+    # 预签名 URL 有效期（秒）
+    presigned_expires: 3600
+  
+  # FTP 配置（图片和 GIF 共用）
+  ftp:
+    enabled: true
+    host: "localhost"
+    port: 21
+    username: "ftpuser"
+    password: "ftppassword"
+    passive_mode: true
+
+# ----------------------------------------
+# MQTT 输出配置（给其他平台订阅）
+# ----------------------------------------
+# 说明：
+# - MQTT用于给其他平台订阅完整事件数据
+# - 适用场景：IoT平台、业务系统集成、移动应用
+#
+mqtt:
+  # 是否启用 MQTT 输出
+  enabled: false
+  
+  # MQTT 配置
+  config:
+    broker: "mqtt://localhost:1883"
+    topic: "sagesight/events"
+    qos: 1
+    retain: false
+
+# ----------------------------------------
+# WebSocket 输出配置（给前端实时绘制）
+# ----------------------------------------
+# 说明：
+# - WebSocket用于给前端实时绘制检测框、跟踪框、轨迹
+# - 适用场景：Web前端实时显示、浏览器原生支持、低延时
+# - 注意：多进程环境下建议禁用，使用 cv2.imshow 显示
+#
+websocket:
+  # 是否启用 WebSocket 输出
+  # 注意：多进程环境下会端口冲突，建议禁用
+  enabled: false
+
+  # WebSocket 配置
+  config:
+    host: "0.0.0.0"
+    port: 8765

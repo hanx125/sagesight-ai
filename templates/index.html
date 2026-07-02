@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}首页{% endblock %}
+
+{% block content %}
+<div class="page-container">
+    <div class="page-header">
+        <h2>系统概览</h2>
+        <p>实时监控任务状态和事件信息</p>
+    </div>
+    
+    <div class="developing-container">
+        <svg viewBox="0 0 24 24" fill="currentColor" class="developing-icon">
+            <path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/>
+        </svg>
+        <h3 class="developing-title">功能开发中</h3>
+        <p class="developing-desc">首页功能正在开发中，敬请期待...</p>
+    </div>
+</div>
+{% endblock %}

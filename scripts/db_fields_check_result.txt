@@ -1,0 +1,40 @@
+============================================================
+数据库表字段顺序（PRAGMA table_info结果）：
+============================================================
+[0] id (TEXT) - default: None
+[1] name (TEXT) - default: None
+[2] source (TEXT) - default: None
+[3] ip (TEXT) - default: ''
+[4] port (INTEGER) - default: 80
+[5] username (TEXT) - default: ''
+[6] password (TEXT) - default: ''
+[7] mac (TEXT) - default: ''
+[8] manufacturer (TEXT) - default: ''
+[9] model (TEXT) - default: ''
+[10] firmware_version (TEXT) - default: ''
+[11] serial_number (TEXT) - default: ''
+[12] hardware_id (TEXT) - default: ''
+[13] support_move (INTEGER) - default: 0
+[14] support_zoom (INTEGER) - default: 0
+[15] ptz_address (TEXT) - default: ''
+[16] support_audio_talk (INTEGER) - default: 0
+[17] rtmp_stream (TEXT) - default: ''
+[18] http_stream (TEXT) - default: ''
+[19] enable_forward (INTEGER) - default: 0
+[20] status (TEXT) - default: 'offline'
+[21] connection_status (TEXT) - default: ''
+[22] directory_id (INTEGER) - default: None
+[23] description (TEXT) - default: ''
+[24] enabled (INTEGER) - default: 1
+[25] created_at (TEXT) - default: CURRENT_TIMESTAMP
+[26] updated_at (TEXT) - default: CURRENT_TIMESTAMP
+[27] rtsp_stream (TEXT) - default: ''
+[28] ws_stream (TEXT) - default: ""
+[29] rtc_stream (TEXT) - default: ""
+[30] rtcs_stream (TEXT) - default: ""
+[31] protocol (TEXT) - default: 'rtsp'
+[32] ai_detection (INTEGER) - default: 1
+============================================================
+总字段数: 33
+============================================================
+

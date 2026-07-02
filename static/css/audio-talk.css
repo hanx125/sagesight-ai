@@ -1,0 +1,466 @@
+/* 语音对讲面板样式 */
+
+.audio-talk-panel {
+    margin-top: 15px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.95);
+    overflow: hidden;
+}
+
+/* 右侧面板中的音频对讲面板样式调整 */
+.right-panel .audio-talk-panel {
+    margin-top: 0;
+    border-radius: 0;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+}
+
+.audio-talk-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-bottom: 1px solid #e0e0e0;
+    font-weight: 500;
+    font-size: 14px;
+    color: #266CFB;
+}
+
+.audio-talk-header i {
+    font-size: 16px;
+}
+
+.audio-talk-content {
+    padding: 16px;
+}
+
+/* 对讲状态显示 */
+.audio-talk-status {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 20px;
+    background: rgba(248, 249, 250, 0.8);
+    border-radius: 8px;
+    margin-bottom: 15px;
+}
+
+.audio-talk-status-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: rgba(220, 53, 69, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+}
+
+.audio-talk-status-icon.active {
+    background: rgba(38, 108, 251, 0.15);
+    animation: pulse 2s infinite;
+}
+
+.audio-talk-status-icon i {
+    font-size: 24px;
+    color: #dc3545;
+    transition: color 0.3s ease;
+}
+
+.audio-talk-status-icon.active i {
+    color: #266CFB;
+}
+
+.audio-talk-status-text {
+    font-size: 16px;
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.audio-talk-status-text.active {
+    color: #266CFB;
+    font-weight: 700;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.05);
+        opacity: 0.8;
+    }
+}
+
+/* 对讲控制按钮 */
+.audio-talk-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+
+.audio-talk-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 12px 16px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    line-height: 1.4;
+}
+
+.audio-talk-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.audio-talk-btn span {
+    text-align: center;
+    line-height: 1.2;
+}
+
+.start-btn {
+    background: linear-gradient(135deg, #266CFB 0%, #1a56d8 100%);
+    color: white;
+    box-shadow: 0 2px 8px rgba(38, 108, 251, 0.3);
+}
+
+.start-btn:not(:disabled):hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(38, 108, 251, 0.4);
+}
+
+.start-btn:not(:disabled):active {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px rgba(38, 108, 251, 0.3);
+}
+
+.stop-btn {
+    background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+    color: white;
+    box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+}
+
+.stop-btn:not(:disabled):hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(220, 53, 69, 0.4);
+}
+
+.stop-btn:not(:disabled):active {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px rgba(220, 53, 69, 0.3);
+}
+
+.audio-talk-btn i {
+    font-size: 20px;
+}
+
+/* 音频指示器 */
+.audio-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 8px;
+    margin-bottom: 15px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.audio-level-bars {
+    display: flex;
+    gap: 3px;
+    flex: 1;
+}
+
+.audio-level-bar {
+    width: 8px;
+    height: 24px;
+    background: rgba(200, 200, 200, 0.3);
+    border-radius: 2px;
+    transition: all 0.15s ease;
+}
+
+.audio-level-bar.active {
+    animation: audioLevel 0.3s ease;
+}
+
+.audio-level-bar.level-1 {
+    height: 8px;
+}
+
+.audio-level-bar.level-2 {
+    height: 12px;
+}
+
+.audio-level-bar.level-3 {
+    height: 16px;
+}
+
+.audio-level-bar.level-4 {
+    height: 20px;
+}
+
+.audio-level-bar.level-5 {
+    height: 24px;
+}
+
+@keyframes audioLevel {
+    0%, 100% {
+        opacity: 0.6;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+.audio-label {
+    font-size: 13px;
+    color: #2c3e50;
+    font-weight: 600;
+}
+
+/* WebRTC连接信息 */
+.audio-talk-info {
+    padding: 12px;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border-radius: 8px;
+    border-left: 3px solid #266CFB;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.info-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: #2c3e50 !important;
+    font-weight: 600;
+}
+
+.info-item i {
+    font-size: 16px;
+    color: #266CFB;
+}
+
+.info-item span {
+    color: #2c3e50 !important;
+    font-weight: 600;
+}
+
+/* 语音对讲提示框 */
+.audio-talk-tip {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: linear-gradient(135deg, #266CFB 0%, #1a56d8 100%);
+    color: #ffffff !important;
+    padding: 20px 30px;
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(38, 108, 251, 0.4);
+    z-index: 10000;
+    display: none;
+}
+
+.audio-talk-tip.active {
+    display: block;
+    animation: fadeInOut 3s ease;
+}
+
+.audio-talk-tip-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #ffffff !important;
+}
+
+.audio-talk-tip-content i {
+    font-size: 24px;
+    color: #ffffff !important;
+}
+
+.audio-talk-tip-content span {
+    color: #ffffff !important;
+    font-weight: 700;
+}
+
+@keyframes fadeInOut {
+    0%, 100% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.9);
+    }
+    10%, 90% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+}
+
+/* 音频增强控制样式 */
+.audio-enhancement-controls {
+    margin-bottom: 15px;
+    padding: 12px;
+    background: rgba(248, 249, 250, 0.5);
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+}
+
+.audio-control-item {
+    margin-bottom: 12px;
+}
+
+.audio-control-item:last-child {
+    margin-bottom: 0;
+}
+
+.audio-control-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: #2c3e50;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.audio-control-label i {
+    width: 16px;
+    font-size: 15px;
+    color: #266CFB;
+}
+
+/* 音量滑块样式 */
+.volume-slider-container {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.volume-slider {
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: #e9ecef;
+    outline: none;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #266CFB;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.volume-slider::-webkit-slider-thumb:hover {
+    background: #1a5cfb;
+    transform: scale(1.1);
+}
+
+.volume-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #266CFB;
+    cursor: pointer;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.volume-value {
+    font-size: 12px;
+    font-weight: 600;
+    color: #266CFB;
+    min-width: 45px;
+    text-align: right;
+}
+
+/* 开关样式 */
+.toggle-switch-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.toggle-switch {
+    position: relative;
+    width: 44px;
+    height: 22px;
+    appearance: none;
+    background: #e9ecef;
+    border-radius: 22px;
+    cursor: pointer;
+    transition: background 0.3s ease;
+}
+
+.toggle-switch:checked {
+    background: #266CFB;
+}
+
+.toggle-switch::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: white;
+    transition: transform 0.3s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.toggle-switch:checked::before {
+    transform: translateX(22px);
+}
+
+.toggle-label {
+    position: relative;
+    width: 44px;
+    height: 22px;
+    cursor: pointer;
+}
+
+.toggle-status {
+    font-size: 13px;
+    color: #2c3e50;
+    font-weight: 600;
+}
+
+.toggle-switch:checked + .toggle-label + .toggle-status {
+    color: #266CFB;
+    font-weight: 700;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+    .audio-talk-controls {
+        flex-direction: column;
+    }
+    
+    .audio-talk-btn {
+        width: 100%;
+    }
+}

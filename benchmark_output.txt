@@ -1,0 +1,148 @@
+﻿======================================================================
+端到端性能瓶颈分析（完整版）
+======================================================================
+[1] UV分离:          avg=0.001ms  min=0.001ms  max=0.008ms
+[2] U/V上采样:       avg=0.834ms  min=0.370ms  max=20.398ms
+[3] Stack+cvtColor:  avg=2.210ms  min=1.772ms  max=4.239ms
+[4] 归一化+CHW:      avg=5.451ms  min=4.078ms  max=13.213ms
+[5] 直接NV12->BGR:   avg=1.108ms  min=0.861ms  max=3.216ms  (优化方案)
+[预处理器] 性能分析（第1帧）：
+  验证: 0.00ms
+  UV提取: 0.00ms
+  上采样: 1.00ms
+  合并YUV: 1.00ms
+  YUV2RGB: 1.07ms
+  模型Resize: 0.00ms
+  归一化: 4.48ms
+  Transpose: 3.00ms
+  Batch: 0.00ms
+  总耗时: 10.54ms
+  FPS: 94.9
+[预处理器] 性能分析（第101帧）：
+  验证: 0.00ms
+  UV提取: 0.00ms
+  上采样: 0.00ms
+  合并YUV: 2.00ms
+  YUV2RGB: 0.00ms
+  模型Resize: 0.00ms
+  归一化: 5.00ms
+  Transpose: 3.02ms
+  Batch: 0.00ms
+  总耗时: 10.03ms
+  FPS: 99.8
+[6] 预处理器整体:    avg=10.109ms  min=5.789ms  max=23.971ms
+
+加载模型: models/detection/yolov11n_20260701_100430.onnx
+[YOLODetector] 字典配置已转换为 DetectorConfig:
+[YOLODetector]   backend=onnx_tensorrt
+[YOLODetector]   model_path=models/detection/yolov11n_20260701_100430.onnx
+[YOLODetector]   class_names=80类（从标签文件）
+[YOLODetector]   target_classes=1类: ('car',)
+[YOLODetector] 正在初始化检测器...
+[YOLODetector]   模型路径: models/detection/yolov11n_20260701_100430.onnx
+[YOLODetector]   推理后端: onnx_tensorrt
+[YOLODetector]   FP16模式: True
+[YOLODetector] 正在加载模型并创建推理会话...
+[YOLODetector]   检查Engine缓存: ./trt_cache
+[YOLODetector]   如果缓存不存在，TensorRT将编译新Engine（可能耗时2-5分钟）
+[YOLODetector]   请观察控制台是否有TensorRT编译日志输出...
+[YOLODetector] 推理会话创建完成！
+[YOLODetector] ONNX 模型加载成功（TensorRT 后端）：models/detection/yolov11n_20260701_100430.onnx
+  输入名称：images
+  输入形状：[1, 3, 640, 640]
+  可用 Provider: ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
+  FP16 加速: True
+  Engine 缓存: ./trt_cache
+[YOLODetector] [OK] TensorRT EP 已确认激活
+[YOLODetector] 检测器初始化完成
+预热推理(10次)...
+[YOLODetector] 推理完成，输出类型: <class 'numpy.ndarray'>
+[YOLODetector] 推理完成，输出形状: (1, 84, 8400)
+[YOLODetector] 模型输出形状: (1, 84, 8400)
+[YOLODetector] 性能分析（第1帧）：
+  推理耗时: 52.97ms
+  后处理耗时: 3.00ms
+  总耗时: 55.97ms
+  FPS: 17.9
+  检测数量: 0
+[YOLODetector] 性能分析（第101帧）：
+  推理耗时: 7.53ms
+  后处理耗时: 2.82ms
+  总耗时: 10.35ms
+  FPS: 96.6
+  检测数量: 0
+[7] 纯推理(infer):   avg=10.376ms  min=7.707ms  max=22.053ms
+[YOLODetector] 性能分析（第201帧）：
+  推理耗时: 7.01ms
+  后处理耗时: 2.00ms
+  总耗时: 9.01ms
+  FPS: 111.0
+  检测数量: 0
+[8] detect(推理+后处理): avg=10.330ms  min=7.604ms  max=18.488ms
+
+初始化BoT-SORT跟踪器...
+[9] 跟踪器(update):  avg=1.383ms  min=0.832ms  max=2.782ms
+    跟踪轨迹数: 3
+
+[10] 解码环节（模拟）:
+     - FFmpeg硬件解码(DXVA2/CUDA): 通常 1-3ms/帧
+     - FFmpeg软件解码(CPU): 通常 10-30ms/帧
+     - 数据读取+解析: 通常 0.5-1ms/帧
+     注: 实际解码在独立进程运行，此处不阻塞主流程
+
+======================================================================
+端到端完整流程测试（预处理+推理+后处理+跟踪）
+======================================================================
+[预处理器] 性能分析（第201帧）：
+  验证: 0.00ms
+  UV提取: 0.00ms
+  上采样: 1.00ms
+  合并YUV: 2.06ms
+  YUV2RGB: 0.00ms
+  模型Resize: 0.00ms
+  归一化: 3.99ms
+  Transpose: 3.00ms
+  Batch: 0.00ms
+  总耗时: 11.02ms
+  FPS: 90.8
+[YOLODetector] 性能分析（第301帧）：
+  推理耗时: 19.83ms
+  后处理耗时: 3.06ms
+  总耗时: 22.89ms
+  FPS: 43.7
+  检测数量: 0
+
+  预处理:         10.82ms (42.5%)
+  检测(推理+后处理): 12.88ms (50.6%)
+  跟踪:           1.77ms (6.9%)
+  总计:           25.46ms
+  理论最大FPS:    39.3
+
+======================================================================
+详细分析
+======================================================================
+[YOLODetector] 性能分析（第401帧）：
+  推理耗时: 7.00ms
+  后处理耗时: 3.00ms
+  总耗时: 10.00ms
+  FPS: 100.0
+  检测数量: 0
+  检测环节细分:
+    - 纯GPU推理:    11.52ms
+    - 后处理(NMS):  1.36ms
+
+  预处理环节细分:
+    - UV分离+上采样: ~1ms
+    - Stack+cvtColor: ~2ms
+    - 归一化+CHW:    ~5ms (主要瓶颈)
+
+======================================================================
+优化建议
+======================================================================
+[高] 预处理耗时 10.8ms，建议:
+     1. 使用直接NV12→BGR转换（节省~1.5ms）
+     2. 优化归一化操作（使用CUDA或in-place操作）
+     3. 考虑使用GPU预处理（如NVIDIA DALI）
+[低] 跟踪耗时 1.8ms，表现良好
+
+预期优化后FPS: 44.5 (优化预处理节省~3ms)

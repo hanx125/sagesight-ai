@@ -1,0 +1,459 @@
+{% extends "base.html" %}
+
+{% block title %}摄像机管理{% endblock %}
+
+{% block content %}
+<div class="page-container">
+    <!-- 页面标题 -->
+    <div class="page-header">
+        <div class="page-header-left">
+            <h2>摄像机管理</h2>
+            <p>通过ONVIF协议发现和管理摄像机设备</p>
+        </div>
+        <div class="page-header-right">
+            <button class="btn btn-secondary" onclick="openDirectoryModal()">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+                </svg>
+                目录管理
+            </button>
+            <button class="btn btn-secondary" onclick="openDiscoverModal()">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                </svg>
+                ONVIF发现
+            </button>
+            <button class="btn btn-primary" onclick="openCreateModal()">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                </svg>
+                添加摄像机
+            </button>
+        </div>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="stats-cards">
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-total">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statTotal">0</div>
+                <div class="stat-label">总摄像机</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-online">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statOnline">0</div>
+                <div class="stat-label">在线</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-offline">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statOffline">0</div>
+                <div class="stat-label">离线</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-enabled">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statEnabled">0</div>
+                <div class="stat-label">已启用</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 筛选区域 -->
+    <div class="filter-section">
+        <div class="filter-group">
+            <label>状态：</label>
+            <select id="filterStatus" onchange="loadCameras()">
+                <option value="">全部</option>
+                <option value="online">在线</option>
+                <option value="offline">离线</option>
+                <option value="error">错误</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>启用：</label>
+            <select id="filterEnabled" onchange="loadCameras()">
+                <option value="">全部</option>
+                <option value="true">已启用</option>
+                <option value="false">已禁用</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>搜索：</label>
+            <input type="text" id="filterSearch" placeholder="搜索摄像机名称/IP..." oninput="loadCameras()">
+        </div>
+        <div class="filter-actions">
+            <button class="btn btn-secondary" onclick="resetFilters()">重置</button>
+        </div>
+    </div>
+
+    <!-- 摄像机列表 -->
+    <div class="cameras-container">
+        <div class="cameras-header">
+            <h3>摄像机列表</h3>
+            <div class="view-toggle">
+                <button class="view-btn active" id="cardViewBtn" onclick="setViewMode('card')">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M4 4h7v7H4zm0 9h7v7H4zm9-9h7v7h-7zm0 9h7v7h-7z"/>
+                    </svg>
+                </button>
+                <button class="view-btn" id="listViewBtn" onclick="setViewMode('list')">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M4 14h4v-4H4zm0 5h4v-4H4zm0-10h4V5H4zm5 5h4v-4H9zm0 5h4v-4H9zm0-10h4V5H9zm5 5h4v-4h-4zm0 5h4v-4h-4zm0-10h4V5h-4zm5 5h4v-4h-4zm0 5h4v-4h-4zm0-10h4V5h-4z"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        
+        <div id="camerasList" class="cameras-list">
+            <!-- 列表视图表头 -->
+            <div class="cameras-list-header" id="camerasListHeader" style="display: none;">
+                <span></span>
+                <span>摄像机名称</span>
+                <span>状态</span>
+                <span>接入协议</span>
+                <span>AI检测</span>
+                <span>音频对讲</span>
+                <span>IP地址</span>
+                <span>制造商/型号</span>
+                <span>启用</span>
+                <span>操作</span>
+            </div>
+        </div>
+        
+        <!-- 分页组件 -->
+        <div id="paginationContainer" class="pagination-container" style="display: none;">
+            <span class="pagination-info" id="paginationInfo"></span>
+            <button class="pagination-btn prev" id="prevPageBtn" onclick="goToPrevPage()">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
+                </svg>
+                上一页
+            </button>
+            <div id="pageNumbers"></div>
+            <button class="pagination-btn next" id="nextPageBtn" onclick="goToNextPage()">
+                下一页
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
+                </svg>
+            </button>
+            <select class="page-size-select" id="pageSizeSelect" onchange="changePageSize()">
+                <option value="10">10条/页</option>
+                <option value="20">20条/页</option>
+                <option value="50">50条/页</option>
+                <option value="100">100条/页</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<!-- ONVIF发现模态框 -->
+<div id="discoverModal" class="modal">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h3>ONVIF设备发现</h3>
+            <button class="modal-close" onclick="closeDiscoverModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="discover-info">
+                <p>ONVIF协议可以自动发现网络中的摄像机设备。点击"开始发现"按钮搜索同网段的ONVIF设备。</p>
+            </div>
+            
+            <div class="discover-actions">
+                <button class="btn btn-primary" id="discoverBtn" onclick="startDiscover()">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                    </svg>
+                    开始发现
+                </button>
+            </div>
+            
+            <div id="discoverResults" class="discover-results" style="display: none;">
+                <h4>发现的设备</h4>
+                <div id="discoverList"></div>
+            </div>
+            
+            <div id="discoverLoading" class="discover-loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>正在搜索网络中的ONVIF设备...</p>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeDiscoverModal()">关闭</button>
+        </div>
+    </div>
+</div>
+
+<!-- ONVIF注册模态框 -->
+<div id="onvifRegisterModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>ONVIF注册摄像机</h3>
+            <button class="modal-close" onclick="closeOnvifRegisterModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="onvifRegisterForm">
+                <div class="form-group">
+                    <label for="onvifIp">IP地址 <span class="required">*</span></label>
+                    <input type="text" id="onvifIp" name="ip" required placeholder="例如：192.168.1.100">
+                </div>
+                
+                <div class="form-group">
+                    <label for="onvifPort">ONVIF端口</label>
+                    <input type="number" id="onvifPort" name="port" value="80" placeholder="默认80">
+                </div>
+                
+                <div class="form-group">
+                    <label for="onvifName">设备名称 <span class="required">*</span></label>
+                    <input type="text" id="onvifName" name="name" required placeholder="例如：大门摄像头">
+                </div>
+                
+                <div class="form-group">
+                    <label for="onvifUsername">用户名</label>
+                    <input type="text" id="onvifUsername" name="username" placeholder="摄像机用户名">
+                </div>
+                
+                <div class="form-group">
+                    <label for="onvifPassword">密码</label>
+                    <input type="password" id="onvifPassword" name="password" placeholder="摄像机密码">
+                </div>
+                
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" onclick="testOnvifConnection()">测试连接</button>
+                    <button type="button" class="btn btn-primary" onclick="registerOnvifCamera()">注册</button>
+                </div>
+                
+                <div id="onvifTestResult" class="test-result" style="display: none;"></div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeOnvifRegisterModal()">取消</button>
+        </div>
+    </div>
+</div>
+
+<!-- 创建/编辑摄像机模态框 -->
+<div id="cameraModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modalTitle">添加摄像机</h3>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="cameraForm">
+                <input type="hidden" id="cameraId">
+                
+                <div class="form-group">
+                    <label for="cameraName">摄像机名称 <span class="required">*</span></label>
+                    <input type="text" id="cameraName" name="name" required placeholder="例如：大门摄像头">
+                </div>
+                
+                <div class="form-group">
+                    <label for="cameraSource">取流地址 <span class="required">*</span></label>
+                    <input type="text" id="cameraSource" name="source" required placeholder="rtsp://192.168.1.100:554/stream">
+                    <small>支持RTSP、RTMP等流地址</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="cameraIp">IP地址</label>
+                    <input type="text" id="cameraIp" name="ip" placeholder="例如：192.168.1.100">
+                </div>
+                
+                <div class="form-group">
+                    <label for="cameraPort">端口</label>
+                    <input type="number" id="cameraPort" name="port" value="80" placeholder="ONVIF端口">
+                </div>
+                
+                <div class="form-group">
+                    <label for="cameraUsername">用户名</label>
+                    <input type="text" id="cameraUsername" name="username" placeholder="摄像机用户名">
+                </div>
+                
+                <div class="form-group">
+                    <label for="cameraPassword">密码</label>
+                    <input type="password" id="cameraPassword" name="password" placeholder="摄像机密码">
+                </div>
+                
+                <div class="form-group">
+                    <label for="cameraManufacturer">制造商</label>
+                    <input type="text" id="cameraManufacturer" name="manufacturer" placeholder="例如：Hikvision">
+                </div>
+                
+                <div class="form-group">
+                    <label for="cameraModel">型号</label>
+                    <input type="text" id="cameraModel" name="model" placeholder="例如：DS-2CD2143G2-I">
+                </div>
+                
+                <div class="form-group">
+                    <label for="cameraDescription">描述</label>
+                    <textarea id="cameraDescription" name="description" rows="2" placeholder="摄像机描述信息"></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="cameraDirectory">所属目录</label>
+                    <select id="cameraDirectory" name="directory_id">
+                        <option value="">默认目录</option>
+                        <!-- 目录选项将通过JS动态加载 -->
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="cameraEnabled">启用状态</label>
+                    <select id="cameraEnabled" name="enabled">
+                        <option value="true">启用</option>
+                        <option value="false">禁用</option>
+                    </select>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="saveCamera()">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 目录管理模态框 -->
+<div id="directoryModal" class="modal">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h3>目录管理</h3>
+            <button class="modal-close" onclick="closeDirectoryModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="directory-container">
+                <!-- 左侧：目录列表 -->
+                <div class="directory-left">
+                    <div class="directory-toolbar">
+                        <button class="btn btn-primary" onclick="openAddDirectoryModal()">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                            </svg>
+                            新建目录
+                        </button>
+                    </div>
+                    <div class="directory-list" id="directoryList">
+                        <!-- 目录列表将通过JS动态生成 -->
+                    </div>
+                </div>
+                
+                <!-- 右侧：摄像机列表 -->
+                <div class="directory-right">
+                    <div class="directory-cameras-header">
+                        <h4 id="directoryCamerasTitle">选中目录查看摄像机</h4>
+                        <div class="directory-cameras-actions" id="directoryCamerasActions" style="display: none;">
+                            <select id="moveToDirectorySelect" class="move-select">
+                                <!-- 目标目录选项将通过JS动态加载 -->
+                            </select>
+                            <button class="btn btn-secondary btn-sm" onclick="moveSelectedCameras()">移动选中</button>
+                        </div>
+                    </div>
+                    <div class="directory-cameras-list" id="directoryCamerasList">
+                        <div class="empty-message">请从左侧选择一个目录查看摄像机</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeDirectoryModal()">关闭</button>
+        </div>
+    </div>
+</div>
+
+<!-- 添加/编辑目录模态框 -->
+<div id="directoryEditModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="directoryEditTitle">新建目录</h3>
+            <button class="modal-close" onclick="closeDirectoryEditModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="directoryForm">
+                <div class="form-group">
+                    <label for="directoryName">目录名称 *</label>
+                    <input type="text" id="directoryName" required placeholder="请输入目录名称">
+                </div>
+                <div class="form-group">
+                    <label for="directoryParent">父目录</label>
+                    <select id="directoryParent">
+                        <option value="">无（根目录）</option>
+                        <!-- 父目录选项将通过JS动态生成 -->
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="directoryDescription">描述</label>
+                    <textarea id="directoryDescription" rows="3" placeholder="请输入描述"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="directorySortOrder">排序</label>
+                    <input type="number" id="directorySortOrder" value="0" placeholder="0">
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeDirectoryEditModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="saveDirectory()">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 删除确认模态框 -->
+<div id="deleteModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>确认删除</h3>
+            <button class="modal-close" onclick="closeDeleteModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>确定要删除摄像机 "<span id="deleteCameraName"></span>" 吗？</p>
+            <p class="warning-text">此操作不可恢复。</p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">取消</button>
+            <button type="button" class="btn btn-danger" onclick="confirmDelete()">删除</button>
+        </div>
+    </div>
+</div>
+
+<!-- 摄像机详情模态框 -->
+<div id="cameraDetailModal" class="modal">
+    <div class="modal-content modal-medium">
+        <div class="modal-header">
+            <h3 id="cameraDetailTitle">摄像机详情</h3>
+            <button class="modal-close" onclick="closeCameraDetailModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="cameraDetailContent"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeCameraDetailModal()">关闭</button>
+            <button type="button" class="btn btn-primary" onclick="editCurrentCamera()">编辑</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/cameras.js') }}"></script>
+{% endblock %}

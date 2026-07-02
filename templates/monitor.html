@@ -1,0 +1,551 @@
+{% extends "base.html" %}
+
+{% block title %}监控墙{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/nipplejs-ptz.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/audio-talk.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="page-container monitor-page-wrapper">
+    <!-- 左侧摄像机列表 -->
+    <div class="camera-sidebar">
+        <div class="sidebar-header">
+            <h3>摄像机列表</h3>
+            <div class="sidebar-search">
+                <input type="text" id="cameraSearch" placeholder="搜索摄像机..." oninput="filterCameras()">
+            </div>
+        </div>
+        
+        <div class="sidebar-body">
+            <div id="cameraTree" class="camera-tree">
+                <!-- 摄像机列表将通过 JavaScript 动态加载 -->
+            </div>
+        </div>
+        
+        <div class="sidebar-footer">
+            <div class="sidebar-stats">
+                <span id="onlineCount">在线: 0</span>
+                <span id="offlineCount">离线: 0</span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 右侧电视墙区域 -->
+    <div class="monitor-main">
+        <!-- 工具栏 -->
+        <div class="monitor-toolbar">
+            <div class="toolbar-left">
+                <div class="layout-selector">
+                    <span class="layout-label">布局:</span>
+                    <button class="layout-btn active" data-layout="1" onclick="setLayout(1)">
+                        <span class="layout-num">1</span>
+                    </button>
+                    <button class="layout-btn" data-layout="2" onclick="setLayout(2)">
+                        <span class="layout-num">2</span>
+                    </button>
+                    <button class="layout-btn" data-layout="4" onclick="setLayout(4)">
+                        <span class="layout-num">4</span>
+                    </button>
+                    <button class="layout-btn" data-layout="9" onclick="setLayout(9)">
+                        <span class="layout-num">9</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="toolbar-center">
+                <button class="toolbar-btn" onclick="clearAllScreens()">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                    </svg>
+                    清空画面
+                </button>
+                <button class="toolbar-btn" onclick="autoArrange()">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M3 13h2v-2H3zm0 4h2v-2H3zm0-8h2V7H3zm4 4h2v-2H7zm0 4h2v-2H7zm0-8h2V7H7zm4 4h2v-2h-2zm0 4h2v-2h-2zm0-8h2V7h-2zm4 4h2v-2h-2zm0 4h2v-2h-2zm0-8h2V7h-2zm4 4h2v-2h-2zm0 4h2v-2h-2zm0-8h2V7h-2z"/>
+                    </svg>
+                    自动排列
+                </button>
+            </div>
+            
+            <div class="toolbar-right">
+                <button class="toolbar-btn fullscreen-btn" onclick="toggleFullscreen()">
+                    <svg viewBox="0 0 24 24" fill="currentColor" id="fullscreenIcon">
+                        <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+                    </svg>
+                    全屏
+                </button>
+            </div>
+        </div>
+        
+        <!-- 电视墙区域 -->
+        <div class="monitor-wall" id="monitorWall">
+            <!-- 画面格子将通过 JavaScript 动态生成 -->
+        </div>
+    </div>
+</div>
+
+<!-- 单画面弹出模态框 -->
+<div id="singleScreenModal" class="modal">
+    <div class="modal-content modal-fullscreen">
+        <div class="modal-header">
+            <h3 id="singleScreenTitle">摄像机画面</h3>
+            <div class="single-screen-controls">
+                <button class="control-btn" id="singleScreenAIModeBtn" onclick="toggleSingleAIMode()" title="切换 AI/普通模式">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM8 15c0-1.66 1.34-3 3-3 .35 0 .69.07 1 .18V6h5v2h-3v7.03A3.003 3.003 0 0 1 11 18c-1.66 0-3-1.34-3-3z"/>
+                    </svg>
+                </button>
+                <button class="control-btn" onclick="toggleSingleFullscreen()">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+                    </svg>
+                </button>
+                <button class="control-btn" onclick="closeSingleScreen()">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <div class="modal-body single-screen-layout">
+            <!-- 左侧控制面板 -->
+            <div class="single-control-panel">
+                <!-- 通道列表 -->
+                <div class="control-section channel-item">
+                    <div class="channel-info">
+                        <div class="device-name">
+                            <label id="singleCameraName">摄像机名称</label>
+                        </div>
+                        <div class="channel-list-wrap">
+                            <div class="channel-list-item selected">
+                                <div class="ch-btn-left">
+                                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" class="ch-btn-play" onclick="playCurrentStream()">
+                                        <path d="M8 5v14l11-7z"/>
+                                    </svg>
+                                </div>
+                                <span class="ch-name" id="singleChName">Camera 01</span>
+                                <div class="stream-type" onclick="toggleStreamSelector()">
+                                    <i class="fa fa-video-camera"></i>
+                                    <i class="fa fa-angle-down"></i>
+                                    <span id="streamTypeText">子码流</span>
+                                </div>
+                                <div class="record-btn-circle" id="recordBtnCircle" onclick="toggleRecording()"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 云台控制 -->
+                <div class="ptz-control-section">
+                    <div class="ptz-title">
+                        <label>云台</label>
+                    </div>
+
+                    <!-- 方向控制摇杆 -->
+                    <div class="ptz-joystick-container">
+                        <div id="ptzJoystick" class="ptz-joystick-zone">
+                            <!-- 8方向箭头指示 -->
+                            <div class="ptz-direction-arrows">
+                                <!-- 上 -->
+                                <div class="ptz-arrow ptz-arrow-up" data-direction="up">
+                                    <svg viewBox="0 0 24 24"><path d="M12 4l-8 8h6v8h4v-8h6z"/></svg>
+                                </div>
+                                <!-- 下 -->
+                                <div class="ptz-arrow ptz-arrow-down" data-direction="down">
+                                    <svg viewBox="0 0 24 24"><path d="M12 20l-8-8h6v-8h4v8h6z"/></svg>
+                                </div>
+                                <!-- 左 -->
+                                <div class="ptz-arrow ptz-arrow-left" data-direction="left">
+                                    <svg viewBox="0 0 24 24"><path d="M4 12l8-8v6h8v4h-8v6z"/></svg>
+                                </div>
+                                <!-- 右 -->
+                                <div class="ptz-arrow ptz-arrow-right" data-direction="right">
+                                    <svg viewBox="0 0 24 24"><path d="M20 12l-8-8v6h-8v4h8v6z"/></svg>
+                                </div>
+                                <!-- 左上 -->
+                                <div class="ptz-arrow ptz-arrow-left-up" data-direction="left_up">
+                                    <svg viewBox="0 0 24 24"><path d="M7 7v10h4v-6h6v-4z"/></svg>
+                                </div>
+                                <!-- 右上 -->
+                                <div class="ptz-arrow ptz-arrow-right-up" data-direction="right_up">
+                                    <svg viewBox="0 0 24 24"><path d="M17 7v10h-4v-6h-6v-4z"/></svg>
+                                </div>
+                                <!-- 左下 -->
+                                <div class="ptz-arrow ptz-arrow-left-down" data-direction="left_down">
+                                    <svg viewBox="0 0 24 24"><path d="M7 17v-10h4v6h6v4z"/></svg>
+                                </div>
+                                <!-- 右下 -->
+                                <div class="ptz-arrow ptz-arrow-right-down" data-direction="right_down">
+                                    <svg viewBox="0 0 24 24"><path d="M17 17v-10h-4v6h-6v4z"/></svg>
+                                </div>
+                            </div>
+                            <!-- 中心停止按钮 -->
+                            <button class="ptz-stop-button" onclick="ptzStop()" title="停止">
+                                <svg viewBox="0 0 24 24" class="ptz-stop-icon">
+                                    <rect x="6" y="6" width="12" height="12" rx="2"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 速度滑块 -->
+                    <div class="ptz-slider">
+                        <div class="ptz-slider-runway">
+                            <div class="ptz-slider-bar" id="ptzSliderBar" style="width: 50%;"></div>
+                            <div class="ptz-slider-button" id="ptzSliderButton" style="left: 50%;"></div>
+                        </div>
+                        <div class="ptz-slider-text">
+                            <div>慢</div>
+                            <div>快</div>
+                        </div>
+                    </div>
+
+                    <!-- 变焦/聚焦/光圈 -->
+                    <div class="ptz-advanced">
+                        <div class="ptz-advanced-item">
+                            <button onclick="ptzZoom('out')" title="调焦 -">
+                                <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
+                                    <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2" fill="none"/>
+                                    <path d="M21 21l-4.35-4.35M8 11h6" stroke="currentColor" stroke-width="2"/>
+                                </svg>
+                            </button>
+                            <button onclick="ptzZoom('in')" title="调焦 +">
+                                <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
+                                    <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2" fill="none"/>
+                                    <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" stroke="currentColor" stroke-width="2"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="ptz-advanced-item">
+                            <button onclick="ptzFocus('out')" title="聚焦 -">
+                                <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
+                                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/>
+                                    <path d="M12 5v2M12 17v2M5 12h2M17 12h2" stroke="currentColor" stroke-width="2"/>
+                                </svg>
+                            </button>
+                            <button onclick="ptzFocus('in')" title="聚焦 +">
+                                <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
+                                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/>
+                                    <path d="M12 5v2M12 17v2M5 12h2M17 12h2" stroke="currentColor" stroke-width="2"/>
+                                    <circle cx="12" cy="12" r="6" stroke="currentColor" stroke-width="1" fill="none" opacity="0.5"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="ptz-advanced-item">
+                            <button onclick="ptzIris('out')" title="光圈 -">
+                                <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
+                                    <circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2" fill="none"/>
+                                    <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2" fill="none"/>
+                                </svg>
+                            </button>
+                            <button onclick="ptzIris('in')" title="光圈 +">
+                                <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
+                                    <circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2" fill="none"/>
+                                    <circle cx="12" cy="12" r="2" fill="currentColor"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 其他功能按钮（一行显示5个图标） -->
+                    <div class="ptz-functions">
+                        <button class="ptz-function-button" onclick="toggleLight()" title="灯光">
+                            <i class="fa fa-lightbulb"></i>
+                        </button>
+                        <button class="ptz-function-button" onclick="toggleWiper()" title="雨刷">
+                            <i class="fa fa-tint"></i>
+                        </button>
+                        <button class="ptz-function-button" onclick="auxFocus()" title="辅助聚焦">
+                            <i class="fa fa-crosshairs"></i>
+                        </button>
+                        <button class="ptz-function-button" onclick="lensInit()" title="镜头初始化">
+                            <i class="fa fa-refresh"></i>
+                        </button>
+                        <button class="ptz-function-button" onclick="toggleManualTrack()" title="手动跟踪">
+                            <i class="fa fa-user"></i>
+                        </button>
+                    </div>
+
+                    <!-- 预置点/巡航标签页 -->
+                    <div class="ptz-tabs">
+                        <div class="ptz-tabs-header">
+                            <div class="ptz-tab-item active" onclick="switchPtzTab('preset')" id="tabPreset">
+                                <i class="fa fa-bell"></i>
+                                <span>预置点</span>
+                            </div>
+                            <div class="ptz-tab-item" onclick="switchPtzTab('patrol')" id="tabPatrol">
+                                <i class="fa fa-route"></i>
+                                <span>巡航</span>
+                            </div>
+                            <div class="ptz-tab-active-bar" id="ptzTabActiveBar"></div>
+                        </div>
+
+                        <!-- 预置点列表 -->
+                        <div class="ptz-tab-content" id="presetContent">
+                            <div class="preset-list">
+                                <!-- 动态生成的预置点列表 -->
+                                <div class="preset-item" data-preset-id="1">
+                                    <div class="preset-item-content">
+                                        <span class="preset-name">预置点 1</span>
+                                        <div class="preset-actions">
+                                            <button onclick="gotoPreset(1)" title="调用">
+                                                <i class="fa fa-play"></i>
+                                            </button>
+                                            <button onclick="setPreset(1)" title="设置">
+                                                <i class="fa fa-cog"></i>
+                                            </button>
+                                            <button onclick="deletePreset(1)" title="删除">
+                                                <i class="fa fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- 预置点 2-10 示例 -->
+                                <div class="preset-item" data-preset-id="2">
+                                    <div class="preset-item-content">
+                                        <span class="preset-name">预置点 2</span>
+                                        <div class="preset-actions">
+                                            <button onclick="gotoPreset(2)" title="调用">
+                                                <i class="fa fa-play"></i>
+                                            </button>
+                                            <button onclick="setPreset(2)" title="设置">
+                                                <i class="fa fa-cog"></i>
+                                            </button>
+                                            <button onclick="deletePreset(2)" title="删除">
+                                                <i class="fa fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="preset-footer">
+                                <button id="addPresetBtn" onclick="addNewPreset()" class="add-preset-btn">
+                                    <i class="fa fa-plus"></i>
+                                    <span>添加预置点</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 巡航路径列表 -->
+                        <div class="ptz-tab-content" id="patrolContent" style="display: none;">
+                            <div class="patrol-list">
+                                <!-- 巡航路径 1 -->
+                                <div class="patrol-item" data-patrol-id="1">
+                                    <div class="patrol-item-content">
+                                        <span class="patrol-name">巡航路径 1</span>
+                                        <div class="patrol-status">
+                                            <span class="patrol-points">预置点数: 5</span>
+                                        </div>
+                                        <div class="patrol-actions">
+                                            <button onclick="startPatrol(1)" title="调用">
+                                                <i class="fa fa-play"></i>
+                                            </button>
+                                            <button onclick="stopPatrol(1)" title="停止">
+                                                <i class="fa fa-stop"></i>
+                                            </button>
+                                            <button onclick="editPatrol(1)" title="编辑">
+                                                <i class="fa fa-edit"></i>
+                                            </button>
+                                            <button onclick="deletePatrol(1)" title="删除">
+                                                <i class="fa fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- 巡航路径 2 -->
+                                <div class="patrol-item" data-patrol-id="2">
+                                    <div class="patrol-item-content">
+                                        <span class="patrol-name">巡航路径 2</span>
+                                        <div class="patrol-status">
+                                            <span class="patrol-points">预置点数: 3</span>
+                                        </div>
+                                        <div class="patrol-actions">
+                                            <button onclick="startPatrol(2)" title="调用">
+                                                <i class="fa fa-play"></i>
+                                            </button>
+                                            <button onclick="stopPatrol(2)" title="停止">
+                                                <i class="fa fa-stop"></i>
+                                            </button>
+                                            <button onclick="editPatrol(2)" title="编辑">
+                                                <i class="fa fa-edit"></i>
+                                            </button>
+                                            <button onclick="deletePatrol(2)" title="删除">
+                                                <i class="fa fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="patrol-footer">
+                                <button onclick="addNewPatrol()" class="add-patrol-btn">
+                                    <i class="fa fa-plus"></i>
+                                    <span>添加巡航路径</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 中间视频播放区域 -->
+            <div class="single-video-area">
+                <div class="single-screen-container" id="singleScreenContainer">
+                    <div id="singleScreenVideo" class="video-container"></div>
+                </div>
+                <div class="video-status-bar">
+                    <span id="singleStreamStatus">状态: 未连接</span>
+                    <span id="singleStreamBitrate">码率: 0 kbps</span>
+                </div>
+            </div>
+
+            <!-- 右侧语音对讲面板 -->
+            <div class="single-control-panel right-panel">
+                <!-- 语音对讲面板 -->
+                <div class="audio-talk-panel">
+                    <div class="audio-talk-header">
+                        <i class="fa fa-microphone"></i>
+                        <span>语音对讲</span>
+                    </div>
+                    <div class="audio-talk-content">
+                        <!-- 对讲状态显示 -->
+                        <div class="audio-talk-status">
+                            <div class="audio-talk-status-icon">
+                                <i id="audioTalkStatusIcon" class="fa fa-microphone-slash"></i>
+                            </div>
+                            <div class="audio-talk-status-text">
+                                <span id="audioTalkStatusText">未连接</span>
+                            </div>
+                        </div>
+                        
+                        <!-- 对讲控制按钮 -->
+                        <div class="audio-talk-controls">
+                            <button id="audioTalkStartBtn" class="audio-talk-btn start-btn" onclick="startAudioTalk()">
+                                <i class="fa fa-phone"></i>
+                                <span>开始<br>对讲</span>
+                            </button>
+                            <button id="audioTalkStopBtn" class="audio-talk-btn stop-btn" onclick="stopAudioTalk()" disabled>
+                                <i class="fa fa-phone-slash"></i>
+                                <span>结束<br>对讲</span>
+                            </button>
+                        </div>
+                        
+                        <!-- 音频指示器 -->
+                        <div class="audio-indicator">
+                            <div class="audio-level-bars">
+                                <div class="audio-level-bar" id="audioLevelBar1"></div>
+                                <div class="audio-level-bar" id="audioLevelBar2"></div>
+                                <div class="audio-level-bar" id="audioLevelBar3"></div>
+                                <div class="audio-level-bar" id="audioLevelBar4"></div>
+                                <div class="audio-level-bar" id="audioLevelBar5"></div>
+                            </div>
+                            <span class="audio-label">麦克风输入音量</span>
+                        </div>
+
+                        <!-- 音频增强控制 -->
+                        <div class="audio-enhancement-controls">
+                            <div class="audio-control-item">
+                                <label class="audio-control-label">
+                                    <i class="fa fa-volume-up"></i>
+                                    <span>发送音量</span>
+                                </label>
+                                <div class="volume-slider-container">
+                                    <input type="range" id="audioVolumeSlider" class="volume-slider" min="0" max="200" value="100" oninput="updateAudioVolume(this.value)">
+                                    <span id="audioVolumeValue" class="volume-value">100%</span>
+                                </div>
+                            </div>
+
+                            <div class="audio-control-item">
+                                <label class="audio-control-label">
+                                    <i class="fa fa-magic"></i>
+                                    <span>噪音抑制</span>
+                                </label>
+                                <div class="toggle-switch-container">
+                                    <input type="checkbox" id="noiseSuppressionToggle" class="toggle-switch" checked onchange="toggleNoiseSuppression(this.checked)">
+                                    <label for="noiseSuppressionToggle" class="toggle-label"></label>
+                                    <span id="noiseSuppressionStatus" class="toggle-status">已启用</span>
+                                </div>
+                            </div>
+
+                            <div class="audio-control-item">
+                                <label class="audio-control-label">
+                                    <i class="fa fa-ban"></i>
+                                    <span>回声消除</span>
+                                </label>
+                                <div class="toggle-switch-container">
+                                    <input type="checkbox" id="echoCancellationToggle" class="toggle-switch" checked onchange="toggleEchoCancellation(this.checked)">
+                                    <label for="echoCancellationToggle" class="toggle-label"></label>
+                                    <span id="echoCancellationStatus" class="toggle-status">已启用</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- WebRTC连接信息 -->
+                        <div class="audio-talk-info">
+                            <div class="info-item">
+                                <i class="fa fa-info-circle"></i>
+                                <span id="audioTalkInfo">点击"开始对讲"建立连接</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 语音对讲模态框 -->
+<div id="voiceTalkModal" class="modal">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h3>语音对讲</h3>
+            <button class="modal-close" onclick="closeVoiceTalk()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="voice-talk-container">
+                <div class="voice-talk-info">
+                    <span id="voiceTalkCameraName">摄像机: </span>
+                </div>
+                <div class="voice-talk-status" id="voiceTalkStatus">
+                    <span class="status-indicator"></span>
+                    <span>准备就绪</span>
+                </div>
+                <div class="voice-talk-controls">
+                    <button class="voice-btn" id="voiceTalkBtn" onclick="toggleVoiceTalk()">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
+                        </svg>
+                        开始对讲
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 截图预览模态框 -->
+<div id="snapshotModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>截图预览</h3>
+            <button class="modal-close" onclick="closeSnapshotModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <img id="snapshotImage" class="snapshot-preview" src="" alt="截图">
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeSnapshotModal()">关闭</button>
+            <button class="btn btn-primary" onclick="downloadSnapshot()">下载</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/ZLMRTCClient.js') }}"></script>
+<script src="{{ url_for('static', filename='js/jessibuca/jessibuca.js') }}"></script>
+<script src="{{ url_for('static', filename='js/monitor.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ptz_joystick.js') }}"></script>
+<script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}"></script>
+{% endblock %}

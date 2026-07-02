@@ -1,0 +1,103 @@
+# ========================================
+# 事件输出配置文件
+# ========================================
+# 用于配置检测事件的输出方式，支持双通道架构：
+# - MQTT：完整事件数据给其他平台订阅（系统配置）
+# - WebSocket：实时绘制数据给前端（系统配置）
+# - Storage：MinIO和FTP存储（系统配置）
+#
+# 注意：
+# - enabled、camera_id是任务表的单独字段，不从配置文件读取
+# - storage、mqtt、websocket属于系统配置，从system_config.yaml读取
+# - 此文件仅包含任务级配置（image_output、compression、gif、filter等）
+
+# ========================================
+# 全局配置
+# ========================================
+
+event_output:
+  # 注意：enabled是任务表的单独字段（event_enabled），不从配置文件读取
+  # 注意：camera_id是任务表的camera字段，不从配置文件读取（每个摄像头ID不同）
+  
+  # 注意：storage、mqtt、websocket属于系统配置，从system_config.yaml读取
+  # 这些配置不在event_config中保存
+
+  # ========================================
+  # 元数据配置（固定）
+  # ========================================
+  metadata: {}
+
+  # ========================================
+  # 图片输出配置
+  # ========================================
+  image_output:
+    # 输出方式：minio, ftp, both, none
+    method: both
+    
+    # MinIO 存储桶（使用全局 storage.minio 配置）
+    minio_bucket: "sagesight-images"
+    
+    # FTP 远程目录（使用全局 storage.ftp 配置）
+    ftp_remote_dir: "/sagesight/images"
+    
+    # 本地保存配置（可选）
+    local_backup: true            # ✅ 启用本地备份（上传失败时自动保存）
+    output_dir: "output/images"   # ✅ 修改为output目录
+    local_retention_days: 7       # 本地保存天数（默认7天）
+    auto_cleanup: true            # 是否自动清理过期文件
+    cleanup_interval_hours: 24    # 清理间隔（小时）
+  
+  # ========================================
+  # 图片压缩配置
+  # ========================================
+  compression:
+    enabled: true
+    quality: 80          # JPEG 质量 (0-100)
+    max_width: 640       # 最大宽度
+    max_height: 480      # 最大高度
+  
+  # ========================================
+  # GIF 动画配置
+  # ========================================
+  gif:
+    # 输出方式：local | minio | ftp | both
+    output_method: both           # ✅ 修改为both（同时保存本地和上传MinIO）
+
+    # 本地保存配置（仅当 output_method 为 local 或 both 时使用）
+    output_dir: "output/gifs"     # ✅ 修改为output目录
+    local_retention_days: 7       # 本地保留天数（默认7天）
+    auto_cleanup: true            # 是否自动清理过期文件
+    cleanup_interval_hours: 24    # 清理间隔（小时）
+
+    # GIF 参数
+    max_frames: 30                # 最大帧数
+    fps: 5                        # GIF 播放帧率
+    max_width: 320                # 最大宽度
+    max_height: 240               # 最大高度
+    draw_trajectory: true         # 是否绘制轨迹
+    trajectory_color: [0, 255, 0] # 轨迹颜色（BGR格式，绿色）
+
+    # MinIO 存储桶（使用全局 storage.minio 配置）
+    minio_bucket: "sagesight-gifs"
+
+    # FTP 远程目录（使用全局 storage.ftp 配置）
+    ftp_remote_dir: "/gifs"
+  
+  # ========================================
+  # 轨迹配置（固定）
+  # ========================================
+  trajectory: {}
+  
+  # ========================================
+  # 截图配置（固定）
+  # ========================================
+  capture: {}
+  
+  # ========================================
+  # 事件过滤配置
+  # ========================================
+  filter:
+    # 只发送特定类别的事件（空列表表示全部）
+    target_classes: ['person', 'car']
+    # 只发送置信度高于此值的事件
+    min_confidence: 0.5

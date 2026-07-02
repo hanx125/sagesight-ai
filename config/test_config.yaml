@@ -1,0 +1,118 @@
+# ========================================
+# 测试工具专用配置文件
+# ========================================
+# 用于 test_single_channel.py 等单通道测试工具
+# 不属于 YOLODetector 核心参数，仅用于调试和性能验证
+
+# ========================================
+# 共享内存配置（测试工具专用）
+# ========================================
+
+shared_memory:
+  # 共享内存名称（需要与解码器配置一致）
+  name: "yolo_detection_channel"
+
+  # 是否创建（检测器端设为 false，因为解码器端已经创建）
+  create: false
+
+# ========================================
+# 日志配置（测试工具专用）
+# ========================================
+
+logging:
+  # 日志级别：DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+
+  # 日志文件路径
+  file: "logs/detector.log"
+
+  # 是否输出到控制台
+  console: true
+
+  # 日志格式
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# ========================================
+# 显示配置（测试工具专用）
+# ========================================
+
+display:
+  # 是否启用显示（设为 false 则纯后端运行，无窗口显示）
+  enabled: true
+
+  # 窗口标题
+  window_title: "YOLO Detection - Press Q to quit"
+
+  # 帧率控制（FPS）
+  target_fps: 30
+
+  # 调试信息打印频率（每 N 帧打印一次），0 表示禁用
+  debug_print_interval: 50
+
+  # 解码器启动等待时间（秒）
+  decoder_wait_time: 2
+
+  # 读取失败重试延迟（秒）
+  read_retry_delay: 0.05
+
+# ========================================
+# 绘图配置（测试工具专用）
+# ========================================
+
+drawing:
+  # 类别颜色配置（BGR 格式）
+  colors:
+    person: [0, 255, 0]      # 绿色
+    car: [255, 0, 0]         # 蓝色
+    bicycle: [0, 255, 255]   # 黄色
+    motorcycle: [255, 255, 0] # 青色
+    bus: [0, 0, 255]         # 红色
+    truck: [128, 0, 255]     # 紫色
+
+  # 字体配置
+  font_scale: 0.6
+  font_thickness: 2
+
+  # 线条粗细
+  line_thickness: 2
+
+  # 是否显示轨迹线
+  show_track_history: true
+
+# ========================================
+# 性能监控配置（测试工具专用）
+# ========================================
+
+monitoring:
+  # 是否启用性能监控
+  enabled: true
+
+  # 统计信息打印间隔（秒）
+  stats_interval: 5
+
+  # GPU 监控（需要 pynvml）
+  gpu_monitoring: true
+
+  # 性能目标
+  targets:
+    total_latency_ms: 100  # 端到端延迟目标 < 100ms
+    detector_fps: 30       # 检测帧率目标 >= 30 FPS
+    gpu_memory_mb: 4096    # GPU 显存占用目标 < 4GB
+
+# ========================================
+# 测试视频源配置（单通道测试）
+# ========================================
+
+test_source:
+  # RTSP 流地址（测试用）
+  # rtsp_url: "rtsp://192.168.1.100:554/stream1"
+
+  # 本地视频文件路径（测试用）
+  video_file: "test_videos/test.mp4"
+
+  # 解码器硬件加速（测试用）
+  hwaccel: "dxva2"
+
+  # 解码分辨率（测试用）
+  width: 640
+  height: 640

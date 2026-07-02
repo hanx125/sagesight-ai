@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+
+{% block title %}系统管理{% endblock %}
+
+{% block content %}
+<div class="page-container">
+    <!-- 页面标题 -->
+    <div class="page-header">
+        <div class="page-header-left">
+            <h2>系统管理</h2>
+            <p>管理系统配置、流媒体服务器等系统设置</p>
+        </div>
+    </div>
+    
+    <!-- 标签页导航 -->
+    <div class="system-tabs-container">
+        <div class="tabs-nav">
+            <button class="tab-btn active" data-tab="streaming" onclick="switchTab('streaming')">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
+                </svg>
+                流媒体服务器
+            </button>
+            <button class="tab-btn" data-tab="general" onclick="switchTab('general')">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 S10.02,8.4,12,8.4s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/>
+                </svg>
+                常规设置
+            </button>
+            <button class="tab-btn" data-tab="storage" onclick="switchTab('storage')">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M2 20h20v-4H2v4zm2-3h2v2H4v-2zM2 4v4h20V4H2zm4 3H4V5h2v2zm-4 7h20v-4H2v4zm2-3h2v2H4v-2z"/>
+                </svg>
+                存储设置
+            </button>
+            <button class="tab-btn" data-tab="network" onclick="switchTab('network')">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                </svg>
+                网络设置
+            </button>
+        </div>
+        
+        <!-- 标签页内容 -->
+        <div class="tabs-content">
+            <!-- 流媒体服务器标签页 -->
+            <div class="tab-panel active" id="streamingTab">
+                <div class="tab-header">
+                    <h3>流媒体服务器配置</h3>
+                    <button class="btn btn-primary" onclick="openCreateServerModal()">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                        </svg>
+                        添加服务器
+                    </button>
+                </div>
+                
+                <!-- 服务器列表 -->
+                <div class="servers-list" id="serversList">
+                    <!-- 服务器卡片将通过 JavaScript 动态加载 -->
+                </div>
+            </div>
+            
+            <!-- 常规设置标签页 -->
+            <div class="tab-panel" id="generalTab">
+                <div class="tab-header">
+                    <h3>常规设置</h3>
+                </div>
+                <div class="settings-form">
+                    <div class="developing-container">
+                        <svg viewBox="0 0 24 24" fill="currentColor" class="developing-icon">
+                            <path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/>
+                        </svg>
+                        <h3 class="developing-title">功能开发中</h3>
+                        <p class="developing-desc">常规设置功能正在开发中，敬请期待...</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 存储设置标签页 -->
+            <div class="tab-panel" id="storageTab">
+                <div class="tab-header">
+                    <h3>存储设置</h3>
+                </div>
+                <div class="settings-form">
+                    <div class="developing-container">
+                        <svg viewBox="0 0 24 24" fill="currentColor" class="developing-icon">
+                            <path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/>
+                        </svg>
+                        <h3 class="developing-title">功能开发中</h3>
+                        <p class="developing-desc">存储设置功能正在开发中，敬请期待...</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 网络设置标签页 -->
+            <div class="tab-panel" id="networkTab">
+                <div class="tab-header">
+                    <h3>网络设置</h3>
+                </div>
+                <div class="settings-form">
+                    <div class="developing-container">
+                        <svg viewBox="0 0 24 24" fill="currentColor" class="developing-icon">
+                            <path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/>
+                        </svg>
+                        <h3 class="developing-title">功能开发中</h3>
+                        <p class="developing-desc">网络设置功能正在开发中，敬请期待...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 添加/编辑流媒体服务器模态框 -->
+<div id="serverModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="serverModalTitle">添加流媒体服务器</h3>
+            <button class="modal-close" onclick="closeServerModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="serverForm">
+                <input type="hidden" id="serverId">
+                
+                <div class="form-group">
+                    <label for="serverName">服务器名称 *</label>
+                    <input type="text" id="serverName" required placeholder="例如: SRS 主服务器">
+                </div>
+                
+                <div class="form-group">
+                    <label for="serverType">服务器类型</label>
+                    <select id="serverType">
+                        <option value="zlmediakit">ZLMediaKit</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="serverHost">主机地址</label>
+                    <input type="text" id="serverHost" placeholder="localhost">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="serverRtmpPort">RTMP端口</label>
+                        <input type="number" id="serverRtmpPort" placeholder="1935">
+                    </div>
+                    <div class="form-group">
+                        <label for="serverRtspPort">RTSP端口</label>
+                        <input type="number" id="serverRtspPort" placeholder="554">
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="serverHttpPort">HTTP端口</label>
+                        <input type="number" id="serverHttpPort" placeholder="88">
+                    </div>
+                    <div class="form-group">
+                        <label for="serverRtcPort">RTC端口</label>
+                        <input type="number" id="serverRtcPort" placeholder="8000">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="serverSecret">API密钥</label>
+                    <input type="text" id="serverSecret" placeholder="FpvUDVyWlqohv98EEE5Of3UcFhc18Ipt">
+                </div>
+                
+                <div class="form-group">
+                    <label for="serverMediaServerId">服务器ID</label>
+                    <input type="text" id="serverMediaServerId" placeholder="zlmedia-7d241d0e">
+                </div>
+                
+                <div class="form-group">
+                    <label for="serverHookUrlPrefix">回调URL前缀</label>
+                    <input type="text" id="serverHookUrlPrefix" placeholder="http://localhost:5000">
+                </div>
+                
+                <div class="form-group">
+                    <label for="serverProtocol">协议</label>
+                    <select id="serverProtocol">
+                        <option value="rtmp">RTMP</option>
+                        <option value="rtsp">RTSP</option>
+                        <option value="hls">HLS</option>
+                        <option value="webrtc">WebRTC</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="serverDescription">描述</label>
+                    <textarea id="serverDescription" rows="3" placeholder="服务器描述信息"></textarea>
+                </div>
+                
+                <div class="form-group checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="serverEnabled" checked>
+                        <span>启用服务器</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="serverDefault">
+                        <span>设为默认服务器</span>
+                    </label>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeServerModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="saveServer()">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 删除确认模态框 -->
+<div id="deleteServerModal" class="modal">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h3>确认删除</h3>
+            <button class="modal-close" onclick="closeDeleteServerModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>确定要删除流媒体服务器 <strong id="deleteServerName"></strong> 吗？</p>
+            <p class="warning-text">删除后将无法恢复。</p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeDeleteServerModal()">取消</button>
+            <button type="button" class="btn btn-danger" onclick="confirmDeleteServer()">删除</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/system.js') }}"></script>
+{% endblock %}

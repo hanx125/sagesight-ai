@@ -1,0 +1,252 @@
+"""
+优化版预处理器 - 使用 OpenCV 加速
+"""
+
+import numpy as np
+import cv2
+import time
+
+
+class OptimizedPreprocessor:
+    """优化版预处理器"""
+
+    def __init__(
+        self,
+        width: int = 640,
+        height: int = 640,
+        model_input_size: int = 640,
+        rgb_mean: tuple = (0.0, 0.0, 0.0),
+        rgb_std: tuple = (1.0, 1.0, 1.0)
+    ):
+        """
+        初始化预处理器
+
+        Args:
+            width: 输入图像宽度
+            height: 输入图像高度
+            model_input_size: YOLO 模型输入尺寸（默认 640）
+            rgb_mean: RGB 均值（用于归一化）
+            rgb_std: RGB 标准差（用于归一化）
+        """
+        self.width = width
+        self.height = height
+        self.model_input_size = model_input_size
+        self.rgb_mean = np.array(rgb_mean, dtype=np.float32)
+        self.rgb_std = np.array(rgb_std, dtype=np.float32)
+        
+        # 预分配缓冲区，避免每帧重新分配内存
+        # RGB 图像缓冲区（BGR 格式，用于保存和显示）
+        self._bgr_buffer = np.zeros((model_input_size, model_input_size, 3), dtype=np.uint8)
+        # 归一化缓冲区（float32）
+        self._norm_buffer = np.zeros((model_input_size, model_input_size, 3), dtype=np.float32)
+        # 最终输入张量缓冲区
+        self._input_tensor = np.zeros((1, 3, model_input_size, model_input_size), dtype=np.float32)
+        
+        # 检查是否为默认归一化参数（mean=0, std=1）
+        self._is_default_norm = (self.rgb_mean.sum() == 0.0) and (self.rgb_std == 1.0).all()
+    
+    def preprocess(self, y: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+        """
+        预处理：YUV420p → RGB → 归一化 → CHW
+        
+        Args:
+            y: Y 平面 (height, width)，亮度分量
+            u: U 平面 (height//2, width//2)，色度分量
+            v: V 平面 (height//2, width//2)，色度分量
+        
+        Returns:
+            模型输入张量 (1, 3, height, width) float32
+        
+        Raises:
+            ValueError: 输入形状不符合预期
+        """
+        h, w = self.height, self.width
+        
+        # 输入验证
+        if y.shape != (h, w):
+            raise ValueError(f"Y 平面形状错误：期望 ({h}, {w}), 得到 {y.shape}")
+        if u.shape != (h // 2, w // 2):
+            raise ValueError(f"U 平面形状错误：期望 ({h // 2}, {w // 2}), 得到 {u.shape}")
+        if v.shape != (h // 2, w // 2):
+            raise ValueError(f"V 平面形状错误：期望 ({h // 2}, {w // 2}), 得到 {v.shape}")
+        
+        # YUV420p → RGB 转换
+        # 方法：先上采样 U/V 到完整分辨率，然后合并为 YUV 三通道图像
+        # 使用 INTER_LINEAR 插值保持颜色平滑
+        u_resized = cv2.resize(u, (w, h), interpolation=cv2.INTER_LINEAR)
+        v_resized = cv2.resize(v, (w, h), interpolation=cv2.INTER_LINEAR)
+        
+        # 合并为 YUV 三通道图像 (H, W, 3)
+        # OpenCV 的 COLOR_YUV2RGB 期望 YUV 格式为 (Y, U, V) 三通道
+        yuv_image = np.stack([y, u_resized, v_resized], axis=-1)
+        
+        # YUV → RGB
+        rgb = cv2.cvtColor(yuv_image, cv2.COLOR_YUV2RGB)
+        
+        # === 修复：resize 到 YOLO 模型期望的尺寸 ===
+        # 问题：配置文件中 height=639（满足 OpenCV YUV420p 要求），但 YOLO 模型期望 640x640
+        # 解决方案：在 YUV 转 RGB 后，resize 到模型期望的尺寸
+        # 原因：YOLO 模型输入尺寸是固定的（通常为 640x640），需要匹配
+        if rgb.shape[0] != self.model_input_size or rgb.shape[1] != self.model_input_size:
+            rgb = cv2.resize(rgb, (self.model_input_size, self.model_input_size), interpolation=cv2.INTER_LINEAR)
+        
+        # 归一化：(pixel / 255 - mean) / std
+        # 如果 mean=0, std=1，则结果等同于 rgb / 255.0
+        rgb_float = rgb.astype(np.float32) / 255.0
+        rgb_norm = (rgb_float - self.rgb_mean) / self.rgb_std
+        
+        # HWC → CHW
+        chw = np.transpose(rgb_norm, (2, 0, 1))
+        # 添加 batch 维度
+        input_tensor = np.expand_dims(chw, axis=0)
+
+        return input_tensor
+
+    def preprocess_nv12(self, y: np.ndarray, uv: np.ndarray) -> np.ndarray:
+        """
+        预处理：NV12 → RGB → 归一化 → CHW
+
+        Args:
+            y: Y 平面 (height, width)，亮度分量
+            uv: UV 交错平面 (height//2, width)，色度分量交错存储
+
+        Returns:
+            模型输入张量 (1, 3, height, width) float32
+
+        Raises:
+            ValueError: 输入形状不符合预期
+        """
+        # 性能测试：开始
+        perf_times = {}
+        perf_start = time.time()
+        
+        h, w = self.height, self.width
+        
+        # 输入验证
+        if y.shape != (h, w):
+            raise ValueError(f"Y 平面形状错误：期望 ({h}, {w}), 得到 {y.shape}")
+        if uv.shape != (h // 2, w):
+            raise ValueError(f"UV 平面形状错误：期望 ({h // 2}, {w}), 得到 {uv.shape}")
+        
+        perf_times['validation'] = time.time() - perf_start
+        
+        # NV12 格式解析：UV 交错平面分离为 U 和 V
+        # NV12 格式：Y 平面 (h, w) + UV 交错平面 (h//2, w)
+        # UV 平面是 U 和 V 值在内存中交错存储，每两个像素共用一个 UV 值（水平下采样）
+        # 正确理解：(h//2, w) 形状的 UV 平面，交替存储 U 和 V
+        # 第0行: U0 V0 U1 V1 ... U(w-1) V(w-1)  (w=640, U 和 V 交替)
+        # 提取 U 和 V 分量（交替列提取）
+        # 注意：如果存在 stride 对齐，w 可能大于实际宽度，需要正确处理
+        perf_times['before_uv_extract'] = time.time()
+
+        # 优化：直接使用 OpenCV 的 NV12 → BGR 转换
+        # NV12 格式：Y 平面 (h, w) + UV 交错平面 (h//2, w)
+        # 拼接为连续的 NV12 缓冲区，一步完成颜色转换 + UV 上采样
+        yuv_nv12 = np.ascontiguousarray(np.concatenate([y, uv], axis=0))
+        bgr = cv2.cvtColor(yuv_nv12, cv2.COLOR_YUV2BGR_NV12)
+        # 转为 RGB（模型期望 RGB 输入）
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+        perf_times['after_uv_extract'] = time.time()
+        perf_times['uv_extract'] = perf_times['after_uv_extract'] - perf_times['before_uv_extract']
+
+        # 以下字段保留兼容性能日志（已合并到上面的转换中）
+        perf_times['resize'] = 0
+        perf_times['stack'] = 0
+        perf_times['yuv2rgb'] = 0
+        
+        # resize 到 YOLO 模型期望的尺寸
+        perf_times['before_model_resize'] = time.time()
+        if rgb.shape[0] != self.model_input_size or rgb.shape[1] != self.model_input_size:
+            rgb = cv2.resize(rgb, (self.model_input_size, self.model_input_size), interpolation=cv2.INTER_LINEAR)
+        perf_times['after_model_resize'] = time.time()
+        perf_times['model_resize'] = perf_times['after_model_resize'] - perf_times['before_model_resize']
+        
+        # 保存BGR图像用于运动检测和显示（使用归一化前的RGB，值范围0-255）
+        self._last_rgb = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        
+        # 归一化：(pixel / 255 - mean) / std
+        # 使用预分配缓冲区，避免每帧重新分配内存
+        perf_times['before_normalize'] = time.time()
+        
+        if self._is_default_norm:
+            # 默认归一化：rgb / 255.0（一步完成，使用预分配缓冲区）
+            np.divide(rgb.astype(np.float32), 255.0, out=self._norm_buffer)
+            rgb = self._norm_buffer
+        else:
+            # 自定义归一化：使用预分配缓冲区
+            np.divide(rgb.astype(np.float32), 255.0, out=self._norm_buffer)
+            rgb = self._norm_buffer
+            rgb -= self.rgb_mean
+            rgb /= self.rgb_std
+        
+        perf_times['after_normalize'] = time.time()
+        perf_times['normalize'] = perf_times['after_normalize'] - perf_times['before_normalize']
+        
+        # HWC → CHW（使用预分配的张量缓冲区）
+        perf_times['before_transpose'] = time.time()
+        # 使用切片赋值，避免额外内存分配
+        self._input_tensor[0] = np.transpose(rgb, (2, 0, 1))
+        perf_times['after_transpose'] = time.time()
+        perf_times['transpose'] = perf_times['after_transpose'] - perf_times['before_transpose']
+        
+        perf_times['before_batch'] = time.time()
+        input_tensor = self._input_tensor
+        perf_times['after_batch'] = time.time()
+        perf_times['batch'] = perf_times['after_batch'] - perf_times['before_batch']
+        
+        # 性能测试：结束
+        perf_times['total'] = time.time() - perf_start
+        
+        # 打印性能日志（只在首次或每100次打印一次）
+        if not hasattr(self, '_perf_counter'):
+            self._perf_counter = 0
+        self._perf_counter += 1
+        if self._perf_counter % 100 == 1 or self._perf_counter == 1:
+            print(f"[预处理器] 性能分析（第{self._perf_counter}帧）：")
+            print(f"  验证: {perf_times.get('validation', 0)*1000:.2f}ms")
+            print(f"  UV提取: {perf_times.get('uv_extract', 0)*1000:.2f}ms")
+            print(f"  上采样: {perf_times.get('resize', 0)*1000:.2f}ms")
+            print(f"  合并YUV: {perf_times.get('stack', 0)*1000:.2f}ms")
+            print(f"  YUV2RGB: {perf_times.get('yuv2rgb', 0)*1000:.2f}ms")
+            print(f"  模型Resize: {perf_times.get('model_resize', 0)*1000:.2f}ms")
+            print(f"  归一化: {perf_times.get('normalize', 0)*1000:.2f}ms")
+            print(f"  Transpose: {perf_times.get('transpose', 0)*1000:.2f}ms")
+            print(f"  Batch: {perf_times.get('batch', 0)*1000:.2f}ms")
+            print(f"  总耗时: {perf_times['total']*1000:.2f}ms")
+            print(f"  FPS: {1000/(perf_times['total']*1000):.1f}")
+        
+        return input_tensor
+
+
+def benchmark():
+    """性能测试"""
+    import time
+    
+    print("\n" + "="*70)
+    print("预处理器性能测试")
+    print("="*70)
+    
+    y = np.random.randint(0, 255, (640, 640), dtype=np.uint8)
+    u = np.random.randint(0, 255, (320, 320), dtype=np.uint8)
+    v = np.random.randint(0, 255, (320, 320), dtype=np.uint8)
+    
+    preprocessor = OptimizedPreprocessor(640, 640)
+    
+    print("\n测试 100 次...")
+    times = []
+    for i in range(100):
+        start = time.time()
+        result = preprocessor.preprocess(y, u, v)
+        times.append(time.time() - start)
+    
+    avg_ms = np.mean(times[10:]) * 1000
+    print(f"  平均耗时：{avg_ms:.2f}ms")
+    print(f"  理论 FPS: {1000/avg_ms:.1f}")
+    print(f"  输出形状：{result.shape}")
+    
+    print("\n[OK] 测试完成")
+
+
+if __name__ == "__main__":
+    benchmark()
