@@ -201,13 +201,14 @@ class CameraWorker:
             return False
     
     def _init_motion_detector(self):
-        """初始化运动检测器 - 从数据库配置读取"""
-        if not self.motion_cfg.get('enabled', False):
-            print(f"[CameraWorker-{self.camera_id}] 运动检测已禁用")
+        """初始化运动检测器 - 从任务表的 motion_detection_enabled 字段判断"""
+        # 检查任务表的 motion_detection_enabled 字段，而不是 motion_config JSON
+        if not self.task_config.get('motion_detection_enabled', False):
+            print(f"[CameraWorker-{self.camera_id}] 运动检测已禁用（任务表 motion_detection_enabled=False）")
             return
         
         try:
-            from src.motion.motion_detector import MotionDetector
+            from src.detectors.motion_detector import MotionDetector
             
             # 从数据库配置构建运动检测参数（完整参数列表）
             motion_config = {
@@ -648,13 +649,22 @@ class CameraWorker:
         
         return fused
     
-    def _bbox_in_region(self, bbox: List[float], region: Dict) -> bool:
-        """检查边界框是否在运动区域内"""
+    def _bbox_in_region(self, bbox: List[float], region) -> bool:
+        """检查边界框是否在运动区域内
+        
+        Args:
+            bbox: 检测框 [x1, y1, x2, y2]
+            region: MotionRegion 对象或 dict
+        """
         # 简单的中心点检查
         det_center_x = (bbox[0] + bbox[2]) / 2
         det_center_y = (bbox[1] + bbox[3]) / 2
-        
-        region_bbox = region.get('bbox', [0, 0, 0, 0])
+
+        # 兼容 MotionRegion 对象和 dict
+        if hasattr(region, 'bbox'):
+            region_bbox = region.bbox
+        else:
+            region_bbox = region.get('bbox', [0, 0, 0, 0])
         
         return (det_center_x >= region_bbox[0] and 
                 det_center_x <= region_bbox[2] and
@@ -1112,7 +1122,7 @@ class CameraWorker:
         if frame_sequence:
             last_frame_data = frame_sequence[-1]
             last_frame_image = last_frame_data.get('image')
-            
+
             # 在图片上绘制跟踪框和类别信息
             if last_frame_image is not None and len(frame_sequence) > 0:
                 last_bbox = last_frame_data.get('bbox', [0, 0, 0, 0])
