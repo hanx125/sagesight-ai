@@ -23,7 +23,7 @@ display:
   ai_stream_enabled: true
 
   # AI 视频流帧间隔（每 N 帧发送一次，降低带宽）
-  ai_stream_interval: 2
+  ai_stream_interval: 1
 
   # 显示开关
   show_detection_boxes: true      # 是否显示检测框

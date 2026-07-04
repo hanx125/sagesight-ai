@@ -4,17 +4,1063 @@
 
 {% block content %}
 <div class="page-container">
-    <div class="page-header">
-        <h2>事件列表</h2>
-        <p>查看和管理检测事件，支持筛选和批量处理</p>
+    <!-- 统计卡片 -->
+    <div class="stats-cards" id="statsCards">
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-total">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statTotal">0</div>
+                <div class="stat-label">总事件数</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-detection">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statTrackStart">0</div>
+                <div class="stat-label">跟踪开始</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-track">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statTrackEnd">0</div>
+                <div class="stat-label">跟踪结束</div>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon stat-icon-end">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
+                </svg>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value" id="statCar">0</div>
+                <div class="stat-label">车辆检测</div>
+            </div>
+        </div>
     </div>
-    
-    <div class="developing-container">
-        <svg viewBox="0 0 24 24" fill="currentColor" class="developing-icon">
-            <path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/>
-        </svg>
-        <h3 class="developing-title">功能开发中</h3>
-        <p class="developing-desc">事件列表功能正在开发中，敬请期待...</p>
+
+    <!-- 筛选区域 -->
+    <div class="filter-section">
+        <div class="filter-left">
+            <div class="filter-group">
+                <label>任务：</label>
+                <select id="filterTask" onchange="applyEventFilters()">
+                    <option value="">全部任务</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>类型：</label>
+                <select id="filterType" onchange="applyEventFilters()">
+                    <option value="">全部类型</option>
+                    <option value="track_start">跟踪开始</option>
+                    <option value="track_end">跟踪结束</option>
+                    <option value="track_update">跟踪更新</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>类别：</label>
+                <select id="filterClass" onchange="applyEventFilters()">
+                    <option value="">全部类别</option>
+                </select>
+            </div>
+            <div class="filter-actions">
+                <button class="btn btn-secondary" onclick="resetFilters()">重置</button>
+            </div>
+        </div>
+        <div class="filter-right">
+            <button class="btn btn-danger" onclick="openClearModal()">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                </svg>
+                清理旧事件
+            </button>
+        </div>
+    </div>
+
+    <!-- 事件列表 -->
+    <div class="events-container">
+        <div class="events-header">
+            <h3>事件记录</h3>
+            <div class="events-header-right">
+                <div class="view-toggle">
+                    <button class="view-btn active" onclick="setView('card')" title="卡片视图">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M4 11h5V5H4v6zm0 7h5v-6H4v6zm6 0h5v-6h-5v6zm6 0h5v-6h-5v6zm-6-7h5V5h-5v6zm6-6v6h5V5h-5z"/>
+                        </svg>
+                    </button>
+                    <button class="view-btn" onclick="setView('table')" title="表格视图">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
+                        </svg>
+                    </button>
+                </div>
+                <span id="eventsCountInfo" class="pagination-info">共 0 条事件</span>
+            </div>
+        </div>
+        
+        <!-- 卡片视图 -->
+        <div id="eventsListCard" class="events-list">
+            <div class="empty-state">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/>
+                </svg>
+                <p>暂无事件数据</p>
+            </div>
+        </div>
+        
+        <!-- 表格视图 -->
+        <div id="eventsListTable" class="events-table-container" style="display: none;">
+            <table class="events-table">
+                <thead>
+                    <tr>
+                        <th>起始时间</th>
+                        <th>终止时间</th>
+                        <th>事件类型</th>
+                        <th>目标类别</th>
+                        <th>置信度</th>
+                        <th>设备通道</th>
+                        <th>任务</th>
+                        <th>算法</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="eventsTableBody">
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- 分页控件 -->
+        <div class="pagination-container" id="pagination">
+            <span class="pagination-info" id="paginationInfo">共 0 条事件</span>
+            <button class="pagination-btn prev" onclick="prevPage()" id="prevBtn" disabled>
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
+                </svg>
+                上一页
+            </button>
+            <div id="pageNumbers"></div>
+            <button class="pagination-btn next" onclick="nextPage()" id="nextBtn" disabled>
+                下一页
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
+                </svg>
+            </button>
+            <select class="page-size-select" id="pageSizeSelect" onchange="changePageSize()">
+                <option value="10">10条/页</option>
+                <option value="20" selected>20条/页</option>
+                <option value="50">50条/页</option>
+                <option value="100">100条/页</option>
+            </select>
+        </div>
     </div>
 </div>
+
+<!-- 事件详情模态框 -->
+<div id="eventDetailModal" class="modal">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h3>事件详情</h3>
+            <button class="modal-close" onclick="closeEventDetailModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="event-detail-content">
+                <div class="event-detail-image-container">
+                    <div class="event-media-switcher">
+                        <button class="btn btn-sm btn-primary" id="showImageBtn" onclick="switchEventMedia('image')">显示图片</button>
+                        <button class="btn btn-sm btn-secondary" id="showGifBtn" onclick="switchEventMedia('gif')">显示GIF</button>
+                    </div>
+                    <img id="eventDetailImage" src="" alt="事件图片" class="event-detail-image" style="display: block;">
+                    <img id="eventDetailGif" src="" alt="事件GIF" class="event-detail-image" style="display: none;">
+                    <div class="event-detail-no-image" id="eventDetailNoImage" style="display: none;">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                        </svg>
+                        <span>无媒体文件</span>
+                    </div>
+                </div>
+                
+                <div class="event-detail-info">
+                    <div class="event-detail-row">
+                        <label>事件ID：</label>
+                        <span id="eventDetailId"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>事件类型：</label>
+                        <span id="eventDetailType"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>目标类别：</label>
+                        <span id="eventDetailClass"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>置信度：</label>
+                        <span id="eventDetailConfidence"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>设备通道：</label>
+                        <span id="eventDetailCamera"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>任务：</label>
+                        <span id="eventDetailTask"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>算法：</label>
+                        <span id="eventDetailAlgorithm"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>起始时间：</label>
+                        <span id="eventDetailStartTime"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>终止时间：</label>
+                        <span id="eventDetailEndTime"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>记录时间：</label>
+                        <span id="eventDetailTime"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeEventDetailModal()">关闭</button>
+        </div>
+    </div>
+</div>
+
+<!-- 清理旧事件模态框 -->
+<div id="clearModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>清理旧事件</h3>
+            <button class="modal-close" onclick="closeClearModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>选择要清理的时间范围：</p>
+            <div class="form-group">
+                <label for="clearDays">清理多少天前的事件：</label>
+                <select id="clearDays" onchange="toggleCustomDaysInput()">
+                    <option value="7">7天前</option>
+                    <option value="14">14天前</option>
+                    <option value="30">30天前</option>
+                    <option value="60">60天前</option>
+                    <option value="90">90天前</option>
+                    <option value="custom">自定义天数</option>
+                </select>
+            </div>
+            <div class="form-group" id="customDaysGroup" style="display: none; margin-top: 12px;">
+                <label for="customDays">自定义天数：</label>
+                <input type="number" id="customDays" min="1" max="365" value="30" placeholder="输入天数（1-365）">
+            </div>
+            <p class="warning-text">此操作不可恢复，请谨慎操作。</p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeClearModal()">取消</button>
+            <button type="button" class="btn btn-danger" onclick="confirmClear()">确认清理</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    .events-container {
+        background: var(--card-bg);
+        border-radius: 8px;
+        padding: 20px;
+        margin-top: 20px;
+    }
+
+    .events-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+
+    .events-header h3 {
+        margin: 0;
+        font-size: 16px;
+        color: var(--text-primary);
+    }
+
+    .events-header-right {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+    }
+
+    .view-toggle {
+        display: flex;
+        gap: 4px;
+    }
+
+    .view-btn {
+        width: 32px;
+        height: 32px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-color);
+        border-radius: 4px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+    }
+
+    .view-btn:hover {
+        border-color: var(--primary-color);
+    }
+
+    .view-btn.active {
+        background: var(--primary-color);
+        border-color: var(--primary-color);
+        color: white;
+    }
+
+    .view-btn svg {
+        width: 18px;
+        height: 18px;
+    }
+
+    .pagination-info {
+        font-size: 14px;
+        color: var(--text-secondary);
+    }
+
+    /* 卡片视图样式 */
+    .events-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 16px;
+        min-height: 200px;
+    }
+
+    .event-card {
+        background: var(--bg-color);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        overflow: hidden;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .event-card:hover {
+        border-color: var(--primary-color);
+        box-shadow: 0 2px 8px rgba(0, 123, 255, 0.1);
+    }
+
+    .event-card-no-image {
+        width: 100%;
+        height: 120px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #f5f5f5;
+        color: #999;
+    }
+
+    .event-card-image {
+        width: 100%;
+        height: 120px;
+        object-fit: cover;
+        display: block;
+    }
+
+    .event-card-no-image svg {
+        width: 36px;
+        height: 36px;
+        margin-bottom: 6px;
+    }
+
+    .event-card-content {
+        padding: 12px;
+    }
+
+    .event-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+    }
+
+    .event-type-badge {
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 500;
+    }
+
+    .event-type-track_start { background: #e3f2fd; color: #1976d2; }
+    .event-type-track_end { background: #fff3e0; color: #f57c00; }
+    .event-type-track_update { background: #f3e5f5; color: #7b1fa2; }
+
+    .event-class-badge {
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .event-card-time {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin-bottom: 6px;
+    }
+
+    .event-card-channel {
+        font-size: 13px;
+        color: var(--primary-color);
+        margin-bottom: 4px;
+    }
+
+    .event-card-info {
+        display: flex;
+        gap: 12px;
+        font-size: 12px;
+        color: var(--text-secondary);
+    }
+
+    /* 表格视图样式 */
+    .events-table-container {
+        overflow-x: auto;
+    }
+
+    .events-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+    }
+
+    .events-table th {
+        padding: 12px 16px;
+        text-align: left;
+        background: var(--bg-color);
+        border-bottom: 2px solid var(--border-color);
+        font-weight: 500;
+        color: var(--text-primary);
+    }
+
+    .events-table td {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-secondary);
+    }
+
+    .events-table tbody tr:hover {
+        background: rgba(0, 123, 255, 0.05);
+    }
+
+    .events-table .type-cell {
+        white-space: nowrap;
+    }
+
+    .events-table .channel-cell {
+        color: var(--primary-color);
+        font-weight: 500;
+    }
+
+    .events-table .action-cell {
+        white-space: nowrap;
+    }
+
+    .events-table .action-btn {
+        padding: 4px 12px;
+        font-size: 12px;
+    }
+
+    /* 分页样式使用全局 .pagination-container 样式，与摄像机管理页面一致 */
+
+    /* 空状态 */
+    .empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 60px 20px;
+        color: var(--text-secondary);
+    }
+
+    .empty-state svg {
+        width: 64px;
+        height: 64px;
+        margin-bottom: 16px;
+        opacity: 0.5;
+    }
+
+    /* 统计图标颜色 */
+    .stat-icon-detection { background: rgba(76, 175, 80, 0.1); color: #4caf50; }
+    .stat-icon-track { background: rgba(33, 150, 243, 0.1); color: #2196f3; }
+    .stat-icon-end { background: rgba(255, 152, 0, 0.1); color: #ff9800; }
+
+    /* 详情模态框 */
+    .event-detail-content { display: flex; gap: 24px; }
+    .event-detail-image-container { flex: 1; min-width: 300px; }
+    .event-media-switcher {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+        justify-content: center;
+    }
+    .event-media-switcher .btn-sm {
+        padding: 6px 16px;
+        font-size: 13px;
+        border-radius: 4px;
+        transition: all 0.2s;
+    }
+    .event-detail-image { width: 100%; border-radius: 8px; background: #f0f0f0; }
+    .event-detail-no-image {
+        width: 100%;
+        height: 300px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #f5f5f5;
+        border-radius: 8px;
+        color: #999;
+    }
+    .event-detail-no-image svg { width: 64px; height: 64px; margin-bottom: 12px; }
+    .event-detail-info { flex: 1; display: flex; flex-direction: column; gap: 12px; }
+    .event-detail-row { display: flex; gap: 12px; font-size: 14px; }
+    .event-detail-row label { min-width: 80px; color: var(--text-secondary); }
+    .event-detail-row span { color: var(--text-primary); }
+
+    /* 清理模态框输入框样式 */
+    #customDays {
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        font-size: 14px;
+        transition: all 0.2s;
+    }
+
+    #customDays:focus {
+        outline: none;
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.1);
+    }
+
+    #customDaysGroup label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 14px;
+        color: var(--text-secondary);
+    }
+</style>
+
+<script>
+    let currentPage = 1;
+    let perPage = 20;
+    let totalEvents = 0;
+    let totalPages = 1;
+    let currentEvents = [];
+    let currentView = 'card';
+
+    document.addEventListener('DOMContentLoaded', function() {
+        loadStats();
+        loadTasksFilter();
+        loadEvents();
+    });
+
+    // 视图切换
+    function setView(view) {
+        currentView = view;
+        document.querySelectorAll('.view-btn').forEach(btn => btn.classList.remove('active'));
+        document.querySelector(`.view-btn[onclick="setView('${view}')"]`).classList.add('active');
+        
+        document.getElementById('eventsListCard').style.display = view === 'card' ? 'grid' : 'none';
+        document.getElementById('eventsListTable').style.display = view === 'table' ? 'block' : 'none';
+        
+        renderEvents();
+    }
+
+    async function loadStats() {
+        try {
+            const response = await fetch('/api/events/stats');
+            const data = await response.json();
+            
+            document.getElementById('statTotal').textContent = data.total || 0;
+            document.getElementById('statTrackStart').textContent = data.by_type?.track_start || 0;
+            document.getElementById('statTrackEnd').textContent = data.by_type?.track_end || 0;
+            document.getElementById('statCar').textContent = data.by_class?.car || 0;
+            
+            if (data.by_class) {
+                const classSelect = document.getElementById('filterClass');
+                classSelect.innerHTML = '<option value="">全部类别</option>';
+                for (const [className, count] of Object.entries(data.by_class)) {
+                    const option = document.createElement('option');
+                    option.value = className;
+                    option.textContent = `${className} (${count})`;
+                    classSelect.appendChild(option);
+                }
+            }
+        } catch (error) {
+            console.error('加载统计数据失败:', error);
+        }
+    }
+
+    let taskNameMap = {};
+
+    async function loadTasksFilter() {
+        try {
+            const response = await fetch('/api/tasks?per_page=1000');
+            const data = await response.json();
+            
+            const taskSelect = document.getElementById('filterTask');
+            taskSelect.innerHTML = '<option value="">全部任务</option>';
+            
+            taskNameMap = {};
+            if (data.tasks) {
+                data.tasks.forEach(task => {
+                    taskNameMap[task.id] = task.task_name;
+                    const option = document.createElement('option');
+                    option.value = task.id;
+                    option.textContent = task.task_name;
+                    taskSelect.appendChild(option);
+                });
+            }
+        } catch (error) {
+            console.error('加载任务列表失败:', error);
+        }
+    }
+
+    async function loadEvents() {
+        const taskId = document.getElementById('filterTask').value;
+        const type = document.getElementById('filterType').value;
+        const className = document.getElementById('filterClass').value;
+        
+        const params = new URLSearchParams({ page: currentPage, per_page: perPage });
+        if (taskId) params.append('task_id', taskId);
+        if (type) params.append('type', type);
+        if (className) params.append('class_name', className);
+        
+        try {
+            const response = await fetch(`/api/events?${params.toString()}`);
+            const data = await response.json();
+            
+            currentEvents = data.events || [];
+            // 按时间倒序排列（新事件在前）
+            currentEvents.sort((a, b) => {
+                const timeA = new Date(a.start_time || a.created_at || 0);
+            const timeB = new Date(b.start_time || b.created_at || 0);
+                return timeB - timeA;
+            });
+            totalEvents = data.total || 0;
+            totalPages = data.total_pages || 1;
+            
+            renderEvents();
+            updatePagination();
+            document.getElementById('eventsCountInfo').textContent = `共 ${totalEvents} 条事件`;
+        } catch (error) {
+            console.error('加载事件列表失败:', error);
+        }
+    }
+
+    function renderEvents() {
+        if (currentView === 'card') {
+            renderCardView();
+        } else {
+            renderTableView();
+        }
+    }
+
+    function renderCardView() {
+        const container = document.getElementById('eventsListCard');
+        
+        if (currentEvents.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/>
+                    </svg>
+                    <p>暂无事件数据</p>
+                </div>`;
+            return;
+        }
+        
+        container.innerHTML = currentEvents.map(event => createEventCard(event)).join('');
+    }
+
+    function renderTableView() {
+        const tbody = document.getElementById('eventsTableBody');
+        
+        if (currentEvents.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="8" style="text-align: center; padding: 40px;">
+                        <div class="empty-state" style="padding: 20px;">
+                            <svg viewBox="0 0 24 24" fill="currentColor" style="width: 48px; height: 48px; margin-bottom: 8px;">
+                                <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/>
+                            </svg>
+                            <p>暂无事件数据</p>
+                        </div>
+                    </td>
+                </tr>`;
+            return;
+        }
+        
+        tbody.innerHTML = currentEvents.map(event => `
+            <tr>
+                <td>${formatTime(event.start_time || event.created_at)}</td>
+                <td>${formatTime(event.end_time)}</td>
+                <td class="type-cell">
+                    <span class="event-type-badge event-type-${event.type}">${getTypeText(event.type)}</span>
+                </td>
+                <td><span class="event-class-badge">${event.class_name || '-'}</span></td>
+                <td>${event.confidence ? (event.confidence * 100).toFixed(1) + '%' : '-'}</td>
+                <td class="channel-cell">${event.channel_name || event.camera_id || '-'}</td>
+                <td>${taskNameMap[event.task_id] || event.task_id || '-'}</td>
+                <td>${event.algorithm || '-'}</td>
+                <td class="action-cell">
+                    <button class="btn btn-sm btn-primary action-btn" onclick="openEventDetail('${event.event_id}')">详情</button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    function createEventCard(event) {
+        const time = formatTime(event.created_at);
+        const typeClass = `event-type-${event.type}`;
+        const typeText = getTypeText(event.type);
+        const confidence = event.confidence ? (event.confidence * 100).toFixed(1) : '-';
+        const channelName = event.channel_name || event.camera_id || '-';
+
+        // 图片路径：优先使用本地路径
+        const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url;
+
+        // 图片区域：有图片显示图片，无图片显示占位符
+        let imageSection = '';
+        if (imageUrl) {
+            imageSection = `<img src="${imageUrl}" alt="事件图片" class="event-card-image" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'event-card-no-image\\'><svg viewBox=\\'0 0 24 24\\' fill=\\'currentColor\\'><path d=\\'M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z\\'/></svg><span>图片加载失败</span></div>';">`;
+        } else {
+            imageSection = `
+                <div class="event-card-no-image">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                    </svg>
+                    <span>无图片</span>
+                </div>`;
+        }
+
+        return `
+            <div class="event-card" onclick="openEventDetail('${event.event_id}')">
+                ${imageSection}
+                <div class="event-card-content">
+                    <div class="event-card-header">
+                        <span class="event-type-badge ${typeClass}">${typeText}</span>
+                        <span class="event-class-badge">${event.class_name || '-'}</span>
+                    </div>
+                    <div class="event-card-time">${time}</div>
+                    <div class="event-card-channel">${channelName}</div>
+                    <div class="event-card-info">
+                        <span>置信度: ${confidence}%</span>
+                        <span>任务: ${taskNameMap[event.task_id] || event.task_id || '-'}</span>
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    function formatTime(timeStr) {
+        if (!timeStr) return '-';
+        const date = new Date(timeStr);
+        const now = new Date();
+        const diff = now - date;
+        
+        if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`;
+        if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`;
+        if (diff < 604800000) return `${Math.floor(diff / 86400000)}天前`;
+        return date.toLocaleDateString() + ' ' + date.toLocaleTimeString().slice(0, 5);
+    }
+
+    function getTypeText(type) {
+        const typeMap = {
+            'track_start': '跟踪开始',
+            'track_end': '跟踪结束',
+            'track_update': '跟踪更新',
+            'detection': '检测'
+        };
+        return typeMap[type] || type;
+    }
+
+    function updatePagination() {
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const pageNumbers = document.getElementById('pageNumbers');
+        const paginationInfo = document.getElementById('paginationInfo');
+
+        // 更新信息
+        const startItem = totalEvents > 0 ? (currentPage - 1) * perPage + 1 : 0;
+        const endItem = Math.min(currentPage * perPage, totalEvents);
+        paginationInfo.textContent = `第 ${startItem}-${endItem} 条，共 ${totalEvents} 条`;
+
+        // 更新按钮状态
+        prevBtn.disabled = currentPage <= 1;
+        nextBtn.disabled = currentPage >= totalPages;
+
+        // 生成页码按钮
+        let pageHtml = '';
+        const maxVisiblePages = 5;
+        let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+        let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+
+        if (endPage - startPage < maxVisiblePages - 1) {
+            startPage = Math.max(1, endPage - maxVisiblePages + 1);
+        }
+
+        if (startPage > 1) {
+            pageHtml += `<button class="pagination-btn" onclick="goToPage(1)">1</button>`;
+            if (startPage > 2) {
+                pageHtml += `<span class="pagination-ellipsis">...</span>`;
+            }
+        }
+
+        for (let i = startPage; i <= endPage; i++) {
+            pageHtml += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</button>`;
+        }
+
+        if (endPage < totalPages) {
+            if (endPage < totalPages - 1) {
+                pageHtml += `<span class="pagination-ellipsis">...</span>`;
+            }
+            pageHtml += `<button class="pagination-btn" onclick="goToPage(${totalPages})">${totalPages}</button>`;
+        }
+
+        pageNumbers.innerHTML = pageHtml;
+    }
+
+    function goToPage(page) {
+        currentPage = page;
+        loadEvents();
+    }
+
+    function prevPage() {
+        if (currentPage > 1) { currentPage--; loadEvents(); }
+    }
+
+    function nextPage() {
+        if (currentPage < totalPages) { currentPage++; loadEvents(); }
+    }
+
+    function changePageSize() {
+        perPage = parseInt(document.getElementById('pageSizeSelect').value);
+        currentPage = 1;
+        loadEvents();
+    }
+
+    function resetFilters() {
+        document.getElementById('filterTask').value = '';
+        document.getElementById('filterType').value = '';
+        document.getElementById('filterClass').value = '';
+        currentPage = 1;
+        loadEvents();
+    }
+
+    function applyEventFilters() {
+        currentPage = 1;  // 筛选条件变化时重置到第一页
+        loadEvents();
+    }
+
+    async function openEventDetail(eventId) {
+        try {
+            const response = await fetch(`/api/events/${eventId}`);
+            const event = await response.json();
+
+            if (event.error) { alert('事件不存在'); return; }
+
+            // 存储当前事件的媒体URL（用于切换）
+            window._currentEventDetail = event;
+
+            document.getElementById('eventDetailId').textContent = event.event_id || '-';
+            document.getElementById('eventDetailType').textContent = getTypeText(event.type);
+            document.getElementById('eventDetailClass').textContent = event.class_name || '-';
+            document.getElementById('eventDetailConfidence').textContent = event.confidence ? (event.confidence * 100).toFixed(2) + '%' : '-';
+            document.getElementById('eventDetailCamera').textContent = event.channel_name || event.camera_id || '-';
+            document.getElementById('eventDetailTask').textContent = taskNameMap[event.task_id] || event.task_id || '-';
+            document.getElementById('eventDetailAlgorithm').textContent = event.algorithm || '-';
+            document.getElementById('eventDetailStartTime').textContent = event.start_time ? new Date(event.start_time).toLocaleString() : '-';
+            document.getElementById('eventDetailEndTime').textContent = event.end_time ? new Date(event.end_time).toLocaleString() : '-';
+            document.getElementById('eventDetailTime').textContent = event.created_at ? new Date(event.created_at).toLocaleString() : '-';
+
+            // 显示事件图片
+            const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url;
+            const gifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url;
+            const imgEl = document.getElementById('eventDetailImage');
+            const gifEl = document.getElementById('eventDetailGif');
+            const noImgEl = document.getElementById('eventDetailNoImage');
+
+            // 默认显示图片
+            if (imageUrl) {
+                imgEl.src = imageUrl;
+                imgEl.style.display = 'block';
+                gifEl.style.display = 'none';
+                noImgEl.style.display = 'none';
+                imgEl.onerror = function() {
+                    imgEl.style.display = 'none';
+                    if (gifUrl) {
+                        gifEl.src = gifUrl;
+                        gifEl.style.display = 'block';
+                    } else {
+                        noImgEl.style.display = 'flex';
+                    }
+                };
+                // 更新按钮状态
+                document.getElementById('showImageBtn').classList.remove('btn-secondary');
+                document.getElementById('showImageBtn').classList.add('btn-primary');
+                document.getElementById('showGifBtn').classList.remove('btn-primary');
+                document.getElementById('showGifBtn').classList.add('btn-secondary');
+            } else if (gifUrl) {
+                // 如果没有图片但有GIF，显示GIF
+                gifEl.src = gifUrl;
+                gifEl.style.display = 'block';
+                imgEl.style.display = 'none';
+                noImgEl.style.display = 'none';
+                // 更新按钮状态
+                document.getElementById('showImageBtn').classList.remove('btn-primary');
+                document.getElementById('showImageBtn').classList.add('btn-secondary');
+                document.getElementById('showGifBtn').classList.remove('btn-secondary');
+                document.getElementById('showGifBtn').classList.add('btn-primary');
+            } else {
+                imgEl.style.display = 'none';
+                gifEl.style.display = 'none';
+                noImgEl.style.display = 'flex';
+            }
+
+            // 设置GIF URL（即使当前不显示）
+            if (gifUrl) {
+                gifEl.src = gifUrl;
+            }
+
+            document.getElementById('eventDetailModal').style.display = 'flex';
+        } catch (error) {
+            console.error('加载事件详情失败:', error);
+            alert('加载失败，请重试');
+        }
+    }
+
+    // 切换事件媒体显示（图片/GIF）
+    function switchEventMedia(type) {
+        const event = window._currentEventDetail;
+        if (!event) return;
+
+        const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
+        const gifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
+
+        const imgEl = document.getElementById('eventDetailImage');
+        const gifEl = document.getElementById('eventDetailGif');
+        const noImgEl = document.getElementById('eventDetailNoImage');
+
+        if (type === 'image') {
+            if (imageUrl) {
+                imgEl.src = imageUrl;
+                imgEl.style.display = 'block';
+                gifEl.style.display = 'none';
+                noImgEl.style.display = 'none';
+                // 更新按钮状态
+                document.getElementById('showImageBtn').classList.remove('btn-secondary');
+                document.getElementById('showImageBtn').classList.add('btn-primary');
+                document.getElementById('showGifBtn').classList.remove('btn-primary');
+                document.getElementById('showGifBtn').classList.add('btn-secondary');
+            } else {
+                // 无图片
+                imgEl.style.display = 'none';
+                gifEl.style.display = 'none';
+                noImgEl.style.display = 'flex';
+            }
+        } else if (type === 'gif') {
+            if (gifUrl) {
+                gifEl.src = gifUrl;
+                gifEl.style.display = 'block';
+                imgEl.style.display = 'none';
+                noImgEl.style.display = 'none';
+                // 更新按钮状态
+                document.getElementById('showImageBtn').classList.remove('btn-primary');
+                document.getElementById('showImageBtn').classList.add('btn-secondary');
+                document.getElementById('showGifBtn').classList.remove('btn-secondary');
+                document.getElementById('showGifBtn').classList.add('btn-primary');
+            } else {
+                // 无GIF
+                imgEl.style.display = 'none';
+                gifEl.style.display = 'none';
+                noImgEl.style.display = 'flex';
+            }
+        }
+    }
+
+    function closeEventDetailModal() {
+        document.getElementById('eventDetailModal').style.display = 'none';
+    }
+
+    function openClearModal() {
+        document.getElementById('clearModal').style.display = 'flex';
+    }
+
+    function closeClearModal() {
+        document.getElementById('clearModal').style.display = 'none';
+    }
+
+    function toggleCustomDaysInput() {
+        const select = document.getElementById('clearDays');
+        const customGroup = document.getElementById('customDaysGroup');
+        
+        if (select.value === 'custom') {
+            customGroup.style.display = 'block';
+        } else {
+            customGroup.style.display = 'none';
+        }
+    }
+
+    async function confirmClear() {
+        let days;
+        const selectValue = document.getElementById('clearDays').value;
+        
+        if (selectValue === 'custom') {
+            const customDaysInput = document.getElementById('customDays');
+            days = parseInt(customDaysInput.value);
+            
+            if (!days || days < 1 || days > 365) {
+                alert('请输入有效的天数（1-365）');
+                return;
+            }
+        } else {
+            days = parseInt(selectValue);
+        }
+        
+        try {
+            const response = await fetch(`/api/events/clear?days=${days}`, { method: 'POST' });
+            const data = await response.json();
+            
+            if (data.success || data.deleted !== undefined) {
+                alert(data.message || `已清理 ${data.deleted} 条事件`);
+                closeClearModal();
+                loadStats();
+                currentPage = 1;
+                loadEvents();
+            } else {
+                alert('清理失败: ' + (data.error || '未知错误'));
+            }
+        } catch (error) {
+            console.error('清理失败:', error);
+            alert('清理失败，请重试');
+        }
+    }
+
+    window.onclick = function(event) {
+        if (event.target.classList.contains('modal')) {
+            event.target.style.display = 'none';
+        }
+    };
+</script>
 {% endblock %}

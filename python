@@ -1,7 +1,0 @@
-[AlgorithmFactory] 已注册算法: yolov11 -> YOLODetector
-[AlgorithmFactory] 已注册算法: yolov8 -> YOLODetector
-[AlgorithmFactory] 已注册算法: yolo -> YOLODetector
-[AlgorithmFactory] 内置算法已注册: yolov11, yolov8, yolo
-[TaskManager] 数据库初始化完成: data/tasks.db
-[TaskAPI] 任务管理 Blueprint 已注册
-[TaskAPI] 当前任务数量: 0

@@ -4,47 +4,41 @@
 
 {% block content %}
 <div class="page-container">
-    <!-- 页面标题 -->
-    <div class="page-header">
-        <div class="page-header-left">
-            <h2>算法库</h2>
-            <p>管理检测算法模型配置</p>
+    <!-- 筛选区域 -->
+    <div class="filter-section">
+        <div class="filter-left">
+            <div class="filter-group">
+                <label>类型：</label>
+                <select id="filterType" onchange="loadAlgorithms()">
+                    <option value="">全部</option>
+                    <option value="detection">检测</option>
+                    <option value="tracking">跟踪</option>
+                    <option value="recognition">识别</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>状态：</label>
+                <select id="filterStatus" onchange="loadAlgorithms()">
+                    <option value="">全部</option>
+                    <option value="active">可用</option>
+                    <option value="inactive">不可用</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>搜索：</label>
+                <input type="text" id="filterSearch" placeholder="搜索算法名称..." oninput="loadAlgorithms()">
+            </div>
+            <div class="filter-actions">
+                <button class="btn btn-secondary" onclick="resetFilters()">重置</button>
+            </div>
         </div>
-        <div class="page-header-right">
+        <div class="filter-right">
             <button class="btn btn-primary" onclick="openCreateModal()">
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
                 </svg>
                 添加算法
             </button>
-        </div>
-    </div>
-
-    <!-- 筛选区域 -->
-    <div class="filter-section">
-        <div class="filter-group">
-            <label>类型：</label>
-            <select id="filterType" onchange="loadAlgorithms()">
-                <option value="">全部</option>
-                <option value="detection">检测</option>
-                <option value="tracking">跟踪</option>
-                <option value="recognition">识别</option>
-            </select>
-        </div>
-        <div class="filter-group">
-            <label>状态：</label>
-            <select id="filterStatus" onchange="loadAlgorithms()">
-                <option value="">全部</option>
-                <option value="active">可用</option>
-                <option value="inactive">不可用</option>
-            </select>
-        </div>
-        <div class="filter-group">
-            <label>搜索：</label>
-            <input type="text" id="filterSearch" placeholder="搜索算法名称..." oninput="loadAlgorithms()">
-        </div>
-        <div class="filter-actions">
-            <button class="btn btn-secondary" onclick="resetFilters()">重置</button>
         </div>
     </div>
 
@@ -262,6 +256,33 @@
                                 <button type="button" class="btn-link" onclick="clearLabelsFile()">清除</button>
                             </div>
                             <p class="form-hint">标签文件用于定义模型可检测的类别名称（支持.txt, .json, .csv格式）</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 算法图片 -->
+                <div class="form-section">
+                    <h4 class="form-section-title">算法图片</h4>
+                    <div class="form-section-content">
+                        <div class="form-group">
+                            <label>算法展示图片</label>
+                            <div class="algo-image-upload-area" id="algoImageUploadArea">
+                                <div class="algo-image-preview" id="algoImagePreview" style="display: none;">
+                                    <img id="algoImageImg" src="" alt="算法图片">
+                                    <div class="algo-image-actions">
+                                        <button type="button" class="btn-link" onclick="document.getElementById('algoImageUpload').click()">更换</button>
+                                        <button type="button" class="btn-link" onclick="removeAlgoImage()">删除</button>
+                                    </div>
+                                </div>
+                                <div class="algo-image-placeholder" id="algoImagePlaceholder" onclick="document.getElementById('algoImageUpload').click()">
+                                    <svg viewBox="0 0 24 24" fill="currentColor" width="32" height="32">
+                                        <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                                    </svg>
+                                    <span>点击上传算法图片</span>
+                                </div>
+                                <input type="file" id="algoImageUpload" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" style="display: none;" onchange="handleAlgoImageSelect(this)">
+                            </div>
+                            <p class="form-hint">支持 PNG、JPG、GIF、WebP、SVG 格式，用于算法卡片展示</p>
                         </div>
                     </div>
                 </div>

@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 睿观 SageSight AI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            overflow: hidden;
+            background: #0a1a2e;
+        }
+
+        /* ========================================
+           动态背景
+           ======================================== */
+        .bg-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+        }
+
+        .bg-gradient {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            background: linear-gradient(135deg, rgba(10, 26, 46, 0.9) 0%, rgba(0, 77, 64, 0.85) 50%, rgba(10, 26, 46, 0.9) 100%);
+        }
+
+        /* 浮动光球 */
+        .bg-orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.4;
+            z-index: 1;
+            animation: floatOrb 20s ease-in-out infinite;
+        }
+
+        .bg-orb:nth-child(1) {
+            width: 400px;
+            height: 400px;
+            background: #00695c;
+            top: -100px;
+            left: -100px;
+            animation-delay: 0s;
+        }
+
+        .bg-orb:nth-child(2) {
+            width: 350px;
+            height: 350px;
+            background: #00897b;
+            bottom: -80px;
+            right: -80px;
+            animation-delay: -7s;
+        }
+
+        .bg-orb:nth-child(3) {
+            width: 300px;
+            height: 300px;
+            background: #004d40;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            animation-delay: -14s;
+        }
+
+        @keyframes floatOrb {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(80px, -60px) scale(1.1); }
+            66% { transform: translate(-60px, 40px) scale(0.95); }
+        }
+
+        .bg-orb:nth-child(3) {
+            animation-name: floatOrbCenter;
+        }
+
+        @keyframes floatOrbCenter {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.3); }
+        }
+
+        /* 网格线背景 */
+        .bg-grid {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            background-image:
+                linear-gradient(rgba(0, 105, 92, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 105, 92, 0.08) 1px, transparent 1px);
+            background-size: 50px 50px;
+            animation: gridMove 30s linear infinite;
+        }
+
+        @keyframes gridMove {
+            0% { background-position: 0 0; }
+            100% { background-position: 50px 50px; }
+        }
+
+        /* ========================================
+           登录卡片
+           ======================================== */
+        .login-container {
+            position: relative;
+            z-index: 10;
+            width: 420px;
+            max-width: 90vw;
+        }
+
+        .login-card {
+            background: rgba(10, 26, 46, 0.75);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(0, 137, 123, 0.3);
+            border-radius: 16px;
+            padding: 48px 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 137, 123, 0.1);
+            animation: cardFadeIn 0.6s ease-out;
+        }
+
+        @keyframes cardFadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Logo */
+        .login-logo {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 36px;
+        }
+
+        .login-logo-icon {
+            width: 64px;
+            height: 64px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, #00695c 0%, #00897b 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 16px;
+            box-shadow: 0 8px 24px rgba(0, 105, 92, 0.4);
+        }
+
+        .login-logo-icon svg {
+            width: 36px;
+            height: 36px;
+            color: white;
+        }
+
+        .login-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #ffffff;
+            letter-spacing: 1px;
+        }
+
+        .login-subtitle {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-top: 6px;
+            letter-spacing: 2px;
+        }
+
+        /* 表单 */
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .input-group {
+            position: relative;
+        }
+
+        .input-group svg {
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 20px;
+            height: 20px;
+            color: rgba(255, 255, 255, 0.4);
+            transition: color 0.3s ease;
+            z-index: 1;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 14px 16px 14px 44px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
+            color: #ffffff;
+            font-size: 15px;
+            transition: all 0.3s ease;
+            outline: none;
+        }
+
+        .input-group input::placeholder {
+            color: rgba(255, 255, 255, 0.35);
+        }
+
+        .input-group input:focus {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: #00897b;
+            box-shadow: 0 0 0 3px rgba(0, 137, 123, 0.15);
+        }
+
+        .input-group input:focus + svg,
+        .input-group input:focus ~ svg {
+            color: #00897b;
+        }
+
+        .input-group:focus-within svg {
+            color: #00897b;
+        }
+
+        /* 密码可见切换 */
+        .password-toggle {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            color: rgba(255, 255, 255, 0.4);
+            transition: color 0.3s ease;
+            background: none;
+            border: none;
+            padding: 0;
+        }
+
+        .password-toggle:hover {
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .password-toggle svg {
+            position: static;
+            transform: none;
+            width: 20px;
+            height: 20px;
+        }
+
+        /* 错误提示 */
+        .login-error {
+            background: rgba(244, 67, 54, 0.1);
+            border: 1px solid rgba(244, 67, 54, 0.3);
+            color: #ef5350;
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            animation: shake 0.4s ease;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-6px); }
+            75% { transform: translateX(6px); }
+        }
+
+        .login-error svg {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+        }
+
+        /* 登录按钮 */
+        .login-btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #00695c 0%, #00897b 100%);
+            border: none;
+            border-radius: 10px;
+            color: white;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+
+        .login-btn:hover {
+            background: linear-gradient(135deg, #004d40 0%, #00695c 100%);
+            box-shadow: 0 8px 24px rgba(0, 105, 92, 0.4);
+            transform: translateY(-1px);
+        }
+
+        .login-btn:active {
+            transform: translateY(0);
+        }
+
+        .login-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .login-btn::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .login-btn:active::after {
+            width: 300px;
+            height: 300px;
+        }
+
+        .login-btn-spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* 底部提示 */
+        .login-footer {
+            margin-top: 28px;
+            text-align: center;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.3);
+        }
+
+        .login-hint {
+            margin-top: 16px;
+            padding: 10px 14px;
+            background: rgba(0, 137, 123, 0.1);
+            border: 1px solid rgba(0, 137, 123, 0.2);
+            border-radius: 8px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.5);
+            text-align: center;
+        }
+
+        .login-hint code {
+            color: #4db6ac;
+            font-size: 12px;
+        }
+
+        /* ========================================
+           滑动验证组件
+           ======================================== */
+        .slide-verify {
+            position: relative;
+            width: 100%;
+            height: 44px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            overflow: hidden;
+            user-select: none;
+        }
+
+        .slide-verify-track {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.4);
+            transition: opacity 0.3s ease;
+        }
+
+        .slide-verify-progress {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            width: 0;
+            background: linear-gradient(90deg, rgba(0, 105, 92, 0.3) 0%, rgba(0, 137, 123, 0.3) 100%);
+            transition: width 0s;
+        }
+
+        .slide-verify-handle {
+            position: absolute;
+            top: 2px;
+            left: 0;
+            width: 40px;
+            height: 38px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #00695c 0%, #00897b 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: grab;
+            z-index: 2;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            transition: background 0.3s ease;
+        }
+
+        .slide-verify-handle:active {
+            cursor: grabbing;
+        }
+
+        .slide-verify-handle svg {
+            width: 20px;
+            height: 20px;
+            color: white;
+        }
+
+        /* 验证成功状态 */
+        .slide-verify.success {
+            border-color: rgba(76, 175, 80, 0.5);
+            background: rgba(76, 175, 80, 0.08);
+        }
+
+        .slide-verify.success .slide-verify-progress {
+            background: linear-gradient(90deg, rgba(76, 175, 80, 0.2) 0%, rgba(76, 175, 80, 0.3) 100%);
+            width: 100% !important;
+        }
+
+        .slide-verify.success .slide-verify-handle {
+            background: linear-gradient(135deg, #2e7d32 0%, #43a047 100%);
+            cursor: default;
+        }
+
+        .slide-verify.success .slide-verify-track {
+            color: #4caf50;
+        }
+
+        /* 验证失败抖动 */
+        .slide-verify.fail .slide-verify-handle {
+            animation: slideShake 0.4s ease;
+            background: linear-gradient(135deg, #c62828 0%, #ef5350 100%);
+        }
+
+        @keyframes slideShake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-8px); }
+            75% { transform: translateX(8px); }
+        }
+    </style>
+</head>
+<body>
+    <!-- 动态背景 -->
+    <canvas class="bg-canvas" id="particleCanvas"></canvas>
+    <div class="bg-orb"></div>
+    <div class="bg-orb"></div>
+    <div class="bg-orb"></div>
+    <div class="bg-grid"></div>
+    <div class="bg-gradient"></div>
+
+    <!-- 登录卡片 -->
+    <div class="login-container">
+        <div class="login-card">
+            <div class="login-logo">
+                <div class="login-logo-icon">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.07 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                    </svg>
+                </div>
+                <div class="login-title">睿观 SageSight AI</div>
+                <div class="login-subtitle">推理分析平台</div>
+            </div>
+
+            <div class="login-error" id="loginError">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                </svg>
+                <span id="loginErrorMsg">用户名或密码错误</span>
+            </div>
+
+            <form class="login-form" id="loginForm" onsubmit="return false;">
+                <div class="input-group">
+                    <input type="text" id="username" placeholder="请输入用户名" autocomplete="username" value="">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                    </svg>
+                </div>
+
+                <div class="input-group">
+                    <input type="password" id="password" placeholder="请输入密码" autocomplete="current-password" value="">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+                    </svg>
+                    <button type="button" class="password-toggle" id="passwordToggle" onclick="togglePassword()">
+                        <svg id="eyeIcon" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- 滑动验证 -->
+                <div class="slide-verify" id="slideVerify">
+                    <div class="slide-verify-progress" id="slideProgress"></div>
+                    <div class="slide-verify-track" id="slideTrack">请按住滑块，拖动到最右端</div>
+                    <div class="slide-verify-handle" id="slideHandle">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
+                        </svg>
+                    </div>
+                </div>
+
+                <button type="submit" class="login-btn" id="loginBtn" onclick="handleLogin()" disabled>
+                    <span id="loginBtnText">登 录</span>
+                    <div class="login-btn-spinner" id="loginSpinner"></div>
+                </button>
+            </form>
+
+            <div class="login-hint">
+                默认账户: <code>admin</code> / <code>admin123</code>
+            </div>
+
+            <div class="login-footer">
+                © 2026 SageSight AI · 推理分析平台
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ========================================
+        // 粒子背景动画
+        // ========================================
+        const canvas = document.getElementById('particleCanvas');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        class Particle {
+            constructor() {
+                this.reset();
+                this.y = Math.random() * canvas.height;
+            }
+            
+            reset() {
+                this.x = Math.random() * canvas.width;
+                this.y = canvas.height + 10;
+                this.size = Math.random() * 2 + 0.5;
+                this.speedY = Math.random() * 1 + 0.3;
+                this.speedX = (Math.random() - 0.5) * 0.5;
+                this.opacity = Math.random() * 0.5 + 0.2;
+            }
+            
+            update() {
+                this.y -= this.speedY;
+                this.x += this.speedX;
+                if (this.y < -10) this.reset();
+            }
+            
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(0, 137, 123, ${this.opacity})`;
+                ctx.fill();
+            }
+        }
+
+        for (let i = 0; i < 80; i++) {
+            particles.push(new Particle());
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 绘制粒子之间的连线
+            for (let i = 0; i < particles.length; i++) {
+                particles[i].update();
+                particles[i].draw();
+                
+                for (let j = i + 1; j < particles.length; j++) {
+                    const dx = particles[i].x - particles[j].x;
+                    const dy = particles[i].y - particles[j].y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (dist < 120) {
+                        ctx.beginPath();
+                        ctx.moveTo(particles[i].x, particles[i].y);
+                        ctx.lineTo(particles[j].x, particles[j].y);
+                        ctx.strokeStyle = `rgba(0, 137, 123, ${0.15 * (1 - dist / 120)})`;
+                        ctx.lineWidth = 0.5;
+                        ctx.stroke();
+                    }
+                }
+            }
+            
+            requestAnimationFrame(animate);
+        }
+        animate();
+
+        // ========================================
+        // 滑动验证逻辑
+        // ========================================
+        let slideVerified = false;
+        let isDragging = false;
+        let startX = 0;
+        let currentX = 0;
+        let maxWidth = 0;
+
+        const slideVerify = document.getElementById('slideVerify');
+        const slideHandle = document.getElementById('slideHandle');
+        const slideProgress = document.getElementById('slideProgress');
+        const slideTrack = document.getElementById('slideTrack');
+
+        function initSlideVerify() {
+            maxWidth = slideVerify.offsetWidth - slideHandle.offsetWidth - 2;
+            
+            // 鼠标事件
+            slideHandle.addEventListener('mousedown', startDrag);
+            slideHandle.addEventListener('touchstart', startDrag, { passive: false });
+            
+            // 重置按钮样式
+            const btn = document.getElementById('loginBtn');
+            btn.disabled = true;
+        }
+
+        function startDrag(e) {
+            if (slideVerified) return;
+            e.preventDefault();
+            
+            isDragging = true;
+            startX = e.type === 'touchstart' ? e.touches[0].clientX : e.clientX;
+            currentX = 0;
+            
+            slideTrack.textContent = '正在验证...';
+            slideVerify.classList.remove('fail');
+            
+            document.addEventListener('mousemove', onDrag);
+            document.addEventListener('mouseup', endDrag);
+            document.addEventListener('touchmove', onDrag, { passive: false });
+            document.addEventListener('touchend', endDrag);
+        }
+
+        function onDrag(e) {
+            if (!isDragging) return;
+            e.preventDefault();
+            
+            const clientX = e.type === 'touchmove' ? e.touches[0].clientX : e.clientX;
+            let x = clientX - startX;
+            
+            // 限制范围
+            if (x < 0) x = 0;
+            if (x > maxWidth) x = maxWidth;
+            
+            currentX = x;
+            slideHandle.style.left = x + 'px';
+            slideProgress.style.width = (x + 40) + 'px';
+            
+            // 进度文字
+            const percent = Math.round((x / maxWidth) * 100);
+            if (percent < 100) {
+                slideTrack.textContent = `验证中 ${percent}%`;
+            }
+        }
+
+        function endDrag() {
+            if (!isDragging) return;
+            isDragging = false;
+            
+            document.removeEventListener('mousemove', onDrag);
+            document.removeEventListener('mouseup', endDrag);
+            document.removeEventListener('touchmove', onDrag);
+            document.removeEventListener('touchend', endDrag);
+            
+            // 判断是否到达终点
+            if (currentX >= maxWidth - 2) {
+                // 验证成功
+                slideVerified = true;
+                slideVerify.classList.add('success');
+                slideVerify.classList.remove('fail');
+                slideTrack.textContent = '验证通过';
+                slideHandle.style.left = maxWidth + 'px';
+                slideProgress.style.width = '100%';
+                
+                // 启用登录按钮
+                const btn = document.getElementById('loginBtn');
+                btn.disabled = false;
+                
+                // 自动聚焦密码框
+                document.getElementById('password').focus();
+            } else {
+                // 验证失败，回到起点
+                slideVerify.classList.add('fail');
+                slideTrack.textContent = '验证失败，请重试';
+                
+                setTimeout(() => {
+                    slideHandle.style.transition = 'left 0.3s ease';
+                    slideProgress.style.transition = 'width 0.3s ease';
+                    slideHandle.style.left = '0px';
+                    slideProgress.style.width = '0px';
+                    
+                    setTimeout(() => {
+                        slideHandle.style.transition = '';
+                        slideProgress.style.transition = '';
+                        slideVerify.classList.remove('fail');
+                        slideTrack.textContent = '请按住滑块，拖动到最右端';
+                    }, 300);
+                }, 600);
+            }
+        }
+
+        function resetSlideVerify() {
+            slideVerified = false;
+            slideHandle.style.transition = 'left 0.3s ease';
+            slideProgress.style.transition = 'width 0.3s ease';
+            slideHandle.style.left = '0px';
+            slideProgress.style.width = '0px';
+            slideVerify.classList.remove('success', 'fail');
+            slideTrack.textContent = '请按住滑块，拖动到最右端';
+            
+            setTimeout(() => {
+                slideHandle.style.transition = '';
+                slideProgress.style.transition = '';
+            }, 300);
+            
+            const btn = document.getElementById('loginBtn');
+            btn.disabled = true;
+        }
+
+        // 窗口大小变化时重新计算
+        window.addEventListener('resize', function() {
+            maxWidth = slideVerify.offsetWidth - slideHandle.offsetWidth - 2;
+        });
+
+        // 初始化滑动验证
+        initSlideVerify();
+
+        // ========================================
+        // 登录逻辑
+        // ========================================
+        function togglePassword() {
+            const input = document.getElementById('password');
+            const icon = document.getElementById('eyeIcon');
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.innerHTML = '<path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.52-.8l3.15 3.15.02-.15c0-1.66-1.34-3-3-3l-.17.01z"/>';
+            } else {
+                input.type = 'password';
+                icon.innerHTML = '<path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>';
+            }
+        }
+
+        function showError(msg) {
+            const errorEl = document.getElementById('loginError');
+            document.getElementById('loginErrorMsg').textContent = msg;
+            errorEl.style.display = 'flex';
+            // 重新触发动画
+            errorEl.style.animation = 'none';
+            errorEl.offsetHeight;
+            errorEl.style.animation = 'shake 0.4s ease';
+        }
+
+        function hideError() {
+            document.getElementById('loginError').style.display = 'none';
+        }
+
+        async function handleLogin() {
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            
+            if (!slideVerified) {
+                showError('请先完成滑动验证');
+                return;
+            }
+            
+            if (!username || !password) {
+                showError('用户名和密码不能为空');
+                return;
+            }
+            
+            hideError();
+            
+            // 显示加载状态
+            const btn = document.getElementById('loginBtn');
+            const btnText = document.getElementById('loginBtnText');
+            const spinner = document.getElementById('loginSpinner');
+            btn.disabled = true;
+            btnText.style.display = 'none';
+            spinner.style.display = 'block';
+            
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // 登录成功，跳转
+                    const redirectUrl = new URLSearchParams(window.location.search).get('redirect') || '/';
+                    window.location.href = redirectUrl;
+                } else {
+                    showError(data.error || '登录失败');
+                    // 登录失败后重置滑动验证
+                    resetSlideVerify();
+                    btn.disabled = false;
+                    btnText.style.display = 'inline';
+                    spinner.style.display = 'none';
+                }
+            } catch (error) {
+                showError('网络错误，请稍后重试');
+                resetSlideVerify();
+                btn.disabled = false;
+                btnText.style.display = 'inline';
+                spinner.style.display = 'none';
+            }
+        }
+
+        // 回车键提交
+        document.getElementById('password').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') handleLogin();
+        });
+        document.getElementById('username').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') document.getElementById('password').focus();
+        });
+    </script>
+</body>
+</html>

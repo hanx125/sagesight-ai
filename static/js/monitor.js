@@ -75,16 +75,11 @@ function initWebSocket() {
             const cameraId = data.camera_id;
             const frameBase64 = data.frame;
             
-            // 找到正在播放该摄像机的画面
-            screens.forEach((screen, index) => {
-                if (screen && screen.camera_id === cameraId && aiStreamMode[index]) {
-                    renderAIFrame(index, frameBase64);
-                }
-            });
-            
-            // 单画面弹窗也在 AI 模式时渲染
-            if (currentSingleCamera && currentSingleCamera.id === cameraId && singleScreenAIMode) {
-                renderSingleAIFrame(frameBase64);
+            // 缓存最新帧，由 rAF 统一渲染（避免每帧立即渲染造成卡顿）
+            _latestAIFrames[cameraId] = frameBase64;
+            if (!_rafScheduled) {
+                _rafScheduled = true;
+                requestAnimationFrame(_flushAIFrames);
             }
         });
     }
@@ -98,11 +93,12 @@ async function loadCameras() {
     try {
         // 并行加载摄像机和目录数据
         const [camerasRes, dirsRes] = await Promise.all([
-            fetch('/api/cameras'),
+            fetch('/api/cameras?per_page=1000'),
             fetch('/api/directories')
         ]);
         
-        cameras = await camerasRes.json();
+        const camerasData = await camerasRes.json();
+        cameras = camerasData.cameras || camerasData || [];
         const dirsData = await dirsRes.json();
         
         if (dirsData.success) {
@@ -816,27 +812,60 @@ function playWithAIStream(screenIndex, camera) {
     console.log(`AI 视频流已启用: camera_id=${camera.id}, screen_index=${screenIndex}`);
 }
 
+// ========================================
+// AI 流渲染优化：rAF节流 + Image复用
+// ========================================
+
+let _latestAIFrames = {};   // cameraId -> 最新帧base64
+let _rafScheduled = false;
+let _aiImageCache = {};      // 复用Image对象: key -> Image
+
+function _getAIImage(key) {
+    if (!_aiImageCache[key]) {
+        _aiImageCache[key] = new Image();
+    }
+    return _aiImageCache[key];
+}
+
+function _flushAIFrames() {
+    _rafScheduled = false;
+    const frames = _latestAIFrames;
+    _latestAIFrames = {};
+    
+    for (const cameraId in frames) {
+        const frameBase64 = frames[cameraId];
+        
+        // 多画面渲染（camera_id 为 UUID 字符串，直接比较）
+        screens.forEach((screen, index) => {
+            if (screen && screen.camera_id === cameraId && aiStreamMode[index]) {
+                renderAIFrame(index, frameBase64);
+            }
+        });
+        
+        // 单画面弹窗渲染
+        if (currentSingleCamera && currentSingleCamera.id === cameraId && singleScreenAIMode) {
+            renderSingleAIFrame(frameBase64);
+        }
+    }
+}
+
 function renderAIFrame(screenIndex, frameBase64) {
     const canvas = aiStreamCanvas[screenIndex];
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const img = new Image();
+    const img = _getAIImage('screen_' + screenIndex);
     
-    img.onload = function() {
-        // 设置 Canvas 尺寸为图像实际尺寸
-        canvas.width = img.width;
-        canvas.height = img.height;
-        
-        // 绘制图像
-        ctx.drawImage(img, 0, 0);
-    };
+    // 只设置一次onload（复用Image时避免重复绑定）
+    if (!img._onloadSet) {
+        img.onload = function() {
+            if (canvas.width !== img.width) canvas.width = img.width;
+            if (canvas.height !== img.height) canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+        };
+        img._onloadSet = true;
+    }
     
-    img.onerror = function() {
-        console.warn(`AI 帧解码失败: screen_index=${screenIndex}`);
-    };
-    
-    // base64 转图片
     img.src = `data:image/jpeg;base64,${frameBase64}`;
 }
 
@@ -845,17 +874,16 @@ function renderSingleAIFrame(frameBase64) {
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const img = new Image();
+    const img = _getAIImage('single');
     
-    img.onload = function() {
-        canvas.width = img.width;
-        canvas.height = img.height;
-        ctx.drawImage(img, 0, 0);
-    };
-    
-    img.onerror = function() {
-        console.warn('单画面 AI 帧解码失败');
-    };
+    if (!img._onloadSet) {
+        img.onload = function() {
+            if (canvas.width !== img.width) canvas.width = img.width;
+            if (canvas.height !== img.height) canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+        };
+        img._onloadSet = true;
+    }
     
     img.src = `data:image/jpeg;base64,${frameBase64}`;
 }
@@ -988,7 +1016,7 @@ function handleDrop(event, screenIndex) {
     event.preventDefault();
     event.currentTarget.classList.remove('drag-over');
     
-    const cameraId = parseInt(event.dataTransfer.getData('cameraId'));
+    const cameraId = event.dataTransfer.getData('cameraId');
     if (cameraId) {
         playOnScreen(screenIndex, cameraId);
     }

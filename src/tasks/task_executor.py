@@ -17,6 +17,7 @@ import math
 import queue
 import cv2
 import numpy as np
+from collections import deque
 from datetime import datetime
 from typing import Dict, Optional, List
 from concurrent.futures import ThreadPoolExecutor
@@ -84,12 +85,8 @@ class CameraWorker:
         # 活动跟踪目标记录（用于判断首次出现/消失）
         self.active_tracks = {}  # {track_id: {'first_frame': id, 'last_bbox': [], 'last_update': time}}
         
-        # 轨迹数据配置
-        self.trajectory_cfg = self.event_cfg.get('trajectory', {})
-        self.enable_trajectory = self.trajectory_cfg.get('enabled', True)  # 是否启用轨迹数据
-        self.trajectory_send_mode = self.trajectory_cfg.get('send_mode', 'complete')  # realtime | complete | both
-        self.trajectory_max_points = self.trajectory_cfg.get('max_points', 100)  # 最大轨迹点数
-        self.trajectory_send_interval = self.trajectory_cfg.get('send_interval', 10)  # 实时发送间隔（帧）
+        # 已处理事件的 track_id 集合（防止同一目标重复产生事件）
+        self.processed_track_ids = set()
         
         # GIF 输出配置（从 event_config.gif 读取）
         self.gif_cfg = self.event_cfg.get('gif', {})
@@ -101,6 +98,28 @@ class CameraWorker:
         self.gif_output_dir = self.gif_cfg.get('output_dir', 'output/gifs')  # GIF 输出目录
         self.gif_draw_trajectory = self.gif_cfg.get('draw_trajectory', True)  # 是否绘制轨迹
         
+        # ========================================
+        # 帧缓存（用于GIF生成：覆盖事件前5秒+事件后5秒的原始完整帧）
+        # ========================================
+        self.frame_cache = deque()  # [(time_sec, frame_id, frame_small)]
+        self.frame_cache_fps = self.gif_cfg.get('cache_fps', 10)  # 缓存采样率
+        self.frame_cache_retention = float(self.gif_cfg.get('cache_retention', 20.0))  # 缓存保留秒数
+        self.frame_cache_last_ts = 0.0  # 上次缓存时间
+        self.frame_orig_w = 0  # 原始帧宽（用于bbox缩放）
+        self.frame_orig_h = 0  # 原始帧高
+        
+        # 待生成的GIF事件（目标消失后等待 post_seconds 再生成，以捕获"结束后5秒"帧）
+        self.pending_gifs = []  # [{track_id, start_time, end_time, generate_time, trajectory, frame_seq}]
+        self.gif_pre_seconds = float(self.gif_cfg.get('pre_seconds', 5.0))  # 事件起始前多少秒
+        self.gif_post_seconds = float(self.gif_cfg.get('post_seconds', 5.0))  # 事件结束后多少秒
+        
+        # 轨迹数据配置
+        self.trajectory_cfg = self.event_cfg.get('trajectory', {})
+        self.enable_trajectory = self.trajectory_cfg.get('enabled', True)  # 是否启用轨迹数据
+        self.trajectory_send_mode = self.trajectory_cfg.get('send_mode', 'complete')  # realtime | complete | both
+        self.trajectory_max_points = self.trajectory_cfg.get('max_points', 100)  # 最大轨迹点数
+        self.trajectory_send_interval = self.trajectory_cfg.get('send_interval', 10)  # 实时发送间隔（帧）
+        
         # 关键帧采集配置（从 event_config.capture 读取）
         self.capture_cfg = self.event_cfg.get('capture', {})
         self.capture_strategy = self.capture_cfg.get('strategy', 'keyframe')  # full | cropped | keyframe | periodic
@@ -108,6 +127,14 @@ class CameraWorker:
         self.change_threshold = self.capture_cfg.get('change_threshold', 50)  # 变化阈值（像素）
         self.save_full_on_start = self.capture_cfg.get('save_full_on_start', True)  # 首次出现保存完整帧
         self.save_full_on_end = self.capture_cfg.get('save_full_on_end', True)  # 目标消失保存完整帧
+        # 裁剪边距比例：在 bbox 各方向扩展 bbox 尺寸的比例（0.5=50%, 1.0=100%）
+        # 值越大，裁剪画面范围越大，目标在画面中占比越小，保留更多上下文
+        self.crop_margin_ratio = self.capture_cfg.get('crop_margin_ratio', 1.0)
+        
+        # 事件图片/GIF 是否绘制检测框（前端开关控制）
+        image_output_cfg = self.event_cfg.get('image_output', {})
+        self.event_image_draw_bbox = image_output_cfg.get('draw_bbox', True)
+        self.gif_draw_bbox = self.gif_cfg.get('draw_bbox', True)
         
         # 统计
         self.frame_count = 0
@@ -120,7 +147,7 @@ class CameraWorker:
         self.ai_stream_frame_counter = 0
         
         # AI 流异步处理队列和线程
-        self.ai_stream_queue = queue.Queue(maxsize=5)  # 限制队列大小防内存溢出
+        self.ai_stream_queue = queue.Queue(maxsize=10)  # 增大队列减少丢帧
         self.ai_stream_thread = None
         self.ai_stream_stop_event = threading.Event()
         
@@ -332,17 +359,43 @@ class CameraWorker:
         try:
             from src.events.gif_generator import GIFGenerator
             
+            # ✅ 从system_config.yaml读取storage配置（与EventOutput一致）
+            import yaml
+            from pathlib import Path
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            system_config_path = Path(project_root) / 'config' / 'system_config.yaml'
+            with open(system_config_path, 'r', encoding='utf-8') as f:
+                system_config = yaml.safe_load(f)
+            storage_cfg = system_config.get('storage', {})
+            
+            gif_cfg = self.event_cfg.get('gif', {})
+            
             gif_config = {
                 'max_frames': self.gif_max_frames,
                 'fps': self.gif_fps,
                 'max_width': self.gif_max_width,
                 'max_height': self.gif_max_height,
                 'output_dir': self.gif_output_dir,
-                'draw_trajectory': self.gif_draw_trajectory
+                'draw_trajectory': self.gif_draw_trajectory,
+                # 裁剪边距比例（与采集端一致，用于GIF中完整帧裁剪目标区域）
+                'crop_margin_ratio': self.crop_margin_ratio,
+                # GIF生成模式：'full' 全场景帧 | 'target' 裁剪目标区域
+                'crop_mode': gif_cfg.get('crop_mode', 'full'),
+                # 是否在GIF帧上绘制检测框（前端开关控制）
+                'draw_bbox': self.gif_draw_bbox,
+                # ✅ 输出方式：local | minio | ftp | both
+                'output_method': gif_cfg.get('output_method', 'both'),
+                # GIF存储配置
+                'minio_bucket': gif_cfg.get('minio_bucket', 'sagesight-gifs'),
+                'ftp_remote_dir': gif_cfg.get('ftp_remote_dir', '/sagesight/gifs'),
+                # ✅ 传递全局storage配置
+                'storage': storage_cfg
             }
             
             self.gif_generator = GIFGenerator(gif_config)
             print(f"[CameraWorker-{self.camera_id}] GIF生成器初始化成功")
+            print(f"[CameraWorker-{self.camera_id}]   GIF MinIO配置: {storage_cfg.get('minio', {}).get('enabled', False)}")
+            print(f"[CameraWorker-{self.camera_id}]   GIF FTP配置: {storage_cfg.get('ftp', {}).get('enabled', False)}")
             
         except Exception as e:
             print(f"[CameraWorker-{self.camera_id}] GIF生成器初始化失败: {e}")
@@ -368,12 +421,18 @@ class CameraWorker:
 
         # 运动检测模式标志（从任务配置读取,而不是从 motion_config 读取）
         motion_triggered_mode = self.task_config.get('motion_detection_enabled', False)
+        # 运动检测帧跳过间隔：每2帧检测一次运动，减少MOG2计算开销
+        motion_detect_skip_interval = 2
+        motion_detect_skip_counter = 0
+        # 缓存上一次运动检测结果（跳过帧时复用）
+        last_motion_regions = []
         print(f"[CameraWorker-{self.camera_id}] 调试: task_config.motion_detection_enabled = {motion_triggered_mode} (类型: {type(motion_triggered_mode)})")
         print(f"[CameraWorker-{self.camera_id}] 调试: task_config 包含的键 = {list(self.task_config.keys())}")
         if motion_triggered_mode:
             print(f"[CameraWorker-{self.camera_id}] 运动检测触发模式已启用")
             print(f"[CameraWorker-{self.camera_id}]   - 有运动目标时才启动检测")
             print(f"[CameraWorker-{self.camera_id}]   - 无运动目标时跳过检测（节约资源）")
+            print(f"[CameraWorker-{self.camera_id}]   - 运动检测跳帧间隔: {motion_detect_skip_interval}")
         else:
             print(f"[CameraWorker-{self.camera_id}] 逐帧检测模式（运动检测已禁用）")
         
@@ -431,12 +490,22 @@ class CameraWorker:
                 # 运动检测触发模式（预处理后，先运动检测，再推理）
                 # ========================================
                 if motion_triggered_mode and self.motion_detector:
-                    # 运动检测（使用预处理生成的BGR帧）
-                    motion_detect_start = time.time()
-                    motion_regions = self.motion_detector.detect(bgr_frame)
-                    motion_detect_time = time.time() - motion_detect_start
+                    # 帧跳过机制：每 motion_detect_skip_interval 帧执行一次完整运动检测
+                    # 跳过的帧复用上一次检测结果，减少MOG2+形态学+轮廓查找的开销
+                    motion_detect_skip_counter += 1
+                    if motion_detect_skip_counter >= motion_detect_skip_interval:
+                        motion_detect_skip_counter = 0
+                        # 运动检测（使用预处理生成的BGR帧）
+                        motion_detect_start = time.time()
+                        motion_regions = self.motion_detector.detect(bgr_frame)
+                        motion_detect_time = time.time() - motion_detect_start
+                        last_motion_regions = motion_regions
+                    else:
+                        # 跳过帧：复用上一次运动检测结果
+                        motion_regions = last_motion_regions
+                        motion_detect_time = 0.0
                     
-                    # 如果没有运动区域，跳过YOLO推理（节约GPU资源）
+                    # 如果没有运动区域，跳过YOLO推理（节约GPU资源），但仍发送AI视频流帧
                     if not motion_regions or len(motion_regions) == 0:
                         skipped_frames += 1
                         
@@ -444,46 +513,49 @@ class CameraWorker:
                         if skipped_frames % 100 == 0:
                             print(f"[CameraWorker-{self.camera_id}] 无运动目标，已跳过 {skipped_frames} 帧推理")
                         
-                        # 继续下一帧（节约推理成本约20-30ms）
-                        continue
+                        # 无运动目标：跳过推理，但仍然发送AI视频流帧（避免前端画面断续）
+                        detections = []
+                        detect_time = 0.0
                     
-                    # 有运动目标，执行YOLO推理
-                    motion_frames += 1
-                    
-                    # YOLO推理
-                    detect_start = time.time()
-                    result = self.detector.detect(tensor)
-                    detections = result.get('detections', [])
-                    detect_time = time.time() - detect_start
-                    
-                    detection_frames += 1
-                    
-                    # 运动检测融合（调整置信度）
-                    if motion_regions and len(detections) > 0:
-                        detections = self._fuse_motion_detection(detections, motion_regions)
-                    
-                    # 性能日志（每100帧打印一次）
-                    if not hasattr(self, '_perf_counter'):
-                        self._perf_counter = 0
-                    self._perf_counter += 1
-                    if self._perf_counter % 100 == 1 or self._perf_counter == 1:
-                        print(f"[CameraWorker-{self.camera_id}] 性能分析（第{self._perf_counter}帧，运动触发）：")
-                        print(f"  获取帧索引: {get_index_time*1000:.2f}ms")
-                        print(f"  读取帧数据: {read_frame_time*1000:.2f}ms")
-                        print(f"  预处理: {preprocess_time*1000:.2f}ms")
-                        print(f"  运动检测: {motion_detect_time*1000:.2f}ms")
-                        print(f"  推理: {detect_time*1000:.2f}ms")
-                        total_time = time.time() - cycle_start
-                        print(f"  总耗时: {total_time*1000:.2f}ms")
-                        print(f"  FPS: {1000/(total_time*1000):.1f}")
-                        print(f"  检测数量: {len(detections)}")
-                    
-                    # 定期打印检测结果
-                    if detection_frames % 30 == 0:
-                        print(f"[CameraWorker-{self.camera_id}] 已处理 {detection_frames} 帧（运动触发），检测到 {len(detections)} 个目标")
-                        if len(detections) > 0:
-                            for det in detections[:3]:
-                                print(f"  - {det.get('class_name', 'unknown')}: 置信度 {det.get('confidence', 0):.2f}")
+                    else:
+                        # 有运动目标，执行YOLO推理
+                        motion_frames += 1
+                        
+                        # YOLO推理
+                        detect_start = time.time()
+                        result = self.detector.detect(tensor)
+                        detections = result.get('detections', [])
+                        detect_time = time.time() - detect_start
+                        
+                        detection_frames += 1
+                        
+                        # 运动检测融合（调整置信度）
+                        if motion_regions and len(detections) > 0:
+                            detections = self._fuse_motion_detection(detections, motion_regions)
+                        
+                        # 性能日志（每100帧打印一次）
+                        if not hasattr(self, '_perf_counter'):
+                            self._perf_counter = 0
+                        self._perf_counter += 1
+                        if self._perf_counter % 100 == 1 or self._perf_counter == 1:
+                            print(f"[CameraWorker-{self.camera_id}] 性能分析（第{self._perf_counter}帧，运动触发）：")
+                            print(f"  获取帧索引: {get_index_time*1000:.2f}ms")
+                            print(f"  读取帧数据: {read_frame_time*1000:.2f}ms")
+                            print(f"  预处理: {preprocess_time*1000:.2f}ms")
+                            print(f"  运动检测: {motion_detect_time*1000:.2f}ms")
+                            print(f"  推理: {detect_time*1000:.2f}ms")
+                            total_time = time.time() - cycle_start
+                            print(f"  总耗时: {total_time*1000:.2f}ms")
+                            print(f"  FPS: {1000/(total_time*1000):.1f}")
+                            print(f"  运动区域数: {len(motion_regions)}")
+                            print(f"  检测目标数: {len(detections)}")
+                        
+                        # 定期打印检测结果（每30帧）
+                        if detection_frames % 30 == 0:
+                            print(f"[CameraWorker-{self.camera_id}] 已处理 {detection_frames} 帧（运动触发），运动区域: {len(motion_regions)}，检测目标: {len(detections)}")
+                            if len(detections) > 0:
+                                for det in detections[:3]:
+                                    print(f"  - {det.get('class_name', 'unknown')}: 置信度 {det.get('confidence', 0):.2f}")
                 
                 # ========================================
                 # 逐帧检测模式（预处理后，直接推理）
@@ -526,7 +598,8 @@ class CameraWorker:
                 
                 # 跟踪（仅当启用时）
                 tracking_enabled = self.task_config.get('tracking_enabled', True)
-                if tracking_enabled and self.tracker and len(detections) > 0:
+                # 即使无检测结果也调用跟踪器：让跟踪器用运动模型预测目标位置，保持框连续
+                if tracking_enabled and self.tracker:
                     # 转换为跟踪格式
                     if len(detections) > 0:
                         det_array = np.array([
@@ -581,6 +654,29 @@ class CameraWorker:
                 # 显示（可选）
                 if self._display.get('enabled', False):
                     self._display_frame(bgr_frame, detections, tracks if self.tracker else [])
+                
+                # ========================================
+                # 帧缓存维护（用于GIF生成：原始完整帧的时间窗回放）
+                # ========================================
+                cache_now = time.time()
+                # 记录原始帧尺寸（用于bbox缩放到缓存尺寸）
+                if self.frame_orig_w == 0 and bgr_frame is not None:
+                    self.frame_orig_h, self.frame_orig_w = bgr_frame.shape[:2]
+                # 按采样率缓存降采样帧
+                if bgr_frame is not None and cache_now - self.frame_cache_last_ts >= 1.0 / self.frame_cache_fps:
+                    try:
+                        small = cv2.resize(bgr_frame, (self.gif_max_width, self.gif_max_height))
+                        self.frame_cache.append((cache_now, total_frames, small))
+                        self.frame_cache_last_ts = cache_now
+                    except Exception:
+                        pass
+                # 淘汰过期帧
+                cache_cutoff = cache_now - self.frame_cache_retention
+                while self.frame_cache and self.frame_cache[0][0] < cache_cutoff:
+                    self.frame_cache.popleft()
+                
+                # 处理待生成的GIF事件（到期则生成）
+                self._process_pending_gifs()
                 
                 # FPS 控制
                 if fps_limit > 0:
@@ -724,7 +820,12 @@ class CameraWorker:
                                      (int(bbox[2]), int(bbox[3])),
                                      track_color, track_thickness)
                         
-                        cv2.putText(display_frame, f"ID: {track_id}",
+                        # 从活动跟踪记录中获取类别和置信度
+                        track_info = self.active_tracks.get(track_id, {})
+                        class_name = self._get_class_name(track_info.get('class_id', 0))
+                        confidence = track_info.get('confidence', 0.0)
+                        label = f"ID: {track_id} {class_name}: {confidence:.2f}"
+                        cv2.putText(display_frame, label,
                                    (int(bbox[0]), int(bbox[3]) + 20),
                                    cv2.FONT_HERSHEY_SIMPLEX, track_font_scale, track_label_color, track_thickness)
                     
@@ -816,6 +917,7 @@ class CameraWorker:
                     'first_frame': frame_id,
                     'last_bbox': bbox,
                     'last_update': time.time(),
+                    'start_time': time.time(),
                     'class_id': class_id,
                     'confidence': confidence
                 }
@@ -880,43 +982,35 @@ class CameraWorker:
                 active_info = self.active_tracks[disappeared_id]
                 last_bbox = active_info['last_bbox']
                 
-                # 获取最后一帧（从帧序列中）
-                frame_sequence = self.track_frame_sequences.get(disappeared_id, [])
-                if frame_sequence:
-                    last_frame_data = frame_sequence[-1]
-                    last_frame = last_frame_data.get('image')
-                    
-                    # 使用 is not None 判断，避免numpy数组布尔错误
-                    if last_frame is not None:
-                        self._capture_frame(
-                            track_id=disappeared_id,
-                            frame=last_frame,
-                            bbox=last_bbox,
-                            frame_id=active_info['first_frame'] + len(frame_sequence),
-                            is_full_frame=True,
-                            capture_reason='track_end'
-                        )
-            
-            # 生成GIF动画
-            if self.generate_gif and self.gif_generator:
-                self._generate_track_gif(disappeared_id)
-            
-            # 发送事件（完整事件数据，包含图片保存）
-            if self.event_output:
-                self._emit_track_event(
+                # 使用当前完整帧采集（保证事件图片为完整检测帧尺寸，而非裁剪帧）
+                # 注意：目标可能已离开当前帧，bbox 为最后已知位置
+                self._capture_frame(
                     track_id=disappeared_id,
-                    event_type='track_end',
-                    frame_sequence=self.track_frame_sequences.get(disappeared_id, [])
+                    frame=frame,
+                    bbox=last_bbox,
+                    frame_id=frame_id,
+                    is_full_frame=True,
+                    capture_reason='track_end'
                 )
             
-            # 清理数据
-            del self.active_tracks[disappeared_id]
-            if disappeared_id in self.track_frame_sequences:
-                del self.track_frame_sequences[disappeared_id]
-            if disappeared_id in self.track_trajectories:
-                del self.track_trajectories[disappeared_id]
+            # 推入待生成GIF列表（延迟 post_seconds 后生成，以捕获"结束后5秒"的帧）
+            if (self.generate_gif and self.gif_generator) or self.event_output:
+                active_info = self.active_tracks[disappeared_id]
+                end_time = time.time()
+                pending = {
+                    'track_id': disappeared_id,
+                    'start_time': active_info.get('start_time', end_time),
+                    'end_time': end_time,
+                    'generate_time': end_time + self.gif_post_seconds,
+                    'trajectory': dict(self.track_trajectories.get(disappeared_id, {})),
+                    'frame_seq': list(self.track_frame_sequences.get(disappeared_id, [])),
+                }
+                self.pending_gifs.append(pending)
             
-            print(f"[CameraWorker-{self.camera_id}] 跟踪目标消失: ID={disappeared_id}")
+            # 清理 active_tracks（数据已复制到pending，可立即删除）
+            del self.active_tracks[disappeared_id]
+            
+            print(f"[CameraWorker-{self.camera_id}] 跟踪目标消失: ID={disappeared_id}，等待{self.gif_post_seconds}秒后生成GIF")
     
     def _update_trajectory(self, track_id: int, bbox: np.ndarray, 
                           class_id: int, confidence: float, frame_id: int, timestamp: str):
@@ -948,6 +1042,8 @@ class CameraWorker:
         trajectory_point = {
             'x': center_x,
             'y': center_y,
+            'bbox': bbox.tolist(),
+            'time_sec': time.time(),
             'frame_id': frame_id,
             'timestamp': timestamp
         }
@@ -990,15 +1086,27 @@ class CameraWorker:
         if track_id not in self.track_frame_sequences:
             self.track_frame_sequences[track_id] = []
         
-        # 限制帧序列长度
+        # 限制帧序列长度：超限时均匀降采样（保留全时间跨度的帧 + 始终保留最后一帧）
         if len(self.track_frame_sequences[track_id]) >= self.gif_max_frames:
-            # 移除最旧的帧
-            self.track_frame_sequences[track_id].pop(0)
+            # 保留偶数索引帧（隔帧保留），腾出空间继续采集新帧
+            seq = self.track_frame_sequences[track_id]
+            sampled = seq[::2]
+            # 始终保留最后一帧（track_end完整帧），避免降采样丢掉
+            if len(seq) > 1 and sampled[-1] is not seq[-1]:
+                sampled.append(seq[-1])
+            self.track_frame_sequences[track_id] = sampled
         
         # 采集帧数据
+        if is_full_frame:
+            cropped_image = frame.copy()
+            crop_offset = (0, 0)  # 完整帧无偏移
+        else:
+            cropped_image, crop_offset = self._crop_frame(frame, bbox)
+        
         frame_data = {
-            'image': frame.copy() if is_full_frame else self._crop_frame(frame, bbox),
+            'image': cropped_image,
             'bbox': bbox.tolist(),
+            'crop_offset': crop_offset,  # 裁剪偏移（用于精确调整bbox坐标）
             'frame_id': frame_id,
             'timestamp': datetime.now().isoformat(),
             'is_full_frame': is_full_frame,
@@ -1007,9 +1115,9 @@ class CameraWorker:
         
         self.track_frame_sequences[track_id].append(frame_data)
         
-        print(f"[CameraWorker-{self.camera_id}] 关键帧采集: ID={track_id}, 原因={capture_reason}, 帧类型={is_full_frame}")
+        print(f"[CameraWorker-{self.camera_id}] 关键帧采集: ID={track_id}, 原因={capture_reason}, 帧类型={is_full_frame}, 序列长度={len(self.track_frame_sequences[track_id])}")
     
-    def _crop_frame(self, frame: np.ndarray, bbox: np.ndarray) -> np.ndarray:
+    def _crop_frame(self, frame: np.ndarray, bbox: np.ndarray) -> tuple:
         """
         裁剪帧（保留目标区域）
         
@@ -1018,20 +1126,20 @@ class CameraWorker:
             bbox: 边界框
         
         Returns:
-            裁剪后的帧
+            (裁剪后的帧, (x1, y1))：裁剪图像 + 裁剪偏移（用于后续bbox坐标调整）
         """
         h, w = frame.shape[:2]
         
-        # 扩展边界框（保留上下文）
-        margin_x = int((bbox[2] - bbox[0]) * 0.5)
-        margin_y = int((bbox[3] - bbox[1]) * 0.5)
+        # 扩展边界框（保留上下文）：按配置比例扩展，值越大裁剪范围越大
+        margin_x = int((bbox[2] - bbox[0]) * self.crop_margin_ratio)
+        margin_y = int((bbox[3] - bbox[1]) * self.crop_margin_ratio)
         
         x1 = max(0, int(bbox[0] - margin_x))
         y1 = max(0, int(bbox[1] - margin_y))
         x2 = min(w, int(bbox[2] + margin_x))
         y2 = min(h, int(bbox[3] + margin_y))
         
-        return frame[y1:y2, x1:x2]
+        return frame[y1:y2, x1:x2], (x1, y1)
     
     def _generate_track_gif(self, track_id: int):
         """
@@ -1049,23 +1157,174 @@ class CameraWorker:
         try:
             # 生成GIF
             gif_filename = f"track_{track_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.gif"
-            gif_url = self.gif_generator.generate(
+            gif_urls = self.gif_generator.generate(
                 track_id=track_id,
                 frames=frame_sequence,
                 output_filename=gif_filename
             )
             
-            if gif_url:
-                print(f"[CameraWorker-{self.camera_id}] GIF已生成: ID={track_id}, URL={gif_url}")
+            if gif_urls:
+                print(f"[CameraWorker-{self.camera_id}] GIF已生成: ID={track_id}, URLs={gif_urls}")
                 
-                # 保存GIF URL到轨迹数据
+                # 保存GIF URLs到轨迹数据
                 if track_id in self.track_trajectories:
-                    self.track_trajectories[track_id]['gif_url'] = gif_url
+                    self.track_trajectories[track_id]['gif_urls'] = gif_urls
             else:
                 print(f"[CameraWorker-{self.camera_id}] GIF生成失败: ID={track_id}")
             
         except Exception as e:
             print(f"[CameraWorker-{self.camera_id}] GIF生成失败: ID={track_id}, 错误={e}")
+    
+    def _process_pending_gifs(self):
+        """处理到期的待生成GIF事件（在主循环中调用，避免线程并发问题）"""
+        if not self.pending_gifs:
+            return
+        now = time.time()
+        ready = [p for p in self.pending_gifs if now >= p['generate_time']]
+        self.pending_gifs = [p for p in self.pending_gifs if now < p['generate_time']]
+        for pending in ready:
+            try:
+                self._finalize_pending_gif(pending)
+            except Exception as e:
+                print(f"[CameraWorker-{self.camera_id}] 待处理GIF生成失败: ID={pending.get('track_id')}, 错误={e}")
+    
+    def _finalize_pending_gif(self, pending: dict):
+        """
+        完成待处理的GIF事件：从帧缓存提取[start-pre, end+post]时间窗的原始帧，
+        生成GIF并发送事件。所有共享状态访问在主循环线程完成，
+        仅GIF编码+上传+事件发送在后台线程执行。
+        """
+        tid = pending['track_id']
+        
+        # 防止同一目标重复产生事件
+        if tid in self.processed_track_ids:
+            print(f"[CameraWorker-{self.camera_id}] 目标已处理过事件，跳过: ID={tid}")
+            return
+        self.processed_track_ids.add(tid)
+        if len(self.processed_track_ids) > 500:
+            self.processed_track_ids.clear()
+            self.processed_track_ids.add(tid)
+        
+        traj = pending['trajectory']
+        class_id = traj.get('class_id', 0)
+        class_name = self._get_class_name(class_id)
+        max_conf = traj.get('max_confidence', 0.0)
+        
+        # 事件过滤：未通过则跳过GIF生成和事件发送（避免无效I/O）
+        if self.event_output and not self.event_output.should_send(class_name, max_conf):
+            print(f"[CameraWorker-{self.camera_id}] 事件未通过过滤，跳过GIF和事件: ID={tid}, class={class_name}, conf={max_conf}")
+            return
+        
+        # 从帧缓存提取 [start-pre, end+post] 时间窗的原始完整帧
+        start_t = pending['start_time'] - self.gif_pre_seconds
+        end_t = pending['end_time'] + self.gif_post_seconds
+        cache_frames = [(ts, fid, img) for (ts, fid, img) in self.frame_cache if start_t <= ts <= end_t]
+        
+        # 构建GIF帧列表（全场景帧 + 事件期间绘制bbox/轨迹）
+        gif_frames = self._build_gif_frames_from_cache(
+            cache_frames, traj, pending['start_time'], pending['end_time']
+        )
+        
+        frame_seq = pending['frame_seq']
+        
+        # 在后台线程执行GIF编码+上传+事件发送（耗时IO），不阻塞主循环
+        import threading as _threading
+        def _async_finalize(tid=tid, gif_frames=gif_frames, frame_seq=frame_seq,
+                            traj=traj, class_name=class_name, max_conf=max_conf):
+            try:
+                # 生成GIF
+                gif_urls = {}
+                if self.generate_gif and self.gif_generator and gif_frames:
+                    gif_filename = f"track_{tid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.gif"
+                    gif_urls = self.gif_generator.generate(
+                        track_id=tid,
+                        frames=gif_frames,
+                        output_filename=gif_filename
+                    )
+                    if gif_urls:
+                        print(f"[CameraWorker-{self.camera_id}] GIF已生成(帧缓存): ID={tid}, URLs={gif_urls}, 帧数={len(gif_frames)}")
+                        traj['gif_urls'] = gif_urls
+                    else:
+                        print(f"[CameraWorker-{self.camera_id}] GIF生成失败: ID={tid}")
+                
+                # 临时放回数据供 _emit_track_event 读取
+                self.track_frame_sequences[tid] = frame_seq
+                self.track_trajectories[tid] = traj
+                
+                # 发送事件
+                if self.event_output:
+                    self._emit_track_event(
+                        track_id=tid,
+                        event_type='track_end',
+                        frame_sequence=frame_seq
+                    )
+            except Exception as e:
+                print(f"[CameraWorker-{self.camera_id}] GIF/事件后台处理失败: ID={tid}, 错误={e}")
+            finally:
+                self.track_frame_sequences.pop(tid, None)
+                self.track_trajectories.pop(tid, None)
+        
+        _threading.Thread(target=_async_finalize, daemon=True).start()
+    
+    def _build_gif_frames_from_cache(self, cache_frames: list, trajectory: dict,
+                                      start_time: float, end_time: float) -> List[Dict]:
+        """
+        从帧缓存构建GIF帧列表（全场景帧，事件期间绘制bbox）。
+        
+        Args:
+            cache_frames: [(time_sec, frame_id, frame_small)]
+            trajectory: 轨迹数据 {'points': [{'bbox', 'time_sec', ...}], ...}
+            start_time: 事件起始时间（time.time()）
+            end_time: 事件结束时间（time.time()）
+        
+        Returns:
+            GIF帧数据列表，每项含 image/bbox/crop_offset/is_full_frame 等
+        """
+        if not cache_frames:
+            return []
+        
+        # 原始帧 -> 缓存帧的缩放比例
+        if self.frame_orig_w > 0 and self.frame_orig_h > 0:
+            scale_x = self.gif_max_width / self.frame_orig_w
+            scale_y = self.gif_max_height / self.frame_orig_h
+        else:
+            scale_x = scale_y = 1.0
+        
+        # 提取轨迹点（带bbox+time_sec），按时间排序
+        traj_points = trajectory.get('points', [])
+        traj_pts_sorted = sorted(
+            [p for p in traj_points if 'time_sec' in p and 'bbox' in p],
+            key=lambda p: p['time_sec']
+        )
+        
+        result = []
+        for (ts, fid, img) in cache_frames:
+            bbox_scaled = [0, 0, 0, 0]  # 默认无bbox（事件前/后的场景帧）
+            
+            # 仅在事件期间 [start, end] 绘制bbox
+            if start_time <= ts <= end_time and traj_pts_sorted:
+                # 找到时间最近的轨迹点
+                nearest = min(traj_pts_sorted, key=lambda p: abs(p['time_sec'] - ts))
+                bbox = nearest['bbox']
+                # 缩放到缓存帧尺寸
+                bbox_scaled = [
+                    int(bbox[0] * scale_x),
+                    int(bbox[1] * scale_y),
+                    int(bbox[2] * scale_x),
+                    int(bbox[3] * scale_y)
+                ]
+            
+            frame_data = {
+                'image': img,
+                'bbox': bbox_scaled,
+                'crop_offset': (0, 0),
+                'frame_id': fid,
+                'timestamp': datetime.fromtimestamp(ts).isoformat(),
+                'is_full_frame': True,  # 全场景帧（gif_generator full模式不裁剪）
+            }
+            result.append(frame_data)
+        
+        return result
     
     def _emit_track_event(self, track_id: int, event_type: str,
                          frame_sequence: List[Dict]):
@@ -1083,8 +1342,8 @@ class CameraWorker:
         # 获取轨迹数据
         trajectory = self.track_trajectories.get(track_id, {})
 
-        # 获取GIF URL（如果有）
-        gif_url = trajectory.get('gif_url', '')
+        # 获取GIF URLs（如果有）
+        gif_urls = trajectory.get('gif_urls', {})
         
         # 获取最大置信度（从轨迹中所有检测中取最大值）
         max_confidence = trajectory.get('max_confidence', 0.0)
@@ -1109,7 +1368,7 @@ class CameraWorker:
             'bbox': last_bbox,  # ✅ 添加 bbox 字段
             'trajectory_points': trajectory.get('points', []),
             'frame_count': len(frame_sequence),
-            'gif_url': gif_url,
+            'gif_urls': gif_urls,  # 改为 gif_urls 字典
             'start_time': trajectory.get('start_time', ''),
             'end_time': datetime.now().isoformat()
         }
@@ -1122,11 +1381,31 @@ class CameraWorker:
         if frame_sequence:
             last_frame_data = frame_sequence[-1]
             last_frame_image = last_frame_data.get('image')
+            is_full_frame = last_frame_data.get('is_full_frame', True)
+            last_bbox = last_frame_data.get('bbox', [0, 0, 0, 0])
 
-            # 在图片上绘制跟踪框和类别信息
-            if last_frame_image is not None and len(frame_sequence) > 0:
-                last_bbox = last_frame_data.get('bbox', [0, 0, 0, 0])
-                tracks_array = np.array([[last_bbox[0], last_bbox[1], last_bbox[2], last_bbox[3], 
+            # 在图片上绘制跟踪框和类别信息（受前端开关控制）
+            if last_frame_image is not None and len(frame_sequence) > 0 and self.event_image_draw_bbox:
+                if is_full_frame:
+                    # 完整帧：bbox 坐标就是原图坐标，直接画
+                    draw_bbox = last_bbox
+                else:
+                    # 裁剪帧：用采集时存储的精确裁剪偏移调整 bbox
+                    crop_x1, crop_y1 = last_frame_data.get('crop_offset', (0, 0))
+                    draw_bbox = [
+                        last_bbox[0] - crop_x1,
+                        last_bbox[1] - crop_y1,
+                        last_bbox[2] - crop_x1,
+                        last_bbox[3] - crop_y1
+                    ]
+                    # 确保坐标不越界
+                    img_h, img_w = last_frame_image.shape[:2]
+                    draw_bbox[0] = max(0, min(draw_bbox[0], img_w))
+                    draw_bbox[1] = max(0, min(draw_bbox[1], img_h))
+                    draw_bbox[2] = max(0, min(draw_bbox[2], img_w))
+                    draw_bbox[3] = max(0, min(draw_bbox[3], img_h))
+                
+                tracks_array = np.array([[draw_bbox[0], draw_bbox[1], draw_bbox[2], draw_bbox[3], 
                                          track_id, trajectory.get('class_id', 0)]], dtype=np.float32)
                 last_frame_image = self._draw_boxes_on_frame(
                     frame=last_frame_image,
@@ -1200,9 +1479,9 @@ class CameraWorker:
                     'class_id': int(track[6]) if len(track) > 6 else 0  # cls_id 在索引 6
                 })
 
-        # 构建轨迹数据
+        # 构建轨迹数据（使用 list() 快照避免并发修改）
         trajectory_data = {}
-        for track_id, trajectory_info in self.track_trajectories.items():
+        for track_id, trajectory_info in list(self.track_trajectories.items()):
             trajectory_data[track_id] = trajectory_info['points']
 
         # 发送到WebSocket
@@ -1273,14 +1552,19 @@ class CameraWorker:
                              (int(bbox[2]), int(bbox[3])),
                              track_color, track_thickness)
                 
-                label = f"ID: {track_id}"
+                # 从活动跟踪记录中获取类别和置信度
+                track_info = self.active_tracks.get(track_id, {})
+                class_name = self._get_class_name(track_info.get('class_id', 0))
+                confidence = track_info.get('confidence', 0.0)
+                label = f"ID: {track_id} {class_name}: {confidence:.2f}"
                 cv2.putText(drawn_frame, label,
                            (int(bbox[0]), int(bbox[3]) + 20),
                            cv2.FONT_HERSHEY_SIMPLEX, track_font_scale, track_label_color, track_thickness)
         
         # 绘制轨迹线
         if self._display.get('show_trajectories', True) and self.enable_trajectory:
-            for track_id, trajectory_info in self.track_trajectories.items():
+            # 使用 list() 快照避免并发修改（异步线程可能同时 pop 字典）
+            for track_id, trajectory_info in list(self.track_trajectories.items()):
                 points = trajectory_info['points']
                 hist_len = self._display.get('trajectory_history_length', 30)
                 points = points[-hist_len:]
@@ -1371,7 +1655,7 @@ class CameraWorker:
                             'frame': jpeg_base64,
                             'timestamp': datetime.now().isoformat()
                         },
-                        timeout=1
+                        timeout=0.5  # 降低超时避免阻塞worker线程
                     )
                 except Exception:
                     pass  # 忽略发送失败（主进程可能未启动）
@@ -1384,6 +1668,21 @@ class CameraWorker:
     
     def cleanup(self):
         """清理资源"""
+        # 刷新所有待处理的GIF事件（立即用缓存中已有帧生成，避免丢失事件）
+        if self.pending_gifs:
+            print(f"[CameraWorker-{self.camera_id}] 停止时刷新 {len(self.pending_gifs)} 个待处理GIF事件")
+            for pending in self.pending_gifs:
+                pending['generate_time'] = time.time()  # 立即到期
+            self.pending_gifs_to_flush = self.pending_gifs
+            self.pending_gifs = []
+            for pending in self.pending_gifs_to_flush:
+                try:
+                    self._finalize_pending_gif(pending)
+                except Exception as e:
+                    print(f"[CameraWorker-{self.camera_id}] 停止时GIF生成失败: ID={pending.get('track_id')}, 错误={e}")
+            # 等待后台线程完成（最多3秒）
+            time.sleep(0.5)
+        
         # 停止 AI 流处理线程
         if self.ai_stream_thread:
             self.ai_stream_stop_event.set()
@@ -1477,12 +1776,21 @@ class MultiCameraTaskExecutor:
                 'min_box_area': detector_config_block.get('min_box_area', 50),
 
                 # 检测器详细配置
-                'backend': detector_config_block.get('backend', 'onnx_tensorrt'),
+                'backend': detector_config_block.get('backend', 'onnx_cuda'),
                 'use_fp16': detector_config_block.get('use_fp16', True),
                 'engine_cache_path': detector_config_block.get('engine_cache_path', './trt_cache'),
                 'device_id': detector_config_block.get('device_id', 0),
                 'gpu_mem_limit': detector_config_block.get('gpu_mem_limit', 6442450944),
-                
+
+                # TensorRT 配置（从 detector_config 配置块读取）
+                'tensorrt_lib_path': detector_config_block.get('tensorrt_lib_path', ''),
+                'tensorrt_engine_path': detector_config_block.get('tensorrt_engine_path', ''),
+
+                # RKNN 配置（从 detector_config 配置块读取）
+                'rknn_target': detector_config_block.get('rknn_target', 'rk3588'),
+                'rknn_device_id': detector_config_block.get('rknn_device_id', ''),
+                'rknn_core_mask': detector_config_block.get('rknn_core_mask', 0),
+
                 # 标签文件路径（从 detector_config 配置块读取）
                 'labels_file': detector_config_block.get('labels_file', '')
             }

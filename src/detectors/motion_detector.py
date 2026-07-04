@@ -163,6 +163,13 @@ class MotionDetector:
                 kernel
             )
         
+        # 快速预检：统计前景像素数量，如果极少则直接返回空（跳过昂贵的轮廓查找）
+        foreground_pixel_count = cv2.countNonZero(self.foreground_mask)
+        if foreground_pixel_count < self.min_area:
+            # 前景像素太少，不可能有有效运动区域
+            self.motion_history.extend([])
+            return []
+        
         # 查找轮廓
         contours, _ = cv2.findContours(
             self.foreground_mask, 

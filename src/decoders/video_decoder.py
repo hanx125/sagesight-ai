@@ -145,6 +145,11 @@ class VideoDecoder:
                 self.ffmpeg_args.extend([
                     '-hwaccel', 'qsv',
                 ])
+            elif self.config.hwaccel == 'rk3588':
+                self.ffmpeg_args.extend([
+                    '-hwaccel', 'rkmpp',
+                    '-hwaccel_output_format', 'drm_prime',
+                ])
             
             # 输入源（使用 -re 按原始帧率读取）
             self.ffmpeg_args.extend([
@@ -185,6 +190,13 @@ class VideoDecoder:
                     '-hwaccel', 'qsv',
                     '-hwaccel_output_format', 'nv12',
                 ])
+            elif self.config.hwaccel == 'rk3588':
+                # RK3588/RK3566 MPP 硬件解码（瑞芯微NPU）
+                # 需要FFmpeg支持rkmpp解码器（Linux平台）
+                self.ffmpeg_args.extend([
+                    '-hwaccel', 'rkmpp',
+                    '-hwaccel_output_format', 'drm_prime',  # MPP原生格式
+                ])
             else:
                 # 无硬件加速（CPU 解码）
                 self.ffmpeg_args.extend([
@@ -198,8 +210,9 @@ class VideoDecoder:
         # 输出格式：根据配置选择
         if self.config.output_format == 'auto':
             # 自动模式：根据硬件加速方式选择最优格式
-            if self.config.hwaccel in ['dxva2', 'cuda', 'qsv']:
+            if self.config.hwaccel in ['dxva2', 'cuda', 'qsv', 'rk3588']:
                 # 硬件加速使用 NV12 格式（性能最优）
+                # 注意：rk3588的drm_prime会在FFmpeg内部转换为NV12后输出
                 pix_fmt = 'nv12'
             else:
                 # CPU 解码使用 YUV420p 格式（兼容性好）

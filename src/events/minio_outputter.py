@@ -6,6 +6,8 @@ MinIO 输出器
 
 from typing import Dict
 from minio import Minio
+from datetime import timedelta
+import io
 
 
 class MinIOOutputter:
@@ -56,20 +58,20 @@ class MinIOOutputter:
         """
         object_name = f"{event_id}.jpg"
         
-        # 上传对象
+        # 上传对象（MinIO put_object 需要文件类对象，用 BytesIO 包装 bytes）
         self.client.put_object(
             self.bucket,
             object_name,
-            image_bytes,
+            io.BytesIO(image_bytes),
             len(image_bytes),
             content_type='image/jpeg'
         )
         
-        # 生成预签名 URL
+        # 生成预签名 URL（expires 需要 timedelta 类型）
         url = self.client.presigned_get_object(
             self.bucket,
             object_name,
-            expires=self.presigned_expires
+            expires=timedelta(seconds=self.presigned_expires)
         )
         
         print(f"[MinIOOutputter] 图片已上传: {object_name}")

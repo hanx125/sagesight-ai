@@ -1,6 +1,7 @@
 # requirements.txt
 # 硬件配置：NVIDIA RTX 2070 (8GB) | CUDA 12.9 | Python 3.11 | 32GB RAM
 # 针对 YOLO 检测通道优化的依赖清单
+# 支持多平台：NVIDIA GPU / CPU / RK3588 NPU
 
 # ========== 核心依赖 ==========
 # 数值计算（1.26+ 支持 Python 3.11，优化 AVX2 指令集）
@@ -9,9 +10,17 @@ numpy>=1.26.0,<2.0.0
 # 图像处理（4.8+ 支持 CUDA 加速预处理）
 opencv-python>=4.8.0
 
+# ========== 推理引擎依赖（多平台支持）==========
 # GPU 推理引擎（ONNX Runtime 1.17+ 支持 CUDA 12.x）
 # RTX 2070 性能优化版本：启用 TensorRT 加速（可选）
 onnxruntime-gpu>=1.17.0
+
+# CPU 推理引擎（纯CPU推理，无需GPU）
+# 注意：如果使用onnx-cpu后端，需要安装此包（替代onnxruntime-gpu）
+onnxruntime>=1.17.0  # CPU推理支持
+
+# RK3588 NPU 推理引擎（仅RK3588/RK3566平台）
+# rknn-toolkit2>=2.0.0  # 瑞芯微RKNN推理引擎（Linux平台，需要单独安装）
 
 # ========== 跟踪算法依赖 ==========
 # 匈牙利算法（1.11+ 支持 Python 3.11，性能优化）
@@ -57,12 +66,29 @@ aiortc>=1.6.0
 # ========== 数据库依赖 ==========
 # SQLite支持（Python自带，无需额外安装）
 
+# ========== GIF生成依赖 ==========
+# 图像处理和GIF生成
+pillow>=10.0.0  # PIL图像处理
+imageio>=2.31.0  # GIF动画生成
+
 # ========== 可选优化依赖 ==========
 # TensorRT 加速（可选，需额外安装 TensorRT）
 # tensorrt>=8.6.0  # 如果启用 TensorRT 加速
 
 # 注意：
 # - onnxruntime-gpu 会自动使用 CUDA 12.9 的 CuDNN 8.9+ 和 TensorRT 8.6+
+# - onnxruntime 提供纯CPU推理支持，无需GPU
+# - rknn-toolkit2 需要在RK3588平台单独安装（不在PyPI上）
 # - CUDA Graph 可降低内核启动开销，提升小批量推理性能
 # - aiortc 用于WebRTC语音对讲功能，支持Opus/PCMU编码
 # - onvif-zeep 用于摄像机PTZ控制和音频能力检测
+# - pillow和imageio用于事件GIF动画生成
+
+# ========== 平台选择说明 ==========
+# NVIDIA GPU平台：
+#   pip install onnxruntime-gpu（自动安装CUDA依赖）
+# CPU平台：
+#   pip install onnxruntime（纯CPU推理，无需CUDA）
+# RK3588平台：
+#   需要手动安装 rknn-toolkit2（瑞芯微官方SDK）
+#   参考：https://github.com/airockchip/rknn-toolkit2

@@ -18,6 +18,12 @@ let deleteTaskId = null;
 let currentTaskId = null;  // 当前查看详情的任务ID
 let isEditMode = false;  // 是否为编辑模式
 
+// 分页相关变量
+let currentPage = 1;
+let perPage = 20;
+let totalTasks = 0;
+let totalPages = 1;
+
 // ========================================
 // 页面初始化
 // ========================================
@@ -742,44 +748,26 @@ async function loadTasks() {
         const algorithm = document.getElementById('filterAlgorithm').value;
         const search = document.getElementById('filterSearch').value;
         
-        // 构建查询参数
-        let url = '/api/tasks';
-        const params = new URLSearchParams();
-        
-        if (params.toString()) {
-            url += '?' + params.toString();
-        }
+        // 构建查询参数（后端分页）
+        const params = new URLSearchParams({
+            page: currentPage,
+            per_page: perPage
+        });
+        if (status) params.append('status', status);
+        if (search) params.append('search', search);
         
         // 发送请求
-        const response = await fetch(url);
+        const response = await fetch(`/api/tasks?${params.toString()}`);
         const data = await response.json();
         
-        // 应用筛选
-        tasks = data.filter(task => {
-            // 状态筛选
-            if (status && task.status !== status) {
-                return false;
-            }
-            
-            // 算法筛选
-            if (algorithm && task.algorithm !== algorithm) {
-                return false;
-            }
-            
-            // 搜索筛选
-            if (search) {
-                const searchLower = search.toLowerCase();
-                const matchName = task.task_name.toLowerCase().includes(searchLower);
-                if (!matchName) {
-                    return false;
-                }
-            }
-            
-            return true;
-        });
+        // 后端返回分页数据
+        tasks = data.tasks || [];
+        totalTasks = data.total || 0;
+        totalPages = data.total_pages || 1;
         
         // 渲染任务列表
         renderTasks();
+        updateTaskPagination();
         
     } catch (error) {
         console.error('加载任务失败:', error);
@@ -809,7 +797,21 @@ function renderTasks() {
         if (tasks.length === 0) {
             tasksList.innerHTML = '';  // 显示空白列表
         } else {
-            tasksList.innerHTML = tasks.map(task => renderTaskListItem(task)).join('');
+            // 表格视图：表头 + 表格行
+            const tableHeader = `
+                <div class="task-table-header">
+                    <div class="task-table-col col-name">任务名称</div>
+                    <div class="task-table-col col-type">检测类型</div>
+                    <div class="task-table-col col-target">目标类别</div>
+                    <div class="task-table-col col-channel">设备通道</div>
+                    <div class="task-table-col col-tracking">跟踪</div>
+                    <div class="task-table-col col-motion">运动检测</div>
+                    <div class="task-table-col col-status">状态</div>
+                    <div class="task-table-col col-actions">操作</div>
+                </div>
+            `;
+            const tableRows = tasks.map(task => renderTaskTableRow(task)).join('');
+            tasksList.innerHTML = tableHeader + tableRows;
         }
     }
 }
@@ -821,30 +823,56 @@ function renderTasks() {
 function renderTaskCard(task) {
     const statusClass = `status-${task.status}`;
     const statusText = getStatusText(task.status);
-    const cameraCount = task.cameras ? task.cameras.length : 0;
-    const cameraNames = task.cameras ? task.cameras.map(c => c.camera_name || c.camera_id).join(', ') : '无';
+    const channelCount = task.channel_count || 0;
+    
+    // 检测类型文本
+    const detectionTypeText = task.detection_type === 'polling' ? '轮询检测' : '实时检测';
+    
+    // 目标类别
+    const targetClasses = task.target_classes || [];
+    const targetClassesText = targetClasses.length > 0 ? targetClasses.join(', ') : '无';
+    
+    // 跟踪和运动检测状态
+    const trackingEnabled = task.tracking_enabled !== false;
+    const motionDetectionEnabled = task.motion_detection_enabled !== false;
     
     return `
         <div class="task-card">
             <div class="task-card-header">
                 <div>
                     <div class="task-name">${escapeHtml(task.task_name)}</div>
-                    <div class="task-camera-count">${cameraCount} 个摄像机</div>
+                    <div class="task-camera-count">${channelCount} 个设备通道</div>
                 </div>
                 <span class="task-status-badge ${statusClass}">${statusText}</span>
             </div>
             <div class="task-card-body">
-                <div class="task-info-row">
-                    <span class="task-info-label">算法</span>
-                    <span class="task-info-value">${escapeHtml(task.algorithm)}</span>
-                </div>
-                <div class="task-info-row">
-                    <span class="task-info-label">置信度</span>
-                    <span class="task-info-value">${task.conf_threshold}</span>
-                </div>
-                <div class="task-info-row">
-                    <span class="task-info-label">摄像机</span>
-                    <span class="task-info-value">${escapeHtml(cameraNames)}</span>
+                <div class="task-info-grid">
+                    <div class="task-info-item" title="${escapeHtml(detectionTypeText)}">
+                        <span class="task-info-label">检测类型</span>
+                        <span class="task-info-value">${escapeHtml(detectionTypeText)}</span>
+                    </div>
+                    <div class="task-info-item" title="${escapeHtml(targetClassesText)}">
+                        <span class="task-info-label">目标类别</span>
+                        <span class="task-info-value">${escapeHtml(targetClassesText)}</span>
+                    </div>
+                    <div class="task-info-item" title="${trackingEnabled ? '已启用' : '未启用'}">
+                        <span class="task-info-label">跟踪</span>
+                        <span class="task-info-value">
+                            ${trackingEnabled ? 
+                                '<span class="status-enabled">已启用</span>' : 
+                                '<span class="status-disabled">未启用</span>'
+                            }
+                        </span>
+                    </div>
+                    <div class="task-info-item" title="${motionDetectionEnabled ? '已启用' : '未启用'}">
+                        <span class="task-info-label">运动检测</span>
+                        <span class="task-info-value">
+                            ${motionDetectionEnabled ? 
+                                '<span class="status-enabled">已启用</span>' : 
+                                '<span class="status-disabled">未启用</span>'
+                            }
+                        </span>
+                    </div>
                 </div>
             </div>
             <div class="task-card-footer">
@@ -856,36 +884,36 @@ function renderTaskCard(task) {
                 </div>
                 <div class="task-actions">
                     ${task.status === 'running' ? 
-                        `<button class="task-action-btn stop" onclick="stopTask(${task.id}, event)">
+                        `<button class="task-action-btn icon-only stop" onclick="stopTask(${task.id}, event)" title="停止">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M6 6h12v12H6z"/>
                             </svg>
-                            停止
+                            <span class="action-text">停止</span>
                         </button>` :
-                        `<button class="task-action-btn start" onclick="startTask(${task.id}, event)">
+                        `<button class="task-action-btn icon-only start" onclick="startTask(${task.id}, event)" title="启动">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M8 5v14l11-7z"/>
                             </svg>
-                            启动
+                            <span class="action-text">启动</span>
                         </button>`
                     }
-                    <button class="task-action-btn config" onclick="openConfigModal(${task.id}, event)">
+                    <button class="task-action-btn icon-only config" onclick="openConfigModal(${task.id}, event)" title="配置">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.11-0.21,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/>
                         </svg>
-                        配置
+                        <span class="action-text">配置</span>
                     </button>
-                    <button class="task-action-btn edit" onclick="openEditModal(${task.id}, event)">
+                    <button class="task-action-btn icon-only edit" onclick="openEditModal(${task.id}, event)" title="编辑">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
                         </svg>
-                        编辑
+                        <span class="action-text">编辑</span>
                     </button>
-                    <button class="task-action-btn delete" onclick="openDeleteModal(${task.id}, '${escapeHtml(task.task_name)}', event)">
+                    <button class="task-action-btn icon-only delete" onclick="openDeleteModal(${task.id}, '${escapeHtml(task.task_name)}', event)" title="删除">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
                         </svg>
-                        删除
+                        <span class="action-text">删除</span>
                     </button>
                 </div>
             </div>
@@ -894,35 +922,73 @@ function renderTaskCard(task) {
 }
 
 // ========================================
-// 渲染任务列表项
+// 渲染任务表格行
 // ========================================
 
-function renderTaskListItem(task) {
+function renderTaskTableRow(task) {
     const statusClass = `status-${task.status}`;
     const statusText = getStatusText(task.status);
-    const cameraCount = task.cameras ? task.cameras.length : 0;
+    const channelCount = task.channel_count || 0;
+    
+    // 检测类型文本
+    const detectionTypeText = task.detection_type === 'polling' ? '轮询检测' : '实时检测';
+    
+    // 目标类别
+    const targetClasses = task.target_classes || [];
+    const targetClassesText = targetClasses.length > 0 ? targetClasses.join(', ') : '无';
+    
+    // 跟踪和运动检测状态
+    const trackingEnabled = task.tracking_enabled !== false;
+    const motionDetectionEnabled = task.motion_detection_enabled !== false;
     
     return `
-        <div class="task-list-item">
-            <div class="task-list-main">
-                <div class="task-name">${escapeHtml(task.task_name)}</div>
-                <div class="task-meta">
-                    <span class="task-meta-item">${escapeHtml(task.algorithm)}</span>
-                    <span class="task-meta-item">${cameraCount} 摄像机</span>
-                    <span class="task-meta-item">置信度: ${task.conf_threshold}</span>
-                </div>
+        <div class="task-table-row">
+            <div class="task-table-col col-name">
+                <div class="task-name-text">${escapeHtml(task.task_name)}</div>
             </div>
-            <div class="task-list-status">
+            <div class="task-table-col col-type">${escapeHtml(detectionTypeText)}</div>
+            <div class="task-table-col col-target">${escapeHtml(targetClassesText)}</div>
+            <div class="task-table-col col-channel">${channelCount}</div>
+            <div class="task-table-col col-tracking">
+                ${trackingEnabled ? 
+                    '<span class="status-enabled">启用</span>' : 
+                    '<span class="status-disabled">停用</span>'
+                }
+            </div>
+            <div class="task-table-col col-motion">
+                ${motionDetectionEnabled ? 
+                    '<span class="status-enabled">启用</span>' : 
+                    '<span class="status-disabled">停用</span>'
+                }
+            </div>
+            <div class="task-table-col col-status">
                 <span class="task-status-badge ${statusClass}">${statusText}</span>
             </div>
-            <div class="task-list-actions">
-                ${task.status === 'running' ? 
-                    `<button class="task-action-btn stop" onclick="stopTask(${task.id}, event)">停止</button>` :
-                    `<button class="task-action-btn start" onclick="startTask(${task.id}, event)">启动</button>`
-                }
-                <button class="task-action-btn config" onclick="openConfigModal(${task.id}, event)">配置</button>
-                <button class="task-action-btn edit" onclick="openEditModal(${task.id}, event)">编辑</button>
-                <button class="task-action-btn delete" onclick="openDeleteModal(${task.id}, '${escapeHtml(task.task_name)}', event)">删除</button>
+            <div class="task-table-col col-actions">
+                <div class="task-table-actions">
+                    ${task.status === 'running' ? 
+                        `<button class="task-action-btn icon-only stop" onclick="stopTask(${task.id}, event)" title="停止">
+                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
+                            <span class="action-text">停止</span>
+                        </button>` :
+                        `<button class="task-action-btn icon-only start" onclick="startTask(${task.id}, event)" title="启动">
+                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                            <span class="action-text">启动</span>
+                        </button>`
+                    }
+                    <button class="task-action-btn icon-only config" onclick="openConfigModal(${task.id}, event)" title="配置">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.11-0.21,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
+                        <span class="action-text">配置</span>
+                    </button>
+                    <button class="task-action-btn icon-only edit" onclick="openEditModal(${task.id}, event)" title="编辑">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                        <span class="action-text">编辑</span>
+                    </button>
+                    <button class="task-action-btn icon-only delete" onclick="openDeleteModal(${task.id}, '${escapeHtml(task.task_name)}', event)" title="删除">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                        <span class="action-text">删除</span>
+                    </button>
+                </div>
             </div>
         </div>
     `;
@@ -1181,7 +1247,21 @@ async function openEditModal(taskId, event) {
         selectedChannels = task.channels ? task.channels.map(ch => ch.id) : [];
         renderChannelPool();
 
-        // 高级配置不再从表单读取，编辑模式下也不显示
+        // 加载检测器配置
+        const detectorConfig = task.detector_config || {};
+        const detectorBackend = document.getElementById('detectorBackend');
+        const detectorUseFp16 = document.getElementById('detectorUseFp16');
+        const detectorTensorrtLibPath = document.getElementById('detectorTensorrtLibPath');
+        const detectorTensorrtEnginePath = document.getElementById('detectorTensorrtEnginePath');
+        const detectorRknnTarget = document.getElementById('detectorRknnTarget');
+        const detectorRknnDeviceId = document.getElementById('detectorRknnDeviceId');
+
+        if (detectorBackend) detectorBackend.value = detectorConfig.backend || 'onnx_cuda';
+        if (detectorUseFp16) detectorUseFp16.value = detectorConfig.use_fp16 ? 'true' : 'false';
+        if (detectorTensorrtLibPath) detectorTensorrtLibPath.value = detectorConfig.tensorrt_lib_path || '';
+        if (detectorTensorrtEnginePath) detectorTensorrtEnginePath.value = detectorConfig.tensorrt_engine_path || '';
+        if (detectorRknnTarget) detectorRknnTarget.value = detectorConfig.rknn_target || 'rk3588';
+        if (detectorRknnDeviceId) detectorRknnDeviceId.value = detectorConfig.rknn_device_id || '';
 
         document.getElementById('taskModal').classList.add('show');
 
@@ -1551,10 +1631,18 @@ async function saveTask() {
 
         // 功能开关（新增）
         motion_detection_enabled: document.getElementById('motionDetectionEnabled').value === 'true',
-        tracking_enabled: document.getElementById('trackingEnabled').value === 'true'
-    };
+        tracking_enabled: document.getElementById('trackingEnabled').value === 'true',
 
-    // 高级配置不再从表单读取，使用后端默认配置（从配置文件读取）
+        // 检测器配置（新增）
+        detector_config: {
+            backend: document.getElementById('detectorBackend')?.value || 'onnx_cuda',
+            use_fp16: document.getElementById('detectorUseFp16')?.value === 'true',
+            tensorrt_lib_path: document.getElementById('detectorTensorrtLibPath')?.value || '',
+            tensorrt_engine_path: document.getElementById('detectorTensorrtEnginePath')?.value || '',
+            rknn_target: document.getElementById('detectorRknnTarget')?.value || 'rk3588',
+            rknn_device_id: document.getElementById('detectorRknnDeviceId')?.value || ''
+        }
+    };
 
     // 验证必填字段
     if (!formData.task_name) {
@@ -1731,6 +1819,98 @@ function getStatusText(status) {
     };
     return statusMap[status] || status;
 }
+
+// ========================================
+// 分页功能
+// ========================================
+
+function updateTaskPagination() {
+    const pagination = document.getElementById('taskPagination');
+    const prevBtn = document.getElementById('taskPrevBtn');
+    const nextBtn = document.getElementById('taskNextBtn');
+    const pageNumbers = document.getElementById('taskPageNumbers');
+    const paginationInfo = document.getElementById('taskPaginationInfo');
+
+    if (totalTasks === 0) {
+        pagination.style.display = 'none';
+        return;
+    }
+
+    pagination.style.display = 'flex';
+
+    // 更新信息
+    const startItem = totalTasks > 0 ? (currentPage - 1) * perPage + 1 : 0;
+    const endItem = Math.min(currentPage * perPage, totalTasks);
+    paginationInfo.textContent = `第 ${startItem}-${endItem} 条，共 ${totalTasks} 条`;
+
+    // 更新按钮状态
+    prevBtn.disabled = currentPage <= 1;
+    nextBtn.disabled = currentPage >= totalPages;
+
+    // 生成页码按钮
+    let pageHtml = '';
+    const maxVisiblePages = 5;
+    let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+    let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+
+    if (endPage - startPage < maxVisiblePages - 1) {
+        startPage = Math.max(1, endPage - maxVisiblePages + 1);
+    }
+
+    if (startPage > 1) {
+        pageHtml += `<button class="pagination-btn" onclick="taskGoToPage(1)">1</button>`;
+        if (startPage > 2) {
+            pageHtml += `<span class="pagination-ellipsis">...</span>`;
+        }
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+        pageHtml += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" onclick="taskGoToPage(${i})">${i}</button>`;
+    }
+
+    if (endPage < totalPages) {
+        if (endPage < totalPages - 1) {
+            pageHtml += `<span class="pagination-ellipsis">...</span>`;
+        }
+        pageHtml += `<button class="pagination-btn" onclick="taskGoToPage(${totalPages})">${totalPages}</button>`;
+    }
+
+    pageNumbers.innerHTML = pageHtml;
+}
+
+function taskGoToPage(page) {
+    currentPage = page;
+    loadTasks();
+}
+
+function taskPrevPage() {
+    if (currentPage > 1) {
+        currentPage--;
+        loadTasks();
+    }
+}
+
+function taskNextPage() {
+    if (currentPage < totalPages) {
+        currentPage++;
+        loadTasks();
+    }
+}
+
+function taskChangePageSize() {
+    perPage = parseInt(document.getElementById('taskPageSizeSelect').value);
+    currentPage = 1;
+    loadTasks();
+}
+
+function applyTaskFilters() {
+    currentPage = 1;
+    loadTasks();
+}
+
+// ========================================
+// 辅助函数
+// ========================================
 
 function escapeHtml(text) {
     if (!text) return '';

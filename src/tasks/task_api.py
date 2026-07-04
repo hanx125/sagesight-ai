@@ -47,14 +47,50 @@ def set_socketio(socketio_instance):
 
 @task_bp.route('/tasks', methods=['GET'])
 def get_tasks():
-    """获取所有任务"""
+    """获取所有任务（后端分页）"""
     enabled_only = request.args.get('enabled_only', 'false').lower() == 'true'
     status = request.args.get('status')
+    search = request.args.get('search', '')
+    
+    # 获取分页参数
+    page = int(request.args.get('page', 1))
+    per_page = int(request.args.get('per_page', 20))
     
     task_manager = get_task_manager()
     tasks = task_manager.get_all_tasks(enabled_only=enabled_only, status=status)
     
-    return jsonify([task.to_dict() for task in tasks])
+    # 获取每个任务关联的设备通道数量
+    from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager
+    channel_pool_manager = get_device_channel_pool_manager()
+    
+    task_list = []
+    for task in tasks:
+        task_dict = task.to_dict()
+        # 统计device_channel_pool表中该任务关联的设备通道数量
+        channels = channel_pool_manager.get_task_device_channels(task.id)
+        task_dict['channel_count'] = len(channels)
+        task_list.append(task_dict)
+    
+    # 应用搜索筛选
+    if search:
+        search_lower = search.lower()
+        task_list = [t for t in task_list if 
+                     search_lower in t.get('task_name', '').lower()]
+    
+    # 后端分页
+    total = len(task_list)
+    total_pages = (total + per_page - 1) // per_page if per_page > 0 else 1
+    start = (page - 1) * per_page
+    end = start + per_page
+    tasks_page = task_list[start:end]
+    
+    return jsonify({
+        'tasks': tasks_page,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'total_pages': total_pages
+    })
 
 
 @task_bp.route('/tasks/<int:task_id>', methods=['GET'])
@@ -474,22 +510,101 @@ def get_algorithms():
 @task_bp.route('/events', methods=['GET'])
 def get_events():
     """获取事件列表"""
+    # 分页参数
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
+    offset = (page - 1) * per_page
+    
+    # 筛选参数
     task_id = request.args.get('task_id', type=int)
     camera_id = request.args.get('camera_id')
     algorithm = request.args.get('algorithm')
-    limit = request.args.get('limit', 100, type=int)
-    offset = request.args.get('offset', 0, type=int)
+    class_name = request.args.get('class_name')
     
     task_manager = get_task_manager()
     events = task_manager.get_events(
         task_id=task_id, 
         camera_id=camera_id,
         algorithm=algorithm,
-        limit=limit, 
+        limit=per_page, 
         offset=offset
     )
     
-    return jsonify([event.to_dict() for event in events])
+    # 获取总数
+    total = task_manager.get_event_count(
+        task_id=task_id,
+        camera_id=camera_id,
+        algorithm=algorithm
+    )
+    
+    events_dict = [event.to_dict() for event in events]
+    
+    # 如果有 class_name 筛选，在这里过滤
+    if class_name:
+        events_dict = [e for e in events_dict if e.get('class_name') == class_name]
+        total = len(events_dict)
+    
+    # 关联查询设备通道名称
+    try:
+        import sqlite3
+        # 通过 JOIN 查询建立 camera_id -> channel_name 的映射
+        db_path = channel_pool_manager.db_path if 'channel_pool_manager' in dir() else 'data/tasks.db'
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT b.camera_id, d.channel_name 
+                FROM camera_device_channel_bindings b 
+                JOIN device_channel_pool d ON b.channel_id = d.id
+            ''')
+            channel_name_map = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        # 为每个事件添加 channel_name 字段
+        for event_dict in events_dict:
+            camera_id_value = event_dict.get('camera_id', '')
+            event_dict['channel_name'] = channel_name_map.get(camera_id_value, camera_id_value)
+    except Exception as e:
+        # 如果查询失败，使用 camera_id 作为显示名称
+        for event_dict in events_dict:
+            event_dict['channel_name'] = event_dict.get('camera_id', '-')
+    
+    return jsonify({
+        'events': events_dict,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'total_pages': (total + per_page - 1) // per_page if per_page > 0 else 1
+    })
+
+
+@task_bp.route('/events/<event_id>', methods=['GET'])
+def get_event_detail(event_id):
+    """获取单个事件详情"""
+    task_manager = get_task_manager()
+    
+    # event_id 是 UUID 字符串，需要通过数据库查询
+    events = task_manager.get_events(limit=1000)
+    event = next((e for e in events if e.event_id == event_id), None)
+    
+    if event:
+        event_dict = event.to_dict()
+        # 添加 channel_name 字段
+        try:
+            import sqlite3
+            with sqlite3.connect('data/tasks.db') as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT d.channel_name 
+                    FROM camera_device_channel_bindings b 
+                    JOIN device_channel_pool d ON b.channel_id = d.id
+                    WHERE b.camera_id = ?
+                ''', (event.camera_id,))
+                row = cursor.fetchone()
+                if row:
+                    event_dict['channel_name'] = row[0]
+        except Exception:
+            pass
+        return jsonify(event_dict)
+    return jsonify({'error': '事件不存在'}), 404
 
 
 @task_bp.route('/events/count', methods=['GET'])

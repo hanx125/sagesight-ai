@@ -54,7 +54,7 @@ class EventOutput:
         # 图片本地保存配置
         image_cfg = config.get('image_output', {})
         self.local_backup_enabled = image_cfg.get('local_backup', False)  # 是否本地备份
-        self.local_output_dir = image_cfg.get('output_dir', 'data/images')  # 本地保存目录
+        self.local_output_dir = image_cfg.get('output_dir', 'output/images')  # 本地保存目录（默认 output/images）
         self.local_retention_days = image_cfg.get('local_retention_days', 7)  # 本地保存天数
         self.auto_cleanup = image_cfg.get('auto_cleanup', True)  # 是否自动清理
         self.cleanup_interval_hours = image_cfg.get('cleanup_interval_hours', 24)  # 清理间隔
@@ -62,13 +62,12 @@ class EventOutput:
         # 上次清理时间
         self.last_cleanup_time = 0
         
-        # 创建本地保存目录
-        if self.local_backup_enabled or self.auto_cleanup:
-            os.makedirs(self.local_output_dir, exist_ok=True)
-            
-            # 启动时清理一次
-            if self.auto_cleanup:
-                self._cleanup_old_images()
+        # 创建本地保存目录（强制创建，无论配置如何）
+        os.makedirs(self.local_output_dir, exist_ok=True)
+        
+        # 启动时清理一次（如果启用自动清理）
+        if self.auto_cleanup:
+            self._cleanup_old_images()
         
         # 图片压缩配置
         self.compression_cfg = config.get('compression', {})
@@ -241,6 +240,19 @@ class EventOutput:
         _, buffer = cv2.imencode('.jpg', image, encode_param)
         return buffer.tobytes()
     
+    def should_send(self, class_name: str, confidence: float) -> bool:
+        """
+        公共方法：检查事件是否通过过滤（供外部调用，避免无效GIF/图片生成）
+        
+        Args:
+            class_name: 目标类别名称
+            confidence: 检测置信度
+        
+        Returns:
+            是否应该发送
+        """
+        return self._should_send(class_name, confidence)
+    
     def _should_send(self, class_name: str, confidence: float) -> bool:
         """
         检查是否应该发送此事件
@@ -400,12 +412,11 @@ class EventOutput:
                 compressed_image = self._compress_image(image)
                 print(f"[EventOutput]   图片压缩成功: {len(compressed_image)} bytes")
                 
-                # 1. 先保存到本地（如果启用本地保存）
-                if self.local_backup_enabled or not self.image_outputters:
-                    local_image_path = self._save_image_local(event_id, compressed_image)
-                    if local_image_path:
-                        image_urls['local'] = local_image_path
-                        print(f"[EventOutput]   图片本地保存成功: {local_image_path}")
+                # ✅ 强制先保存到本地（无论配置如何，符合项目约束）
+                local_image_path = self._save_image_local(event_id, compressed_image)
+                if local_image_path:
+                    image_urls['local'] = local_image_path
+                    print(f"[EventOutput]   图片本地保存成功: {local_image_path}")
                 
                 # 2. 再根据配置上传到远程服务器（MinIO/FTP）
                 if self.image_outputters:
@@ -416,26 +427,20 @@ class EventOutput:
                             print(f"[EventOutput]   图片上传成功 ({outputter.__class__.__name__}): {url}")
                         except Exception as e:
                             print(f"[EventOutput] 图片上传失败 ({outputter.__class__.__name__}): {e}")
-                            # 上传失败时，确保本地已保存
-                            if not local_image_path and self.local_backup_enabled:
-                                local_image_path = self._save_image_local(event_id, compressed_image)
-                                if local_image_path:
-                                    image_urls['local'] = local_image_path
                         
             except Exception as e:
                 print(f"[EventOutput] 图片处理失败: {e}")
                 import traceback
                 traceback.print_exc()
                 
-                # 处理失败时也尝试本地保存
-                if self.local_backup_enabled:
-                    try:
-                        compressed_image = self._compress_image(image)
-                        local_image_path = self._save_image_local(event_id, compressed_image)
-                        if local_image_path:
-                            image_urls['local'] = local_image_path
-                    except Exception as e2:
-                        print(f"[EventOutput] 本地保存失败: {e2}")
+                # 处理失败时也强制本地保存
+                try:
+                    compressed_image = self._compress_image(image)
+                    local_image_path = self._save_image_local(event_id, compressed_image)
+                    if local_image_path:
+                        image_urls['local'] = local_image_path
+                except Exception as e2:
+                    print(f"[EventOutput] 本地保存失败: {e2}")
         else:
             print(f"[EventOutput]   未传入图片，跳过图片处理")
         
@@ -479,6 +484,11 @@ class EventOutput:
             from src.tasks.task_manager import TaskManager, EventRecord
             
             task_manager = TaskManager()
+            # 分别保存三个独立的图片URL字段
+            image_urls = event.get('image_urls', {})
+            # 提取GIF URL字典
+            gif_urls = event.get('data', {}).get('gif_urls', {})
+            
             event_record = EventRecord(
                 event_id=event['event_id'],
                 task_id=event.get('task_id'),
@@ -488,14 +498,76 @@ class EventOutput:
                 class_name=event['data'].get('class_name', ''),
                 confidence=event['data'].get('confidence', 0.0),
                 bbox=event['data'].get('bbox', []),
-                image_url=event.get('image_urls', {}).get('MinIOOutputter', '') or 
-                          event.get('image_urls', {}).get('FTPOutputter', ''),
-                metadata=event.get('metadata', {})
+                local_image_url=image_urls.get('local', ''),
+                minio_image_url=image_urls.get('MinIOOutputter', ''),
+                ftp_image_url=image_urls.get('FTPOutputter', ''),
+                local_gif_url=gif_urls.get('local', ''),
+                minio_gif_url=gif_urls.get('minio', ''),
+                ftp_gif_url=gif_urls.get('ftp', ''),
+                metadata=event.get('metadata', {}),
+                start_time=self._parse_datetime(event['data'].get('start_time')),
+                end_time=self._parse_datetime(event['data'].get('end_time'))
             )
             task_manager.add_event(event_record)
             
+            # 设置created_at（add_event未回写对象）
+            if not event_record.created_at:
+                event_record.created_at = datetime.now()
+            
+            # 通过WebSocket实时推送新事件到前端
+            self._push_event_to_websocket(event_record)
+            
         except Exception as e:
             print(f"[EventOutput] 保存事件到数据库失败: {e}")
+    
+    @staticmethod
+    def _parse_datetime(value):
+        """安全解析时间字符串"""
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value
+        try:
+            return datetime.fromisoformat(str(value))
+        except (ValueError, TypeError):
+            try:
+                return datetime.strptime(str(value), '%Y-%m-%d %H:%M:%S')
+            except (ValueError, TypeError):
+                return None
+    
+    def _push_event_to_websocket(self, event_record):
+        """通过HTTP API推送事件到Flask服务器，再由服务器通过WebSocket广播到驾驶舱"""
+        try:
+            import requests
+            
+            # 构建前端需要的事件数据
+            event_data = {
+                'event_id': event_record.event_id,
+                'task_id': event_record.task_id,
+                'camera_id': event_record.camera_id,
+                'algorithm': event_record.algorithm,
+                'type': event_record.type,
+                'class_name': event_record.class_name,
+                'confidence': event_record.confidence,
+                'bbox': event_record.bbox,
+                'local_image_url': event_record.local_image_url,
+                'minio_image_url': event_record.minio_image_url,
+                'ftp_image_url': event_record.ftp_image_url,
+                'start_time': event_record.start_time.isoformat() + 'Z' if event_record.start_time else None,
+                'end_time': event_record.end_time.isoformat() + 'Z' if event_record.end_time else None,
+                'created_at': event_record.created_at.isoformat() + 'Z' if event_record.created_at else None
+            }
+            
+            # 通过HTTP POST发送到Flask服务器，由服务器通过WebSocket广播
+            resp = requests.post(
+                'http://127.0.0.1:5555/api/events/push',
+                json=event_data,
+                timeout=2
+            )
+            print(f"[EventOutput] 事件已推送到驾驶舱: {event_record.event_id[:8]}... type={event_record.type}")
+            
+        except Exception as e:
+            print(f"[EventOutput] 推送事件到驾驶舱失败: {e}")
     
     def emit_detection(self, track_id: int, class_name: str, confidence: float, 
                     bbox: List[float], image: Optional[np.ndarray] = None, 

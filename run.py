@@ -16,7 +16,7 @@ import numpy as np
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
-from flask import Flask, render_template, jsonify, request, Response
+from flask import Flask, render_template, jsonify, request, Response, redirect, session, url_for
 from flask_socketio import SocketIO, emit
 import logging
 
@@ -35,12 +35,53 @@ from src.cameras.directory_api import register_directory_blueprint
 from src.cameras.ptz_api import register_ptz_api
 from src.cameras.audio_talk_api import init_audio_talk_api
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# 配置日志（从system_config.yaml加载，支持文件输出和轮转）
+import yaml
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+_log_config_path = Path(__file__).parent / 'config' / 'system_config.yaml'
+_log_cfg = {}
+if _log_config_path.exists():
+    with open(_log_config_path, 'r', encoding='utf-8') as _f:
+        _full_cfg = yaml.safe_load(_f) or {}
+    _log_cfg = _full_cfg.get('logging', {})
+
+_log_level = getattr(logging, _log_cfg.get('level', 'INFO').upper(), logging.INFO)
+_log_format = _log_cfg.get('format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+_log_file = _log_cfg.get('file', 'logs/system.log')
+_log_max_size = int(_log_cfg.get('max_size', 10)) * 1024 * 1024
+_log_backup_count = int(_log_cfg.get('backup_count', 5))
+_log_console = _log_cfg.get('console', True)
+
+# 确保日志目录存在
+_log_path = Path(_log_file)
+_log_path.parent.mkdir(parents=True, exist_ok=True)
+
+# 配置根logger
+_root_logger = logging.getLogger()
+_root_logger.setLevel(_log_level)
+
+# 清除默认handler
+_root_logger.handlers.clear()
+
+# 文件handler（带轮转）
+_file_handler = RotatingFileHandler(
+    _log_file, maxBytes=_log_max_size, backupCount=_log_backup_count, encoding='utf-8'
 )
+_file_handler.setLevel(_log_level)
+_file_handler.setFormatter(logging.Formatter(_log_format))
+_root_logger.addHandler(_file_handler)
+
+# 控制台handler
+if _log_console:
+    _console_handler = logging.StreamHandler()
+    _console_handler.setLevel(_log_level)
+    _console_handler.setFormatter(logging.Formatter(_log_format))
+    _root_logger.addHandler(_console_handler)
+
 logger = logging.getLogger(__name__)
+logger.info(f"日志系统初始化完成: file={_log_file}, level={_log_cfg.get('level', 'INFO')}, max_size={_log_cfg.get('max_size', 10)}MB")
 
 
 # ========================================
@@ -242,6 +283,32 @@ register_stream_blueprint(app)
 register_directory_blueprint(app)
 register_ptz_api(app)
 
+# 注册认证模块
+from src.auth.auth_api import register_auth_blueprint, login_required, get_current_user
+register_auth_blueprint(app)
+
+# 会话配置
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.permanent_session_lifetime = 86400  # 24小时
+
+# ========================================
+# 静态文件路由 - 提供output目录访问
+# ========================================
+from flask import send_from_directory
+
+@app.route('/output/images/<path:filename>')
+def serve_output_image(filename):
+    """提供output/images目录下的图片访问"""
+    output_dir = os.path.join(os.path.dirname(__file__), 'output', 'images')
+    return send_from_directory(output_dir, filename)
+
+@app.route('/output/<path:filename>')
+def serve_output_file(filename):
+    """提供output目录下的文件访问"""
+    output_dir = os.path.join(os.path.dirname(__file__), 'output')
+    return send_from_directory(output_dir, filename)
+
 # 全局实例
 task_manager = None
 process_manager = None
@@ -264,12 +331,45 @@ def get_process_manager():
 
 
 # ========================================
+# 认证中间件 - 未登录重定向到登录页
+# ========================================
+
+# 不需要认证的路径前缀
+PUBLIC_PATHS = ('/login', '/api/auth/', '/api/ai-stream/', '/api/events/push', '/static/', '/output/')
+
+@app.before_request
+def check_auth():
+    """全局认证检查"""
+    # 静态资源、登录页、认证API不需要检查
+    if request.path.startswith(PUBLIC_PATHS):
+        return None
+    
+    # 已登录则放行
+    if 'user_id' in session:
+        return None
+    
+    # API请求返回401
+    if request.path.startswith('/api/'):
+        return jsonify({'error': '未登录', 'code': 'UNAUTHORIZED'}), 401
+    
+    # 页面请求重定向到登录页
+    return redirect('/login')
+
+
+# ========================================
 # 页面路由
 # ========================================
 
+@app.route('/login')
+def login_page():
+    """登录页面"""
+    if 'user_id' in session:
+        return redirect('/')
+    return render_template('login.html')
+
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('monitor.html')
 
 @app.route('/tasks')
 def tasks_page():
@@ -312,64 +412,37 @@ def system_page():
 # - display_config: 前端传入 > 配置文件默认值
 
 # ========================================
-# 事件管理 API
+# 事件管理 API（主要路由在 task_api.py 蓝图中）
 # ========================================
+# 注意：/api/events 路由已在 task_api.py 蓝图中定义
+# 这里只定义额外的事件相关路由
 
-_events_store = [
-    {
-        'id': 1,
-        'task_id': 1,
-        'camera_id': 'camera_001',
-        'type': 'detection',
-        'class_name': 'person',
-        'confidence': 0.92,
-        'description': '检测到人员进入监控区域',
-        'severity': 'info',
-        'acknowledged': False,
-        'created_at': datetime.now().isoformat()
-    }
-]
-
-@app.route('/api/events', methods=['GET'])
-def get_events():
-    page = int(request.args.get('page', 1))
-    per_page = int(request.args.get('per_page', 20))
-    severity = request.args.get('severity')
-    acknowledged = request.args.get('acknowledged')
+@app.route('/api/events/stats', methods=['GET'])
+def get_event_stats():
+    """获取事件统计"""
+    tm = get_task_manager()
     
-    events = _events_store
+    total = tm.get_event_count()
     
-    if severity:
-        events = [e for e in events if e.get('severity') == severity]
-    if acknowledged is not None:
-        events = [e for e in events if e.get('acknowledged') == (acknowledged.lower() == 'true')]
-    
-    total = len(events)
-    events = events[(page-1)*per_page : page*per_page]
+    # 按类型统计
+    import sqlite3
+    with sqlite3.connect(tm.db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT type, COUNT(*) FROM events GROUP BY type')
+        type_stats = dict(cursor.fetchall())
+        
+        cursor.execute('SELECT class_name, COUNT(*) FROM events GROUP BY class_name ORDER BY COUNT(*) DESC LIMIT 10')
+        class_stats = dict(cursor.fetchall())
+        
+        cursor.execute('SELECT DATE(created_at) as date, COUNT(*) FROM events GROUP BY DATE(created_at) ORDER BY date DESC LIMIT 7')
+        daily_stats = [{'date': row[0], 'count': row[1]} for row in cursor.fetchall()]
     
     return jsonify({
-        'events': events,
         'total': total,
-        'page': page,
-        'per_page': per_page
+        'by_type': type_stats,
+        'by_class': class_stats,
+        'daily': daily_stats
     })
-
-@app.route('/api/events/<int:event_id>', methods=['GET'])
-def get_event(event_id):
-    event = next((e for e in _events_store if e['id'] == event_id), None)
-    if event:
-        return jsonify(event)
-    return jsonify({'error': '事件不存在'}), 404
-
-@app.route('/api/events/<int:event_id>/acknowledge', methods=['POST'])
-def acknowledge_event(event_id):
-    event = next((e for e in _events_store if e['id'] == event_id), None)
-    if event:
-        event['acknowledged'] = True
-        event['acknowledged_at'] = datetime.now().isoformat()
-        socketio.emit('event_acknowledged', {'event_id': event_id}, namespace='/ws')
-        return jsonify({'success': True})
-    return jsonify({'error': '事件不存在'}), 404
 
 
 # ========================================
@@ -441,6 +514,25 @@ def push_ai_stream_frame():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/events/push', methods=['POST'])
+def push_event_to_websocket():
+    """接收任务进程推送的事件数据，并通过 WebSocket 广播到驾驶舱"""
+    try:
+        data = request.get_json()
+        if not data or 'event_id' not in data:
+            return jsonify({'error': '参数不完整'}), 400
+        
+        # 通过 WebSocket 广播到驾驶舱
+        socketio.emit('new_event', data, namespace='/ws')
+        logger.debug(f"事件已推送到驾驶舱: {data.get('event_id', '')[:8]}... type={data.get('type', '')}")
+        
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        logger.error(f"推送事件到驾驶舱失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/ai-stream/enable/<camera_id>', methods=['POST'])
 def enable_ai_stream(camera_id):
     """启用摄像机的 AI 视频流"""
@@ -503,14 +595,16 @@ def get_stats():
     running_tasks = [t for t in all_tasks if t.status == 'running']
     running_process_ids = pm.get_running_tasks()
     
+    # 从数据库获取事件统计
+    total_events = tm.get_event_count()
+    
     return jsonify({
         'total_tasks': len(all_tasks),
         'running_tasks': len(running_tasks),
         'running_processes': len(running_process_ids),
         'stopped_tasks': len([t for t in all_tasks if t.status == 'stopped']),
         'error_tasks': len([t for t in all_tasks if t.status == 'error']),
-        'total_events': len(_events_store),
-        'unacknowledged_events': len([e for e in _events_store if not e.get('acknowledged', False)])
+        'total_events': total_events
     })
 
 

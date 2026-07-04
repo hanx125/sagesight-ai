@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}监控墙{% endblock %}
+{% block title %}驾驶舱{% endblock %}
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/nipplejs-ptz.css') }}">
@@ -32,7 +32,7 @@
         </div>
     </div>
     
-    <!-- 右侧电视墙区域 -->
+    <!-- 右侧驾驶舱区域 -->
     <div class="monitor-main">
         <!-- 工具栏 -->
         <div class="monitor-toolbar">
@@ -55,6 +55,9 @@
             </div>
             
             <div class="toolbar-center">
+            </div>
+            
+            <div class="toolbar-right">
                 <button class="toolbar-btn" onclick="clearAllScreens()">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
@@ -67,9 +70,6 @@
                     </svg>
                     自动排列
                 </button>
-            </div>
-            
-            <div class="toolbar-right">
                 <button class="toolbar-btn fullscreen-btn" onclick="toggleFullscreen()">
                     <svg viewBox="0 0 24 24" fill="currentColor" id="fullscreenIcon">
                         <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
@@ -79,9 +79,33 @@
             </div>
         </div>
         
-        <!-- 电视墙区域 -->
+        <!-- 驾驶舱区域 -->
         <div class="monitor-wall" id="monitorWall">
             <!-- 画面格子将通过 JavaScript 动态生成 -->
+        </div>
+    </div>
+
+    <!-- 右侧事件列表 -->
+    <div class="event-sidebar">
+        <div class="sidebar-header">
+            <h3>实时事件</h3>
+            <div class="event-filter">
+                <select id="eventTaskFilter" onchange="loadMonitorEvents()">
+                    <option value="">全部任务</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="sidebar-body" id="eventListContainer">
+            <div id="eventScroller" class="event-scroller">
+                <!-- 事件图片将通过 JavaScript 动态加载 -->
+            </div>
+        </div>
+
+        <div class="sidebar-footer">
+            <div class="sidebar-stats">
+                <span id="eventCount">事件: 0</span>
+            </div>
         </div>
     </div>
 </div>
@@ -524,6 +548,79 @@
     </div>
 </div>
 
+<!-- 事件详情模态框 -->
+<div id="monitorEventDetailModal" class="modal">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h3>事件详情</h3>
+            <button class="modal-close" onclick="closeMonitorEventDetail()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="event-detail-content">
+                <div class="event-detail-image-container">
+                    <div class="event-media-switcher">
+                        <button class="btn btn-sm btn-primary" id="monitorShowImageBtn" onclick="switchMonitorEventMedia('image')">显示图片</button>
+                        <button class="btn btn-sm btn-secondary" id="monitorShowGifBtn" onclick="switchMonitorEventMedia('gif')">显示GIF</button>
+                    </div>
+                    <img id="monitorEventImage" src="" alt="事件图片" class="event-detail-image" style="display: block;">
+                    <img id="monitorEventGif" src="" alt="事件GIF" class="event-detail-image" style="display: none;">
+                    <div class="event-detail-no-media" id="monitorEventNoMedia" style="display: none;">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                        </svg>
+                        <span>无媒体文件</span>
+                    </div>
+                </div>
+                <div class="event-detail-info">
+                    <div class="event-detail-row">
+                        <label>事件ID：</label>
+                        <span id="monitorEventId"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>事件类型：</label>
+                        <span id="monitorEventType"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>目标类别：</label>
+                        <span id="monitorEventClass"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>置信度：</label>
+                        <span id="monitorEventConfidence"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>设备通道：</label>
+                        <span id="monitorEventChannel"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>任务：</label>
+                        <span id="monitorEventTask"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>算法：</label>
+                        <span id="monitorEventAlgorithm"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>起始时间：</label>
+                        <span id="monitorEventStartTime"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>终止时间：</label>
+                        <span id="monitorEventEndTime"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>记录时间：</label>
+                        <span id="monitorEventTime"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeMonitorEventDetail()">关闭</button>
+        </div>
+    </div>
+</div>
+
 <!-- 截图预览模态框 -->
 <div id="snapshotModal" class="modal">
     <div class="modal-content">
@@ -545,7 +642,608 @@
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/ZLMRTCClient.js') }}"></script>
 <script src="{{ url_for('static', filename='js/jessibuca/jessibuca.js') }}"></script>
-<script src="{{ url_for('static', filename='js/monitor.js') }}"></script>
+<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260704"></script>
 <script src="{{ url_for('static', filename='js/ptz_joystick.js') }}"></script>
 <script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}"></script>
+<script>
+// ========================================
+// 驾驶舱事件列表功能
+// ========================================
+
+let monitorEvents = [];
+let eventWebSocket = null;
+
+// 初始化事件列表
+async function initMonitorEventList() {
+    await loadMonitorTasks();  // 先加载任务映射，确保事件渲染时任务名称可用
+    loadMonitorEvents();
+    initEventWebSocket();
+}
+
+// 加载任务列表
+let monitorTaskMap = {};  // 任务ID到名称的映射
+
+async function loadMonitorTasks() {
+    try {
+        const response = await fetch('/api/tasks?per_page=1000');
+        const data = await response.json();
+        const tasks = data.tasks || data || [];
+        const select = document.getElementById('eventTaskFilter');
+
+        // 清空旧选项（保留"全部任务"）
+        select.innerHTML = '<option value="">全部任务</option>';
+
+        // 构建任务映射并填充下拉框
+        monitorTaskMap = {};
+        tasks.forEach(task => {
+            monitorTaskMap[task.id] = task.task_name;
+            const option = document.createElement('option');
+            option.value = task.id;
+            option.textContent = task.task_name;
+            select.appendChild(option);
+        });
+    } catch (error) {
+        console.error('加载任务列表失败:', error);
+    }
+}
+
+// 根据task_id获取任务名称
+function getTaskNameById(taskId) {
+    return monitorTaskMap[taskId] || '';
+}
+
+// 加载事件列表
+async function loadMonitorEvents() {
+    try {
+        const taskFilter = document.getElementById('eventTaskFilter').value;
+        let url = '/api/events?per_page=50';
+        if (taskFilter) {
+            url += `&task_id=${taskFilter}`;
+        }
+
+        const response = await fetch(url);
+        const data = await response.json();
+        monitorEvents = data.events || [];
+
+        renderMonitorEvents();
+        updateEventCount();
+    } catch (error) {
+        console.error('加载事件列表失败:', error);
+    }
+}
+
+// 渲染事件列表
+function renderMonitorEvents() {
+    const scroller = document.getElementById('eventScroller');
+    scroller.innerHTML = '';
+
+    monitorEvents.forEach(event => {
+        const eventCard = createMonitorEventCard(event);
+        scroller.appendChild(eventCard);
+    });
+
+    // 自动滚动到底部（显示最新事件）
+    scroller.scrollTop = 0;
+}
+
+// 创建事件卡片
+function createMonitorEventCard(event) {
+    const card = document.createElement('div');
+    card.className = 'monitor-event-card';
+    card.onclick = () => showMonitorEventDetail(event);
+
+    const imageContainer = document.createElement('div');
+    imageContainer.className = 'event-image-container';
+
+    // 优先使用本地图片
+    const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
+    if (imageUrl) {
+        const img = document.createElement('img');
+        img.src = imageUrl;
+        img.alt = `事件 ${event.event_id}`;
+        img.onerror = () => {
+            imageContainer.innerHTML = '<div class="event-no-image"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></div>';
+        };
+        imageContainer.appendChild(img);
+    } else {
+        imageContainer.innerHTML = '<div class="event-no-image"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></div>';
+    }
+
+    card.appendChild(imageContainer);
+
+    const infoContainer = document.createElement('div');
+    infoContainer.className = 'event-info-container';
+    infoContainer.innerHTML = `
+        <div class="event-info-row">
+            <span class="event-tag tag-type">${formatEventType(event.type)}</span>
+            <span class="event-tag tag-class">${event.class_name || '-'}</span>
+        </div>
+        <div class="event-info-row">
+            <span class="event-tag tag-task">${getTaskNameById(event.task_id) || '-'}</span>
+            <span class="event-tag tag-time">${formatEventTime(event.start_time || event.created_at)}</span>
+        </div>
+    `;
+    card.appendChild(infoContainer);
+
+    return card;
+}
+
+// 显示事件详情
+function showMonitorEventDetail(event) {
+    const modal = document.getElementById('monitorEventDetailModal');
+
+    // 存储当前事件的媒体URL（用于切换）
+    window._currentMonitorEvent = event;
+
+    // 设置图片
+    const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
+    const eventImage = document.getElementById('monitorEventImage');
+
+    // 设置GIF
+    const gifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
+    const eventGif = document.getElementById('monitorEventGif');
+
+    // 默认显示图片
+    if (imageUrl) {
+        eventImage.src = imageUrl;
+        eventImage.style.display = 'block';
+        eventGif.style.display = 'none';
+        document.getElementById('monitorEventNoMedia').style.display = 'none';
+        // 更新按钮状态
+        document.getElementById('monitorShowImageBtn').classList.remove('btn-secondary');
+        document.getElementById('monitorShowImageBtn').classList.add('btn-primary');
+        document.getElementById('monitorShowGifBtn').classList.remove('btn-primary');
+        document.getElementById('monitorShowGifBtn').classList.add('btn-secondary');
+    } else if (gifUrl) {
+        // 如果没有图片但有GIF，显示GIF
+        eventGif.src = gifUrl;
+        eventGif.style.display = 'block';
+        eventImage.style.display = 'none';
+        document.getElementById('monitorEventNoMedia').style.display = 'none';
+        // 更新按钮状态
+        document.getElementById('monitorShowImageBtn').classList.remove('btn-primary');
+        document.getElementById('monitorShowImageBtn').classList.add('btn-secondary');
+        document.getElementById('monitorShowGifBtn').classList.remove('btn-secondary');
+        document.getElementById('monitorShowGifBtn').classList.add('btn-primary');
+    } else {
+        // 都没有，显示占位符
+        eventImage.style.display = 'none';
+        eventGif.style.display = 'none';
+        document.getElementById('monitorEventNoMedia').style.display = 'block';
+    }
+
+    // 设置GIF URL（即使当前不显示）
+    if (gifUrl) {
+        eventGif.src = gifUrl;
+    }
+
+    // 设置详情信息
+    document.getElementById('monitorEventId').textContent = event.event_id || '-';
+    document.getElementById('monitorEventType').textContent = formatEventType(event.type);
+    document.getElementById('monitorEventClass').textContent = event.class_name || '-';
+    document.getElementById('monitorEventConfidence').textContent = event.confidence ? `${(event.confidence * 100).toFixed(1)}%` : '-';
+    document.getElementById('monitorEventChannel').textContent = event.channel_name || event.camera_id || '-';
+    document.getElementById('monitorEventTask').textContent = getTaskNameById(event.task_id) || event.task_name || '-';
+    document.getElementById('monitorEventAlgorithm').textContent = event.algorithm || '-';
+    document.getElementById('monitorEventStartTime').textContent = formatEventTime(event.start_time);
+    document.getElementById('monitorEventEndTime').textContent = formatEventTime(event.end_time);
+    document.getElementById('monitorEventTime').textContent = formatEventTime(event.created_at);
+
+    // 如果缺少 channel_name，异步从 API 获取并更新
+    if (!event.channel_name && event.event_id) {
+        fetch(`/api/tasks/events/${event.event_id}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.channel_name) {
+                    document.getElementById('monitorEventChannel').textContent = data.channel_name;
+                }
+            })
+            .catch(() => {});
+    }
+
+    modal.style.display = 'flex';
+}
+
+// 切换事件媒体显示（图片/GIF）
+function switchMonitorEventMedia(type) {
+    const event = window._currentMonitorEvent;
+    if (!event) return;
+
+    const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
+    const gifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
+
+    const eventImage = document.getElementById('monitorEventImage');
+    const eventGif = document.getElementById('monitorEventGif');
+    const noMedia = document.getElementById('monitorEventNoMedia');
+
+    if (type === 'image') {
+        if (imageUrl) {
+            eventImage.src = imageUrl;
+            eventImage.style.display = 'block';
+            eventGif.style.display = 'none';
+            noMedia.style.display = 'none';
+            // 更新按钮状态
+            document.getElementById('monitorShowImageBtn').classList.remove('btn-secondary');
+            document.getElementById('monitorShowImageBtn').classList.add('btn-primary');
+            document.getElementById('monitorShowGifBtn').classList.remove('btn-primary');
+            document.getElementById('monitorShowGifBtn').classList.add('btn-secondary');
+        } else {
+            // 无图片
+            eventImage.style.display = 'none';
+            eventGif.style.display = 'none';
+            noMedia.style.display = 'block';
+        }
+    } else if (type === 'gif') {
+        if (gifUrl) {
+            eventGif.src = gifUrl;
+            eventGif.style.display = 'block';
+            eventImage.style.display = 'none';
+            noMedia.style.display = 'none';
+            // 更新按钮状态
+            document.getElementById('monitorShowImageBtn').classList.remove('btn-primary');
+            document.getElementById('monitorShowImageBtn').classList.add('btn-secondary');
+            document.getElementById('monitorShowGifBtn').classList.remove('btn-secondary');
+            document.getElementById('monitorShowGifBtn').classList.add('btn-primary');
+        } else {
+            // 无GIF
+            eventImage.style.display = 'none';
+            eventGif.style.display = 'none';
+            noMedia.style.display = 'block';
+        }
+    }
+}
+
+// 关闭事件详情
+function closeMonitorEventDetail() {
+    const modal = document.getElementById('monitorEventDetailModal');
+    modal.style.display = 'none';
+}
+
+// 初始化WebSocket实时推送
+function initEventWebSocket() {
+    if (eventWebSocket) return;
+
+    try {
+        eventWebSocket = io('/ws', {
+            transports: ['websocket', 'polling']
+        });
+
+        eventWebSocket.on('new_event', (event) => {
+            console.log('收到新事件:', event);
+            addNewEventToMonitor(event);
+        });
+
+        eventWebSocket.on('connect', () => {
+            console.log('事件WebSocket已连接');
+        });
+
+        eventWebSocket.on('disconnect', () => {
+            console.log('事件WebSocket已断开');
+        });
+    } catch (error) {
+        console.error('初始化事件WebSocket失败:', error);
+    }
+}
+
+// 添加新事件到列表（滚动显示）
+function addNewEventToMonitor(event) {
+    // 检查任务过滤
+    const taskFilter = document.getElementById('eventTaskFilter').value;
+    if (taskFilter && event.task_id != taskFilter) {
+        return;
+    }
+
+    // 添加到列表顶部
+    monitorEvents.unshift(event);
+
+    // 限制最多显示100个
+    if (monitorEvents.length > 100) {
+        monitorEvents.pop();
+    }
+
+    // 创建新事件卡片
+    const scroller = document.getElementById('eventScroller');
+    const eventCard = createMonitorEventCard(event);
+
+    // 添加动画效果
+    eventCard.style.animation = 'slideInFromTop 0.3s ease';
+
+    // 插入到顶部
+    scroller.insertBefore(eventCard, scroller.firstChild);
+
+    // 滚动到顶部显示新事件
+    scroller.scrollTo({
+        top: 0,
+        behavior: 'smooth'
+    });
+
+    // 更新计数
+    updateEventCount();
+
+    // 播放提示音（可选）
+    playEventNotificationSound();
+}
+
+// 更新事件计数
+function updateEventCount() {
+    document.getElementById('eventCount').textContent = `事件: ${monitorEvents.length}`;
+}
+
+// 格式化事件类型
+function formatEventType(type) {
+    const typeMap = {
+        'track_start': '跟踪开始',
+        'track_end': '跟踪结束',
+        'track_update': '跟踪更新',
+        'detection': '检测'
+    };
+    return typeMap[type] || type;
+}
+
+// 格式化事件时间
+function formatEventTime(timestamp) {
+    if (!timestamp) return '-';
+
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now - date;
+
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return '刚刚';
+    if (minutes < 60) return `${minutes}分钟前`;
+    if (hours < 24) return `${hours}小时前`;
+    if (days < 7) return `${days}天前`;
+
+    return date.toLocaleString('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+// 播放提示音
+function playEventNotificationSound() {
+    // 可选：播放音频提示
+    // const audio = new Audio('/static/sounds/notification.mp3');
+    // audio.play();
+}
+
+// 页面加载时初始化
+document.addEventListener('DOMContentLoaded', function() {
+    initMonitorEventList();
+});
+</script>
+
+<style>
+/* 右侧事件列表样式 */
+.event-sidebar {
+    width: 260px;
+    background: var(--bg-white);
+    border-left: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - var(--header-height) - 40px);
+}
+
+.event-sidebar .sidebar-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-color);
+}
+
+.event-sidebar .sidebar-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+}
+
+.event-filter select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 14px;
+    background: var(--bg-white);
+    color: var(--text-primary);
+}
+
+.event-sidebar .sidebar-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+}
+
+.event-scroller {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+}
+
+.monitor-event-card {
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    overflow: hidden;
+}
+
+.monitor-event-card:hover {
+    border-color: var(--primary-color);
+    box-shadow: 0 2px 8px rgba(0, 105, 92, 0.1);
+    transform: translateY(-2px);
+}
+
+.event-image-container {
+    width: 100%;
+    height: 140px;
+    overflow: hidden;
+    position: relative;
+}
+
+.event-image-container img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.event-no-image {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f5f5f5;
+    color: #999;
+}
+
+.event-no-image svg {
+    width: 40px;
+    height: 40px;
+}
+
+.event-info-container {
+    padding: 10px 12px;
+}
+
+.event-info-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.event-info-row:last-child {
+    margin-bottom: 0;
+}
+
+.event-tag {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+}
+
+.tag-type {
+    background: rgba(0, 105, 92, 0.1);
+    color: var(--primary-color);
+}
+
+.tag-class {
+    background: rgba(255, 152, 0, 0.12);
+    color: #e65100;
+}
+
+.tag-task {
+    background: rgba(33, 150, 243, 0.1);
+    color: #1565c0;
+}
+
+.tag-time {
+    background: rgba(96, 125, 139, 0.12);
+    color: #455a64;
+}
+
+.event-sidebar .sidebar-footer {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-color);
+}
+
+/* 事件详情样式 */
+.event-detail-content {
+    display: flex;
+    gap: 24px;
+}
+
+.event-detail-image-container {
+    flex: 1;
+    max-width: 500px;
+}
+
+.event-detail-image {
+    width: 100%;
+    max-height: 400px;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.event-detail-info {
+    flex: 1;
+}
+
+.event-detail-row {
+    display: flex;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.event-detail-row:last-child {
+    border-bottom: none;
+}
+
+.event-detail-row label {
+    font-weight: 500;
+    color: var(--text-secondary);
+    min-width: 100px;
+}
+
+.event-detail-row span {
+    color: var(--text-primary);
+}
+
+/* 媒体切换按钮样式 */
+.event-media-switcher {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    justify-content: center;
+}
+.event-media-switcher .btn-sm {
+    padding: 6px 16px;
+    font-size: 13px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+/* 动画效果 */
+@keyframes slideInFromTop {
+    from {
+        transform: translateY(-20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* 响应式适配 */
+@media (max-width: 1200px) {
+    .event-sidebar {
+        width: 200px;
+    }
+}
+
+@media (max-width: 768px) {
+    .event-sidebar {
+        display: none;
+    }
+}
+</style>
 {% endblock %}

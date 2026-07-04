@@ -242,3 +242,326 @@ def get_system_status():
             'unknown': unknown_count
         }
     })
+
+
+# ========================================
+# 日志管理 API
+# ========================================
+
+import os
+import glob
+from pathlib import Path
+
+def _get_log_dir():
+    """获取日志目录"""
+    project_root = Path(__file__).parent.parent.parent
+    log_dir = project_root / 'logs'
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+@system_bp.route('/logs/files', methods=['GET'])
+def get_log_files():
+    """获取日志文件列表"""
+    log_dir = _get_log_dir()
+    files = []
+    
+    for f in log_dir.glob('*'):
+        if f.is_file():
+            stat = f.stat()
+            files.append({
+                'name': f.name,
+                'size': stat.st_size,
+                'size_mb': round(stat.st_size / 1024 / 1024, 2),
+                'modified': stat.st_mtime,
+                'modified_str': os.path.basename(str(f))
+            })
+    
+    files.sort(key=lambda x: x['modified'], reverse=True)
+    
+    return jsonify({'files': files})
+
+
+@system_bp.route('/logs/read', methods=['GET'])
+def read_log_file():
+    """读取日志文件内容"""
+    filename = request.args.get('file', 'system.log')
+    lines = int(request.args.get('lines', 500))
+    level = request.args.get('level', '')  # 筛选日志级别
+    
+    log_dir = _get_log_dir()
+    log_path = log_dir / filename
+    
+    # 安全检查：防止路径遍历
+    if '..' in filename or '/' in filename or '\\' in filename:
+        return jsonify({'error': '无效的文件名'}), 400
+    
+    if not log_path.exists():
+        return jsonify({'error': '日志文件不存在'}), 404
+    
+    try:
+        with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            all_lines = f.readlines()
+        
+        # 从末尾读取指定行数
+        all_lines = all_lines[-lines:]
+        
+        # 按级别筛选
+        if level:
+            level_upper = level.upper()
+            all_lines = [l for l in all_lines if f'[{level_upper}]' in l or f' - {level_upper} -' in l]
+        
+        return jsonify({
+            'filename': filename,
+            'total_lines': len(all_lines),
+            'lines': all_lines
+        })
+    except Exception as e:
+        return jsonify({'error': f'读取失败: {str(e)}'}), 500
+
+
+@system_bp.route('/logs/clear', methods=['POST'])
+def clear_log_file():
+    """清空日志文件"""
+    filename = request.args.get('file', 'system.log')
+    
+    if '..' in filename or '/' in filename or '\\' in filename:
+        return jsonify({'error': '无效的文件名'}), 400
+    
+    log_dir = _get_log_dir()
+    log_path = log_dir / filename
+    
+    if not log_path.exists():
+        return jsonify({'error': '日志文件不存在'}), 404
+    
+    try:
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write('')
+        logger.info(f"日志文件已清空: {filename}")
+        return jsonify({'message': f'日志文件 {filename} 已清空'})
+    except Exception as e:
+        return jsonify({'error': f'清空失败: {str(e)}'}), 500
+
+
+@system_bp.route('/logs/download', methods=['GET'])
+def download_log_file():
+    """下载日志文件"""
+    from flask import send_file
+    filename = request.args.get('file', 'system.log')
+    
+    if '..' in filename or '/' in filename or '\\' in filename:
+        return jsonify({'error': '无效的文件名'}), 400
+    
+    log_dir = _get_log_dir()
+    log_path = log_dir / filename
+    
+    if not log_path.exists():
+        return jsonify({'error': '日志文件不存在'}), 404
+    
+    return send_file(str(log_path), as_attachment=True, download_name=filename)
+
+
+# ========================================
+# 系统监控 API
+# ========================================
+
+@system_bp.route('/monitor', methods=['GET'])
+def get_system_monitor():
+    """获取系统监控信息"""
+    import psutil
+    import platform
+    import time
+    
+    # CPU信息
+    cpu_percent = psutil.cpu_percent(interval=1)
+    cpu_count = psutil.cpu_count()
+    cpu_freq = psutil.cpu_freq()
+    
+    # 内存信息
+    mem = psutil.virtual_memory()
+    
+    # 磁盘信息
+    disk = psutil.disk_usage('/')
+    
+    # 网络信息
+    net = psutil.net_io_counters()
+    
+    # 系统信息
+    boot_time = psutil.boot_time()
+    uptime = int(time.time() - boot_time)
+    
+    # 进程信息
+    process_count = len(psutil.pids())
+    
+    # GPU信息（如果可用）
+    gpu_info = []
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        gpu_count = pynvml.nvmlDeviceGetCount()
+        for i in range(gpu_count):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+            name = pynvml.nvmlDeviceGetName(handle)
+            if isinstance(name, bytes):
+                name = name.decode('utf-8')
+            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            gpu_info.append({
+                'index': i,
+                'name': name,
+                'gpu_utilization': util.gpu,
+                'memory_total': mem_info.total,
+                'memory_used': mem_info.used,
+                'memory_total_mb': round(mem_info.total / 1024 / 1024, 0),
+                'memory_used_mb': round(mem_info.used / 1024 / 1024, 0),
+                'memory_percent': round(mem_info.used / mem_info.total * 100, 1) if mem_info.total > 0 else 0
+            })
+        pynvml.nvmlShutdown()
+    except Exception:
+        gpu_info = []
+    
+    return jsonify({
+        'cpu': {
+            'percent': cpu_percent,
+            'count': cpu_count,
+            'freq_mhz': cpu_freq.current if cpu_freq else 0
+        },
+        'memory': {
+            'total': mem.total,
+            'used': mem.used,
+            'available': mem.available,
+            'percent': mem.percent,
+            'total_gb': round(mem.total / 1024**3, 2),
+            'used_gb': round(mem.used / 1024**3, 2)
+        },
+        'disk': {
+            'total': disk.total,
+            'used': disk.used,
+            'free': disk.free,
+            'percent': round(disk.used / disk.total * 100, 1) if disk.total > 0 else 0,
+            'total_gb': round(disk.total / 1024**3, 2),
+            'used_gb': round(disk.used / 1024**3, 2)
+        },
+        'network': {
+            'bytes_sent': net.bytes_sent,
+            'bytes_recv': net.bytes_recv,
+            'sent_mb': round(net.bytes_sent / 1024**2, 2),
+            'recv_mb': round(net.bytes_recv / 1024**2, 2)
+        },
+        'system': {
+            'platform': platform.platform(),
+            'python_version': platform.python_version(),
+            'hostname': platform.node(),
+            'uptime': uptime,
+            'uptime_str': f"{uptime // 3600}h {(uptime % 3600) // 60}m",
+            'process_count': process_count,
+            'boot_time': boot_time
+        },
+        'gpu': gpu_info,
+        'timestamp': time.time()
+    })
+
+
+@system_bp.route('/monitor/processes', methods=['GET'])
+def get_system_processes():
+    """获取系统进程列表（按CPU排序）"""
+    import psutil
+    
+    procs = []
+    for p in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'memory_info', 'status']):
+        try:
+            info = p.info
+            procs.append({
+                'pid': info['pid'],
+                'name': info['name'],
+                'cpu_percent': info['cpu_percent'] or 0,
+                'memory_percent': round(info['memory_percent'] or 0, 2),
+                'memory_mb': round(info['memory_info'].rss / 1024 / 1024, 1) if info['memory_info'] else 0,
+                'status': info['status']
+            })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    
+    # 按CPU使用率排序，取前20
+    procs.sort(key=lambda x: x['cpu_percent'], reverse=True)
+    procs = procs[:20]
+    
+    return jsonify({'processes': procs})
+
+
+# ========================================
+# 全局配置管理 API（存储/MQTT/WebSocket）
+# ========================================
+
+import yaml
+from pathlib import Path
+
+def _get_config_path():
+    """获取system_config.yaml路径"""
+    return Path(__file__).parent.parent.parent / 'config' / 'system_config.yaml'
+
+def _load_system_config():
+    """加载system_config.yaml"""
+    config_path = _get_config_path()
+    with open(config_path, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f) or {}
+
+def _save_system_config(config):
+    """保存system_config.yaml"""
+    config_path = _get_config_path()
+    with open(config_path, 'w', encoding='utf-8') as f:
+        yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+@system_bp.route('/config', methods=['GET'])
+def get_system_config():
+    """获取存储/MQTT/WebSocket配置"""
+    try:
+        config = _load_system_config()
+        return jsonify({
+            'storage': config.get('storage', {}),
+            'mqtt': config.get('mqtt', {}),
+            'websocket': config.get('websocket', {})
+        })
+    except Exception as e:
+        logger.error(f"获取系统配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@system_bp.route('/config', methods=['PUT'])
+def update_system_config():
+    """更新存储/MQTT/WebSocket配置"""
+    try:
+        data = request.get_json()
+        config = _load_system_config()
+        
+        # 更新存储配置
+        if 'storage' in data:
+            storage = data['storage']
+            if 'minio' in storage:
+                config.setdefault('storage', {}).setdefault('minio', {}).update(storage['minio'])
+            if 'ftp' in storage:
+                config.setdefault('storage', {}).setdefault('ftp', {}).update(storage['ftp'])
+        
+        # 更新MQTT配置
+        if 'mqtt' in data:
+            mqtt = data['mqtt']
+            if 'enabled' in mqtt:
+                config.setdefault('mqtt', {})['enabled'] = mqtt['enabled']
+            if 'config' in mqtt:
+                config.setdefault('mqtt', {}).setdefault('config', {}).update(mqtt['config'])
+        
+        # 更新WebSocket配置
+        if 'websocket' in data:
+            ws = data['websocket']
+            if 'enabled' in ws:
+                config.setdefault('websocket', {})['enabled'] = ws['enabled']
+            if 'config' in ws:
+                config.setdefault('websocket', {}).setdefault('config', {}).update(ws['config'])
+        
+        _save_system_config(config)
+        logger.info("系统配置已更新")
+        
+        return jsonify({'success': True, 'message': '配置已保存，部分配置需重启任务后生效'})
+    except Exception as e:
+        logger.error(f"更新系统配置失败: {e}")
+        return jsonify({'error': str(e)}), 500

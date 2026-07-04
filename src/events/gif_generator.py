@@ -33,6 +33,8 @@ class GIFGenerator:
         # 图片尺寸
         self.max_width = self.config.get('max_width', 320)
         self.max_height = self.config.get('max_height', 240)
+        # 裁剪边距比例：与采集端保持一致，用于完整帧在GIF中裁剪目标区域
+        self.crop_margin_ratio = self.config.get('crop_margin_ratio', 1.0)
         
         # 输出方式
         self.output_method = self.config.get('output_method', 'local')  # local | minio | ftp | both
@@ -52,6 +54,10 @@ class GIFGenerator:
         # 是否绘制轨迹
         self.draw_trajectory = self.config.get('draw_trajectory', True)
         self.trajectory_color = self.config.get('trajectory_color', (0, 255, 0))  # 绿色
+        # 裁剪模式：'full' = 全场景帧（不裁剪，bbox直接画在完整画面上）；'target' = 裁剪目标区域
+        self.crop_mode = self.config.get('crop_mode', 'full')
+        # 是否绘制检测框（受前端开关控制，False时只保留轨迹/场景不画bbox）
+        self.draw_bbox = self.config.get('draw_bbox', True)
         
         # 初始化 MinIO 输出器
         self.minio_outputter = None
@@ -170,7 +176,7 @@ class GIFGenerator:
             print(f"[GIFGenerator] FTP 输出器初始化失败: {e}")
     
     def generate(self, track_id: int, frames: List[Dict], 
-                output_filename: Optional[str] = None) -> str:
+                output_filename: Optional[str] = None) -> Dict[str, str]:
         """
         生成 GIF 动画
         
@@ -185,11 +191,11 @@ class GIFGenerator:
             output_filename: 输出文件名（可选）
         
         Returns:
-            GIF 文件路径
+            GIF 路径字典 {'local': path, 'minio': url, 'ftp': url}
         """
         if not frames:
             print(f"[GIFGenerator] 警告：帧序列为空，无法生成 GIF")
-            return ''
+            return {}
         
         # 限制帧数
         if len(frames) > self.max_frames:
@@ -200,8 +206,6 @@ class GIFGenerator:
         if not output_filename:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             output_filename = f"track_{track_id}_{timestamp}.gif"
-        
-        output_path = os.path.join(self.output_dir, output_filename)
         
         # 处理帧序列
         processed_frames = []
@@ -215,89 +219,128 @@ class GIFGenerator:
             if image is None:
                 continue
             
-            # 计算中心点（用于轨迹）
+            # bbox 是否有效（非零面积）
+            has_bbox = (bbox[2] - bbox[0]) > 0 and (bbox[3] - bbox[1]) > 0
             center_x = int((bbox[0] + bbox[2]) / 2)
             center_y = int((bbox[1] + bbox[3]) / 2)
             
-            # 如果是完整帧，裁剪目标区域（保留一定上下文）
-            if is_full_frame:
-                # 扩展边界框（保留上下文）
+            if self.crop_mode == 'full':
+                # 全场景模式：不裁剪，直接使用完整帧
+                cropped = image
+                h, w = cropped.shape[:2]
+                # 仅在有bbox时记录轨迹点（事件前/后的帧无轨迹）
+                if has_bbox:
+                    trajectory_points.append((center_x, center_y))
+                crop_offset = (0, 0, w, h)
+            elif is_full_frame:
+                # 完整帧裁剪目标区域（保留上下文）：按配置比例扩展
                 h, w = image.shape[:2]
-                margin_x = int((bbox[2] - bbox[0]) * 0.5)  # 左右扩展 50%
-                margin_y = int((bbox[3] - bbox[1]) * 0.5)  #上下扩展 50%
+                margin_x = int((bbox[2] - bbox[0]) * self.crop_margin_ratio)
+                margin_y = int((bbox[3] - bbox[1]) * self.crop_margin_ratio)
                 
-                x1 = max(0, int(bbox[0] - margin_x))
-                y1 = max(0, int(bbox[1] - margin_y))
-                x2 = min(w, int(bbox[2] + margin_x))
-                y2 = min(h, int(bbox[3] + margin_y))
+                crop_x1 = max(0, int(bbox[0] - margin_x))
+                crop_y1 = max(0, int(bbox[1] - margin_y))
+                crop_x2 = min(w, int(bbox[2] + margin_x))
+                crop_y2 = min(h, int(bbox[3] + margin_y))
                 
-                cropped = image[y1:y2, x1:x2]
+                cropped = image[crop_y1:crop_y2, crop_x1:crop_x2]
+                crop_w = crop_x2 - crop_x1
+                crop_h = crop_y2 - crop_y1
                 
                 # 调整轨迹点坐标（相对于裁剪区域）
-                trajectory_points.append((center_x - x1, center_y - y1))
+                trajectory_points.append((center_x - crop_x1, center_y - crop_y1))
+                
+                # 记录裁剪偏移，供后续绘制真实边界框使用
+                crop_offset = (crop_x1, crop_y1, crop_w, crop_h)
             else:
                 cropped = image
                 # 裁剪帧的中心点（相对于裁剪区域）
                 h, w = cropped.shape[:2]
                 trajectory_points.append((w // 2, h // 2))
+                crop_offset = None
             
             # 缩放图片
+            original_crop_h, original_crop_w = cropped.shape[:2]
             cropped = self._resize_frame(cropped)
+            scale_x = cropped.shape[1] / original_crop_w if original_crop_w > 0 else 1
+            scale_y = cropped.shape[0] / original_crop_h if original_crop_h > 0 else 1
+            
+            # 调整已有轨迹点坐标（缩放到统一尺寸）
+            if len(trajectory_points) > 0:
+                trajectory_points[-1] = (
+                    int(trajectory_points[-1][0] * scale_x),
+                    int(trajectory_points[-1][1] * scale_y)
+                )
             
             # 绘制轨迹（如果启用）
             if self.draw_trajectory and len(trajectory_points) > 1:
                 cropped = self._draw_trajectory(cropped, trajectory_points)
             
-            # 绘制边界框和标签
-            if is_full_frame:
-                # 在裁剪区域中绘制边界框（调整坐标）
-                h, w = cropped.shape[:2]
-                # 计算边界框在裁剪区域中的位置
-                # 这里简化处理，直接在中心绘制一个小框
-                box_w = int(w * 0.6)
-                box_h = int(h * 0.6)
-                box_x1 = (w - box_w) // 2
-                box_y1 = (h - box_h) // 2
-                cv2.rectangle(cropped, (box_x1, box_y1), 
-                             (box_x1 + box_w, box_y1 + box_h), 
+            # 绘制真实边界框（受 draw_bbox 开关控制）
+            if self.draw_bbox and self.crop_mode == 'full':
+                # 全场景模式：bbox已在缓存帧坐标系（与缩放后一致，因缓存帧即为目标尺寸）
+                if has_bbox:
+                    adj_x1 = bbox[0] * scale_x
+                    adj_y1 = bbox[1] * scale_y
+                    adj_x2 = bbox[2] * scale_x
+                    adj_y2 = bbox[3] * scale_y
+                    cv2.rectangle(cropped,
+                                 (int(adj_x1), int(adj_y1)),
+                                 (int(adj_x2), int(adj_y2)),
+                                 (0, 255, 0), 2)
+                    # 中心十字标记
+                    cx = int((adj_x1 + adj_x2) / 2)
+                    cy = int((adj_y1 + adj_y2) / 2)
+                    cv2.line(cropped, (cx - 5, cy), (cx + 5, cy), (0, 0, 255), 1)
+                    cv2.line(cropped, (cx, cy - 5), (cx, cy + 5), (0, 0, 255), 1)
+            elif self.draw_bbox and is_full_frame and crop_offset:
+                # 目标裁剪模式：经过裁剪偏移和缩放
+                adj_x1 = (bbox[0] - crop_offset[0]) * scale_x
+                adj_y1 = (bbox[1] - crop_offset[1]) * scale_y
+                adj_x2 = (bbox[2] - crop_offset[0]) * scale_x
+                adj_y2 = (bbox[3] - crop_offset[1]) * scale_y
+                cv2.rectangle(cropped, 
+                             (int(adj_x1), int(adj_y1)), 
+                             (int(adj_x2), int(adj_y2)), 
                              (0, 255, 0), 2)
+                # 绘制中心十字标记
+                cx = int((adj_x1 + adj_x2) / 2)
+                cy = int((adj_y1 + adj_y2) / 2)
+                cv2.line(cropped, (cx - 5, cy), (cx + 5, cy), (0, 0, 255), 1)
+                cv2.line(cropped, (cx, cy - 5), (cx, cy + 5), (0, 0, 255), 1)
             
             processed_frames.append(cropped)
         
         if not processed_frames:
             print(f"[GIFGenerator] 警告：处理后帧序列为空")
-            return ''
+            return {}
+        
+        # 根据帧时间戳计算实际时长（毫秒/帧）
+        actual_duration = self._calculate_duration_from_timestamps(frames)
         
         # 生成 GIF 字节数据
         try:
-            gif_bytes = self._generate_gif_bytes(processed_frames)
+            gif_bytes = self._generate_gif_bytes(processed_frames, actual_duration)
             
             if gif_bytes is None:
                 print(f"[GIFGenerator] GIF 生成失败")
-                return ''
+                return {}
             
             print(f"[GIFGenerator] GIF 已生成")
             print(f"[GIFGenerator]   帧数: {len(processed_frames)}")
             print(f"[GIFGenerator]   尺寸: {processed_frames[0].shape[1]}x{processed_frames[0].shape[0]}")
             print(f"[GIFGenerator]   大小: {len(gif_bytes) / 1024:.1f} KB")
+            print(f"[GIFGenerator]   每帧时长: {actual_duration}ms")
             
             # 上传 GIF
             gif_urls = self._upload_gif(output_filename, gif_bytes)
             
-            # 返回 URL（优先 MinIO，其次 FTP，最后本地路径）
-            if gif_urls:
-                return gif_urls.get('minio') or gif_urls.get('ftp') or gif_urls.get('local')
-            
-            # 如果上传失败，保存到本地
-            local_path = os.path.join(self.output_dir, output_filename)
-            with open(local_path, 'wb') as f:
-                f.write(gif_bytes)
-            
-            return local_path
+            # 返回路径字典（包含 local/minio/ftp 三种路径）
+            return gif_urls
             
         except Exception as e:
             print(f"[GIFGenerator] GIF 生成失败: {e}")
-            return ''
+            return {}
     
     def _upload_gif(self, filename: str, gif_bytes: bytes) -> Dict[str, str]:
         """
@@ -333,8 +376,8 @@ class GIFGenerator:
             except Exception as e:
                 print(f"[GIFGenerator] FTP 上传失败: {e}")
         
-        # 保存到本地（如果配置为 local 或作为备份）
-        if self.output_method == 'local' or not urls:
+        # 保存到本地（如果配置为 local 或 both，或远程上传失败时作为备份）
+        if self.output_method in ('local', 'both') or not urls:
             local_path = os.path.join(self.output_dir, filename)
             with open(local_path, 'wb') as f:
                 f.write(gif_bytes)
@@ -415,12 +458,53 @@ class GIFGenerator:
         
         return frame
     
-    def _generate_gif_bytes(self, frames: List[np.ndarray]) -> Optional[bytes]:
+    def _calculate_duration_from_timestamps(self, frames: List[Dict]) -> int:
+        """
+        根据帧时间戳计算每帧时长（毫秒）
+        
+        Args:
+            frames: 帧序列（包含 timestamp 字段）
+        
+        Returns:
+            每帧时长（毫秒）
+        """
+        try:
+            if len(frames) < 2:
+                return self.duration  # 默认时长
+            
+            # 解析首尾帧时间戳
+            first_ts_str = frames[0].get('timestamp')
+            last_ts_str = frames[-1].get('timestamp')
+            
+            if not first_ts_str or not last_ts_str:
+                return self.duration
+            
+            first_ts = datetime.fromisoformat(first_ts_str)
+            last_ts = datetime.fromisoformat(last_ts_str)
+            
+            time_span = (last_ts - first_ts).total_seconds()
+            if time_span <= 0:
+                return self.duration
+            
+            # 计算每帧时长：总时长 / 帧数
+            duration_per_frame = int(time_span * 1000 / len(frames))
+            
+            # 限制在合理范围：50ms - 500ms（2-20fps）
+            duration_per_frame = max(50, min(500, duration_per_frame))
+            
+            return duration_per_frame
+            
+        except Exception as e:
+            print(f"[GIFGenerator] 时间跨度计算失败，使用默认时长: {e}")
+            return self.duration
+    
+    def _generate_gif_bytes(self, frames: List[np.ndarray], duration: int = None) -> Optional[bytes]:
         """
         生成 GIF 字节数据
         
         Args:
             frames: 帧序列
+            duration: 每帧时长（毫秒），None 则使用默认值
         
         Returns:
             GIF 字节数据
@@ -434,7 +518,8 @@ class GIFGenerator:
             # 生成 GIF 字节数据
             import io
             gif_bytes = io.BytesIO()
-            imageio.mimsave(gif_bytes, rgb_frames, duration=self.duration, format='GIF')
+            actual_duration = duration if duration is not None else self.duration
+            imageio.mimsave(gif_bytes, rgb_frames, duration=actual_duration, format='GIF')
             
             return gif_bytes.getvalue()
             

@@ -33,6 +33,7 @@ decoder:
   # - dxva2: Windows Direct-X Video Acceleration（推荐 Windows）
   # - cuda: NVIDIA CUDA 硬件加速（需要 NVIDIA GPU）
   # - qsv: Intel Quick Sync Video（需要 Intel CPU）
+  # - rk3588: Rockchip MPP 硬件解码（RK3588/RK3566 NPU，Linux平台）
   # - none: 纯软件解码（CPU 占用高，不建议）
   hwaccel: "dxva2"
 
@@ -112,18 +113,3 @@ shared_memory:
   # - 用于防止读到半帧数据（序列号不一致）
   # - 推荐值：3-5
   max_retries: 3
-
-# ========================================
-# 注意：测试工具专用配置已迁移
-# ========================================
-# 以下配置已移到 config/test_config.yaml 文件：
-# - shared_memory（共享内存配置）
-# - logging（日志配置）
-# - display（显示配置）
-# - drawing（绘图配置）
-# - monitoring（性能监控配置）
-# - test_source（测试视频源配置）
-#
-# 这些配置主要用于测试工具（test_single_channel.py），
-# 不属于 YOLODetector 核心参数。
-# 如果需要使用，请加载 config/test_config.yaml 文件。

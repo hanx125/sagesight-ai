@@ -218,6 +218,44 @@ class OptimizedPreprocessor:
         
         return input_tensor
 
+    def preprocess_drm_prime(self, frame_data: dict) -> np.ndarray:
+        """
+        预处理：DRM Prime（RK3588 MPP硬件解码输出）→ RGB → 归一化 → CHW
+
+        DRM Prime格式是RK3588 MPP硬件解码的输出格式，包含DMA缓冲区信息。
+        实际像素数据通常是NV12格式，存储在DRM缓冲区中。
+
+        Args:
+            frame_data: 包含DRM Prime帧数据的字典，格式如下：
+                {
+                    'format': 'drm_prime',
+                    'width': int,
+                    'height': int,
+                    'y_plane': np.ndarray,  # Y平面数据
+                    'uv_plane': np.ndarray,  # UV交错平面数据（NV12格式）
+                    'drm_fd': int,  # DRM文件描述符（可选）
+                    'handles': list,  # DMA缓冲区句柄（可选）
+                }
+
+        Returns:
+            模型输入张量 (1, 3, height, width) float32
+
+        注意：
+            - DRM Prime格式的实际像素布局与NV12相同
+            - 此方法假设DMA缓冲区已映射为numpy数组
+            - 如果FFmpeg已将drm_prime转换为NV12，可直接使用preprocess_nv12方法
+        """
+        # DRM Prime格式的像素数据实际上是NV12布局
+        # 直接调用NV12预处理方法
+        y = frame_data.get('y_plane')
+        uv = frame_data.get('uv_plane')
+
+        if y is None or uv is None:
+            raise ValueError("DRM Prime帧数据缺少y_plane或uv_plane")
+
+        # 调用NV12预处理（像素布局相同）
+        return self.preprocess_nv12(y, uv)
+
 
 def benchmark():
     """性能测试"""

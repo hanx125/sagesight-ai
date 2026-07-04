@@ -315,6 +315,64 @@ def upload_model():
         return jsonify({'error': '上传失败'}), 500
 
 
+# ========================================
+# 算法图片上传 API
+# ========================================
+
+ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'}
+
+
+@algorithm_bp.route('/algorithms/<int:algorithm_id>/image', methods=['POST'])
+def upload_algorithm_image(algorithm_id: int):
+    """上传算法展示图片"""
+    from src.algorithms.algorithm_manager import get_algorithm_manager
+    
+    manager = get_algorithm_manager()
+    algo = manager.get_algorithm(algorithm_id)
+    if not algo:
+        return jsonify({'error': '算法不存在'}), 404
+    
+    if 'file' not in request.files:
+        return jsonify({'error': '没有上传文件'}), 400
+    
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({'error': '文件名为空'}), 400
+    
+    # 检查文件扩展名
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        return jsonify({'error': f'不支持的图片格式，允许: {", ".join(ALLOWED_IMAGE_EXTENSIONS)}'}), 400
+    
+    # 存储目录
+    upload_dir = os.path.join('static', 'images', 'algorithms')
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    # 文件名：算法ID + 时间戳 + 扩展名
+    from datetime import datetime
+    filename = f"algo_{algorithm_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{ext}"
+    filepath = os.path.join(upload_dir, filename)
+    
+    # 如果有旧图片，删除
+    if algo.algorithm_image:
+        old_path = algo.algorithm_image.lstrip('/')
+        if os.path.exists(old_path):
+            os.remove(old_path)
+    
+    file.save(filepath)
+    image_url = f"/static/images/algorithms/{filename}"
+    
+    # 更新数据库
+    manager.update_algorithm(algorithm_id, {'algorithm_image': image_url})
+    
+    logger.info(f"算法图片已上传: algorithm_id={algorithm_id}, path={image_url}")
+    
+    return jsonify({
+        'algorithm_id': algorithm_id,
+        'algorithm_image': image_url
+    }), 200
+
+
 @algorithm_bp.route('/models', methods=['GET'])
 def list_models():
     """列出所有模型文件"""

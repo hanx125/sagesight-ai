@@ -35,7 +35,7 @@ def _emit_camera_event(event_name, camera_id=None, camera_data=None):
 
 @camera_bp.route('', methods=['GET'])
 def get_cameras():
-    """获取摄像机列表"""
+    """获取摄像机列表（后端分页）"""
     try:
         manager = get_camera_manager()
         
@@ -44,6 +44,10 @@ def get_cameras():
         enabled = request.args.get('enabled', '')
         search = request.args.get('search', '')
         directory_id = request.args.get('directory_id', '')
+        
+        # 获取分页参数
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 20))
         
         cameras = manager.get_all_cameras()
         
@@ -65,7 +69,20 @@ def get_cameras():
         if directory_id:
             cameras = [c for c in cameras if c.directory_id == int(directory_id)]
         
-        return jsonify([c.to_dict() for c in cameras])
+        # 后端分页
+        total = len(cameras)
+        total_pages = (total + per_page - 1) // per_page if per_page > 0 else 1
+        start = (page - 1) * per_page
+        end = start + per_page
+        cameras_page = cameras[start:end]
+        
+        return jsonify({
+            'cameras': [c.to_dict() for c in cameras_page],
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+            'total_pages': total_pages
+        })
         
     except Exception as e:
         logger.error(f"获取摄像机列表失败: {e}")

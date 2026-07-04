@@ -159,6 +159,101 @@ function clearLabelsFile() {
     }
 }
 
+// ========================================
+// 算法图片选择与上传
+// ========================================
+
+let selectedAlgoImage = null;  // 选择的算法图片文件
+let currentAlgoImageUrl = '';  // 已保存的算法图片URL
+
+function handleAlgoImageSelect(input) {
+    const file = input.files[0];
+    if (!file) return;
+    
+    selectedAlgoImage = file;
+    
+    // 预览图片
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const preview = document.getElementById('algoImagePreview');
+        const img = document.getElementById('algoImageImg');
+        const placeholder = document.getElementById('algoImagePlaceholder');
+        
+        img.src = e.target.result;
+        preview.style.display = 'flex';
+        placeholder.style.display = 'none';
+    };
+    reader.readAsDataURL(file);
+}
+
+function removeAlgoImage() {
+    selectedAlgoImage = null;
+    currentAlgoImageUrl = '';
+    
+    const preview = document.getElementById('algoImagePreview');
+    const placeholder = document.getElementById('algoImagePlaceholder');
+    const uploadInput = document.getElementById('algoImageUpload');
+    
+    if (preview) preview.style.display = 'none';
+    if (placeholder) placeholder.style.display = 'flex';
+    if (uploadInput) uploadInput.value = '';
+}
+
+function resetAlgoImageField() {
+    selectedAlgoImage = null;
+    currentAlgoImageUrl = '';
+    
+    const preview = document.getElementById('algoImagePreview');
+    const placeholder = document.getElementById('algoImagePlaceholder');
+    const uploadInput = document.getElementById('algoImageUpload');
+    
+    if (preview) preview.style.display = 'none';
+    if (placeholder) placeholder.style.display = 'flex';
+    if (uploadInput) uploadInput.value = '';
+}
+
+function setAlgoImagePreview(imageUrl) {
+    currentAlgoImageUrl = imageUrl || '';
+    selectedAlgoImage = null;
+    
+    const preview = document.getElementById('algoImagePreview');
+    const placeholder = document.getElementById('algoImagePlaceholder');
+    const img = document.getElementById('algoImageImg');
+    
+    if (imageUrl) {
+        img.src = imageUrl;
+        preview.style.display = 'flex';
+        placeholder.style.display = 'none';
+    } else {
+        preview.style.display = 'none';
+        placeholder.style.display = 'flex';
+    }
+}
+
+async function uploadAlgoImage(algorithmId) {
+    if (!selectedAlgoImage) return currentAlgoImageUrl;
+    
+    const formData = new FormData();
+    formData.append('file', selectedAlgoImage);
+    
+    try {
+        const response = await fetch(`/api/algorithms/${algorithmId}/image`, {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+        if (data.error) {
+            console.error('上传算法图片失败:', data.error);
+            return null;
+        }
+        currentAlgoImageUrl = data.algorithm_image;
+        return data.algorithm_image;
+    } catch (error) {
+        console.error('上传算法图片失败:', error);
+        return null;
+    }
+}
+
 function formatFileSize(bytes) {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -289,16 +384,29 @@ function renderAlgorithms() {
         return;
     }
     
-    algorithmsList.style.display = 'grid';
     emptyState.style.display = 'none';
     
     // 根据视图类型渲染
     if (currentView === 'card') {
+        algorithmsList.style.display = 'grid';
         algorithmsList.classList.remove('list-view');
         algorithmsList.innerHTML = algorithms.map(algorithm => renderAlgorithmCard(algorithm)).join('');
     } else {
+        algorithmsList.style.display = 'block';
         algorithmsList.classList.add('list-view');
-        algorithmsList.innerHTML = algorithms.map(algorithm => renderAlgorithmListItem(algorithm)).join('');
+        algorithmsList.innerHTML = `
+            <div class="algorithms-list-header">
+                <span></span>
+                <span>算法名称</span>
+                <span>状态</span>
+                <span>类型</span>
+                <span>模型类型</span>
+                <span>格式</span>
+                <span>描述</span>
+                <span>操作</span>
+            </div>
+            ${algorithms.map(algorithm => renderAlgorithmListItem(algorithm)).join('')}
+        `;
     }
 }
 
@@ -311,15 +419,21 @@ function renderAlgorithmCard(algorithm) {
     const statusText = algorithm.status === 'active' ? '可用' : '不可用';
     const typeText = getTypeText(algorithm.type);
     
-    return `
-        <div class="algorithm-card" onclick="showAlgorithmDetail(${algorithm.id})">
-            <div class="algorithm-card-header">
-                <div>
-                    <div class="algorithm-name">${escapeHtml(algorithm.name)}</div>
-                    <div class="algorithm-version">${escapeHtml(algorithm.version || 'v1.0')}</div>
+    // 图片区域：有图片时铺满body区域，无图片时显示信息行
+    let bodySection = '';
+    if (algorithm.algorithm_image) {
+        bodySection = `
+            <div class="algorithm-card-image-area">
+                <img src="${algorithm.algorithm_image}" alt="${escapeHtml(algorithm.name)}" onerror="this.parentElement.style.display='none'">
+                <div class="algorithm-image-overlay">
+                    <div class="overlay-info">
+                        <span class="overlay-tag">${typeText} · ${escapeHtml(algorithm.model_format || 'ONNX')}</span>
+                    </div>
+                    <div class="overlay-description">${escapeHtml(algorithm.description || '暂无描述')}</div>
                 </div>
-                <span class="algorithm-status-badge ${statusClass}">${statusText}</span>
-            </div>
+            </div>`;
+    } else {
+        bodySection = `
             <div class="algorithm-card-body">
                 <div class="algorithm-info-row">
                     <span class="algorithm-info-label">类型</span>
@@ -329,11 +443,20 @@ function renderAlgorithmCard(algorithm) {
                     <span class="algorithm-info-label">格式</span>
                     <span class="algorithm-info-value">${escapeHtml(algorithm.model_format || 'ONNX')}</span>
                 </div>
-            </div>
-            <div class="algorithm-card-footer">
-                <div class="algorithm-description">
-                    ${escapeHtml(algorithm.description || '暂无描述')}
+            </div>`;
+    }
+    
+    return `
+        <div class="algorithm-card" onclick="showAlgorithmDetail(${algorithm.id})">
+            <div class="algorithm-card-header">
+                <div>
+                    <div class="algorithm-name">${escapeHtml(algorithm.name)}</div>
+                    <div class="algorithm-version">${escapeHtml(algorithm.version || 'v1.0')}</div>
                 </div>
+                <span class="algorithm-status-badge ${statusClass}">${statusText}</span>
+            </div>
+            ${bodySection}
+            <div class="algorithm-card-footer">
                 <div class="algorithm-actions">
                     <button class="algorithm-action-btn edit" onclick="openEditModal(${algorithm.id}, event)">
                         <svg viewBox="0 0 24 24" fill="currentColor">
@@ -354,7 +477,7 @@ function renderAlgorithmCard(algorithm) {
 }
 
 // ========================================
-// 渲染算法列表项
+// 渲染算法列表项（表格视图）
 // ========================================
 
 function renderAlgorithmListItem(algorithm) {
@@ -362,40 +485,44 @@ function renderAlgorithmListItem(algorithm) {
     const statusText = algorithm.status === 'active' ? '可用' : '不可用';
     const typeText = getTypeText(algorithm.type);
     
+    // 缩略图
+    let thumbSection = '';
+    if (algorithm.algorithm_image) {
+        thumbSection = `<img src="${algorithm.algorithm_image}" alt="${escapeHtml(algorithm.name)}" class="algo-list-thumb" onerror="this.style.display='none'">`;
+    } else {
+        thumbSection = `
+            <div class="algo-list-thumb-placeholder">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                </svg>
+            </div>`;
+    }
+    
     return `
-        <div class="algorithm-card" onclick="showAlgorithmDetail(${algorithm.id})">
-            <div class="algorithm-card-header">
-                <div>
-                    <div class="algorithm-name">${escapeHtml(algorithm.name)}</div>
-                    <div class="algorithm-version">${escapeHtml(algorithm.version || 'v1.0')}</div>
-                </div>
+        <div class="algorithm-list-item" onclick="showAlgorithmDetail(${algorithm.id})">
+            <div class="algo-list-thumb-cell">${thumbSection}</div>
+            <div class="algo-list-name-cell">
+                <div class="algo-list-name">${escapeHtml(algorithm.name)}</div>
+                <div class="algo-list-version">${escapeHtml(algorithm.version || 'v1.0')}</div>
+            </div>
+            <div class="algo-list-status-cell">
                 <span class="algorithm-status-badge ${statusClass}">${statusText}</span>
             </div>
-            <div class="algorithm-card-body">
-                <div class="algorithm-info-row">
-                    <span class="algorithm-info-label">类型</span>
-                    <span class="algorithm-info-value">${typeText}</span>
-                </div>
-                <div class="algorithm-info-row">
-                    <span class="algorithm-info-label">格式</span>
-                    <span class="algorithm-info-value">${escapeHtml(algorithm.model_format || 'ONNX')}</span>
-                </div>
-            </div>
-            <div class="algorithm-card-footer">
-                <div class="algorithm-actions">
-                    <button class="algorithm-action-btn edit" onclick="openEditModal(${algorithm.id}, event)">
-                        <svg viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
-                        </svg>
-                        编辑
-                    </button>
-                    <button class="algorithm-action-btn delete" onclick="openDeleteModal(${algorithm.id}, '${escapeHtml(algorithm.name)}', event)">
-                        <svg viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-                        </svg>
-                        删除
-                    </button>
-                </div>
+            <div class="algo-list-type-cell">${typeText}</div>
+            <div class="algo-list-model-type-cell">${escapeHtml(algorithm.model_type || 'yolov11n')}</div>
+            <div class="algo-list-format-cell">${escapeHtml(algorithm.model_format || 'ONNX').toUpperCase()}</div>
+            <div class="algo-list-desc-cell" title="${escapeHtml(algorithm.description || '')}">${escapeHtml(algorithm.description || '暂无描述')}</div>
+            <div class="algo-list-actions-cell">
+                <button class="algorithm-action-btn edit" onclick="openEditModal(${algorithm.id}, event)" title="编辑">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+                    </svg>
+                </button>
+                <button class="algorithm-action-btn delete" onclick="openDeleteModal(${algorithm.id}, '${escapeHtml(algorithm.name)}', event)" title="删除">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                    </svg>
+                </button>
             </div>
         </div>
     `;
@@ -439,6 +566,9 @@ function openCreateModal() {
         labelsFileInfo.style.display = 'none';
     }
     
+    // 清除算法图片
+    resetAlgoImageField();
+    
     document.getElementById('algorithmModal').classList.add('show');
 }
 
@@ -459,11 +589,14 @@ async function openEditModal(algorithmId, event) {
         document.getElementById('algorithmStatus').value = algorithm.status;
         document.getElementById('algorithmDescription').value = algorithm.description || '';
         document.getElementById('modelPath').value = algorithm.model_path || '';
-        document.getElementById('modelType').value = algorithm.model_type || 'yolov11n';  // 新增：填充模型类型
+        document.getElementById('modelType').value = algorithm.model_type || 'yolov11n';
         document.getElementById('modelFormat').value = algorithm.model_format || 'onnx';
         document.getElementById('inputSize').value = algorithm.input_size || '';
         // target_classes已删除，不再填充
         document.getElementById('labelsFile').value = algorithm.labels_file || '';
+        
+        // 显示已有算法图片
+        setAlgoImagePreview(algorithm.algorithm_image);
         
         document.getElementById('algorithmModal').classList.add('show');
         
@@ -500,6 +633,9 @@ function closeModal() {
     if (labelsFileInfo) {
         labelsFileInfo.style.display = 'none';
     }
+    
+    // 清除算法图片
+    resetAlgoImageField();
 }
 
 async function saveAlgorithm() {
@@ -602,6 +738,13 @@ async function saveAlgorithm() {
         const data = await response.json();
         
         if (response.ok) {
+            // 如果有选择的算法图片，上传
+            if (selectedAlgoImage) {
+                const savedId = isEdit ? algorithmId : data.id;
+                if (savedId) {
+                    await uploadAlgoImage(savedId);
+                }
+            }
             showNotification(isEdit ? '算法已更新' : '算法已添加', 'success');
             closeModal();
             loadAlgorithms();
@@ -1145,6 +1288,12 @@ function showAlgorithmDetail(algorithmId) {
                 <button class="modal-close" onclick="closeAlgorithmDetailModal()">&times;</button>
             </div>
             <div class="modal-body">
+                ${algorithm.algorithm_image ? `
+                <div class="detail-section">
+                    <div class="algorithm-detail-image" style="margin: 0 0 16px; height: 200px; border-radius: 8px; overflow: hidden;">
+                        <img src="${algorithm.algorithm_image}" alt="${escapeHtml(algorithm.name)}" onerror="this.parentElement.style.display='none'" style="width:100%;height:100%;object-fit:cover;">
+                    </div>
+                </div>` : ''}
                 <div class="detail-section">
                     <h4>基本信息</h4>
                     <div class="detail-info-grid">
@@ -1180,12 +1329,12 @@ function showAlgorithmDetail(algorithmId) {
                 <div class="detail-section">
                     <h4>模型信息</h4>
                     <div class="detail-info-item full-width">
-                        <label>模型路径</label>
-                        <span>${escapeHtml(algorithm.model_path || '未设置')}</span>
+                        <label>模型类型</label>
+                        <span>${escapeHtml(algorithm.model_type || 'yolov11n')}</span>
                     </div>
                     <div class="detail-info-item full-width">
-                        <label>目标类别</label>
-                        <span>${escapeHtml((algorithm.target_classes || []).join(', ') || '全部')}</span>
+                        <label>模型路径</label>
+                        <span>${escapeHtml(algorithm.model_path || '未设置')}</span>
                     </div>
                     <div class="detail-info-item full-width">
                         <label>描述</label>

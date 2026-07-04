@@ -5,6 +5,18 @@
 // 当前配置的任务ID
 let currentConfigTaskId = null;
 
+// 切换配置选项卡
+function switchConfigTab(tabName) {
+    // 切换选项卡激活状态
+    document.querySelectorAll('.config-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.tab === tabName);
+    });
+    // 切换面板显示
+    document.querySelectorAll('.tab-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.dataset.tab === tabName);
+    });
+}
+
 // 打开参数配置模态框
 async function openConfigModal(taskId, event) {
     event.stopPropagation();
@@ -27,6 +39,9 @@ async function openConfigModal(taskId, event) {
 
         // 加载当前配置到表单
         loadConfigToForm(task);
+
+        // 重置到第一个选项卡
+        switchConfigTab('decoder');
 
         // 显示模态框
         document.getElementById('configModal').classList.add('show');
@@ -107,14 +122,21 @@ function loadConfigToForm(task) {
     const imageOutputObj = eventConfig.image_output || {};
     const filterObj = eventConfig.filter || {};
     const gifObj = eventConfig.gif || {};
+    const captureObj = eventConfig.capture || {};
 
     document.getElementById('eventEnabled').value = eventConfig.enabled !== false ? 'true' : 'false';  // 默认启用
 
     document.getElementById('eventImageMethod').value = imageOutputObj.method || 'both';
     document.getElementById('eventLocalBackup').value = imageOutputObj.local_backup ? 'true' : 'false';
     document.getElementById('eventImageOutputDir').value = imageOutputObj.output_dir || 'output/images';
+    document.getElementById('eventImageDrawBbox').value = imageOutputObj.draw_bbox !== false ? 'true' : 'false';
     document.getElementById('eventMinConfidence').value = filterObj.min_confidence || 0.5;
     document.getElementById('eventGifOutputDir').value = gifObj.output_dir || 'output/gifs';
+    document.getElementById('eventGifDrawBbox').value = gifObj.draw_bbox !== false ? 'true' : 'false';
+    document.getElementById('eventCropMarginRatio').value = captureObj.crop_margin_ratio !== undefined ? captureObj.crop_margin_ratio : 1.0;
+    document.getElementById('eventGifCropMode').value = gifObj.crop_mode || 'full';
+    document.getElementById('eventGifPreSeconds').value = gifObj.pre_seconds !== undefined ? gifObj.pre_seconds : 5.0;
+    document.getElementById('eventGifPostSeconds').value = gifObj.post_seconds !== undefined ? gifObj.post_seconds : 5.0;
 
     // 显示配置
     const displayConfig = task.display_config || {};
@@ -290,7 +312,8 @@ async function saveConfig() {
                     output_dir: document.getElementById('eventImageOutputDir').value || 'output/images',
                     local_retention_days: 7,
                     auto_cleanup: true,
-                    cleanup_interval_hours: 24
+                    cleanup_interval_hours: 24,
+                    draw_bbox: document.getElementById('eventImageDrawBbox').value === 'true'
                 },
 
                 // GIF输出配置
@@ -306,12 +329,26 @@ async function saveConfig() {
                     max_height: 240,
                     draw_trajectory: true,
                     trajectory_color: [0, 255, 0],
+                    crop_mode: document.getElementById('eventGifCropMode').value || 'full',
+                    pre_seconds: parseFloat(document.getElementById('eventGifPreSeconds').value) || 5.0,
+                    post_seconds: parseFloat(document.getElementById('eventGifPostSeconds').value) || 5.0,
+                    cache_fps: 10,
+                    cache_retention: 20.0,
+                    draw_bbox: document.getElementById('eventGifDrawBbox').value === 'true',
                     minio_bucket: 'sagesight-gifs',
                     ftp_remote_dir: '/gifs'
                 },
 
                 trajectory: {},  // 固定（空）
-                capture: {},  // 固定（空）
+                // 关键帧采集配置
+                capture: {
+                    strategy: 'periodic',
+                    interval: 5,
+                    change_threshold: 50,
+                    save_full_on_start: true,
+                    save_full_on_end: true,
+                    crop_margin_ratio: parseFloat(document.getElementById('eventCropMarginRatio').value) || 1.0
+                },
 
                 // 过滤配置
                 filter: {

@@ -26,10 +26,11 @@ class AlgorithmConfig:
         status: str = 'active',
         description: str = '',
         model_path: str = '',
-        model_type: str = 'yolov11',  # 模型类型（如 yolov11n, yolov8n, yolo11n）
+        model_type: str = 'yolov11n',  # 模型类型（如 yolov11n, yolov8n, yolo11n）
         model_format: str = 'onnx',
         input_size: str = '640x640',
         labels_file: str = '',  # 标签文件路径
+        algorithm_image: str = '',  # 算法展示图片路径
         created_at: str = None,
         **kwargs
     ):
@@ -40,10 +41,11 @@ class AlgorithmConfig:
         self.status = status
         self.description = description
         self.model_path = model_path
-        self.model_type = model_type  # 新增：模型类型字段
+        self.model_type = model_type
         self.model_format = model_format
         self.input_size = input_size
-        self.labels_file = labels_file  # 标签文件路径
+        self.labels_file = labels_file
+        self.algorithm_image = algorithm_image
         self.created_at = created_at or datetime.now().isoformat()
         
         # 处理额外的字段（如废弃的target_classes字段，会被忽略）
@@ -61,11 +63,13 @@ class AlgorithmConfig:
             'status': self.status,
             'description': self.description,
             'model_path': self.model_path,
-            'model_type': self.model_type,  # 新增：模型类型字段
+            'model_type': self.model_type,
             'model_format': self.model_format,
             'input_size': self.input_size,
             'labels_file': self.labels_file,
-            'created_at': self.created_at
+            'algorithm_image': self.algorithm_image,
+            'created_at': self.created_at,
+            'updated_at': getattr(self, 'updated_at', None)
         }
     
     def update(self, data: Dict):
@@ -109,16 +113,16 @@ class AlgorithmManager:
                     model_format VARCHAR(20) DEFAULT 'onnx',
                     input_size VARCHAR(20) DEFAULT '640x640',
                     labels_file VARCHAR(200) DEFAULT '',
+                    algorithm_image VARCHAR(200) DEFAULT '',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
-            # 数据库迁移：添加缺失的列，删除废弃字段
+            # 数据库迁移：添加缺失的列
             cursor.execute("PRAGMA table_info(algorithm_configs)")
             columns = [column[1] for column in cursor.fetchall()]
             
-            # ✓ 新增：添加model_type字段
             if 'model_type' not in columns:
                 cursor.execute("ALTER TABLE algorithm_configs ADD COLUMN model_type VARCHAR(50) DEFAULT 'yolov11'")
                 logger.info("数据库迁移: 添加model_type字段")
@@ -126,6 +130,10 @@ class AlgorithmManager:
             if 'labels_file' not in columns:
                 cursor.execute("ALTER TABLE algorithm_configs ADD COLUMN labels_file VARCHAR(200) DEFAULT ''")
                 logger.info("数据库迁移: 添加labels_file字段")
+
+            if 'algorithm_image' not in columns:
+                cursor.execute("ALTER TABLE algorithm_configs ADD COLUMN algorithm_image VARCHAR(200) DEFAULT ''")
+                logger.info("数据库迁移: 添加algorithm_image字段")
             
             # target_classes字段已废弃（改为从labels_file动态获取），自动删除
             if 'target_classes' in columns:
@@ -194,7 +202,7 @@ class AlgorithmManager:
                         algo_data['status'],
                         algo_data['description'],
                         algo_data['model_path'],
-                        algo_data.get('model_type', 'yolov11'),  # 新增：model_type字段
+                        algo_data.get('model_type', 'yolov11n'),
                         algo_data['model_format'],
                         algo_data['input_size'],
                         algo_data.get('labels_file', ''),
@@ -215,12 +223,13 @@ class AlgorithmManager:
             status=row[4],
             description=row[5] or '',
             model_path=row[6] or '',
-            model_type=row[7] if len(row) > 7 and row[7] else 'yolov11',  # 新增：model_type字段
-            model_format=row[8] if len(row) > 8 else 'onnx',  # 调整索引：7 → 8
-            input_size=row[9] if len(row) > 9 else '640x640',  # 调整索引：8 → 9
-            labels_file=row[10] if len(row) > 10 and row[10] else '',  # 调整索引：9 → 10
-            created_at=row[11] if len(row) > 11 else None,  # 调整索引：10 → 11
-            updated_at=row[12] if len(row) > 12 else None  # 调整索引：11 → 12
+            model_type=row[7] if len(row) > 7 and row[7] else 'yolov11n',
+            model_format=row[8] if len(row) > 8 else 'onnx',
+            input_size=row[9] if len(row) > 9 else '640x640',
+            labels_file=row[10] if len(row) > 10 and row[10] else '',
+            algorithm_image=row[11] if len(row) > 11 and row[11] else '',
+            created_at=row[12] if len(row) > 12 else None,
+            updated_at=row[13] if len(row) > 13 else None
         )
     
     def create_algorithm(self, data: Dict) -> AlgorithmConfig:
@@ -248,8 +257,8 @@ class AlgorithmManager:
             cursor.execute('''
                 INSERT INTO algorithm_configs 
                 (name, type, version, status, description, model_path, model_type, model_format, 
-                 input_size, labels_file, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 input_size, labels_file, algorithm_image, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 data.get('name'),
                 data.get('type', 'detection'),
@@ -257,10 +266,11 @@ class AlgorithmManager:
                 data.get('status', 'active'),
                 data.get('description', ''),
                 data.get('model_path', ''),
-                data.get('model_type', 'yolov11'),  # 新增：model_type字段
+                data.get('model_type', 'yolov11n'),
                 data.get('model_format', 'onnx'),
                 data.get('input_size', '640x640'),
                 data.get('labels_file', ''),
+                data.get('algorithm_image', ''),
                 now,
                 now
             ))
@@ -287,7 +297,7 @@ class AlgorithmManager:
             cursor.execute('''
                 SELECT id, name, type, version, status, description, model_path,
                        model_type, model_format, input_size, labels_file,
-                       created_at, updated_at
+                       algorithm_image, created_at, updated_at
                 FROM algorithm_configs
                 WHERE id = ?
             ''', (algorithm_id,))
@@ -312,7 +322,7 @@ class AlgorithmManager:
             cursor.execute('''
                 SELECT id, name, type, version, status, description, model_path,
                        model_type, model_format, input_size, labels_file,
-                       created_at, updated_at
+                       algorithm_image, created_at, updated_at
                 FROM algorithm_configs WHERE name = ?
             ''', (name,))
             row = cursor.fetchone()
@@ -341,7 +351,7 @@ class AlgorithmManager:
             query = '''
                 SELECT id, name, type, version, status, description, model_path,
                        model_type, model_format, input_size, labels_file,
-                       created_at, updated_at
+                       algorithm_image, created_at, updated_at
                 FROM algorithm_configs
             '''
             params = []
@@ -402,10 +412,11 @@ class AlgorithmManager:
                 'status': 'status',
                 'description': 'description',
                 'model_path': 'model_path',
-                'model_type': 'model_type',  # 新增：model_type字段
+                'model_type': 'model_type',
                 'model_format': 'model_format',
                 'input_size': 'input_size',
-                'labels_file': 'labels_file'
+                'labels_file': 'labels_file',
+                'algorithm_image': 'algorithm_image'
             }
             
             json_fields = []  # 不再有JSON字段

@@ -77,31 +77,27 @@ function initWebSocket() {
 
 async function loadCameras() {
     try {
-        const response = await fetch('/api/cameras');
-        const data = await response.json();
-        
         // 获取筛选条件
         const status = document.getElementById('filterStatus').value;
         const enabled = document.getElementById('filterEnabled').value;
         const search = document.getElementById('filterSearch').value;
         
-        // 应用筛选
-        cameras = data.filter(camera => {
-            if (status && camera.status !== status) return false;
-            if (enabled === 'true' && !camera.enabled) return false;
-            if (enabled === 'false' && camera.enabled) return false;
-            if (search) {
-                const searchLower = search.toLowerCase();
-                if (!camera.name.toLowerCase().includes(searchLower) &&
-                    !camera.ip.toLowerCase().includes(searchLower)) {
-                    return false;
-                }
-            }
-            return true;
+        // 构建查询参数（后端分页）
+        const params = new URLSearchParams({
+            page: currentPage,
+            per_page: pageSize
         });
+        if (status) params.append('status', status);
+        if (enabled) params.append('enabled', enabled);
+        if (search) params.append('search', search);
         
-        // 篮选后重置到第一页
-        currentPage = 1;
+        const response = await fetch(`/api/cameras?${params.toString()}`);
+        const data = await response.json();
+        
+        // 后端返回分页数据
+        cameras = data.cameras || [];
+        totalItems = data.total || 0;
+        totalPages = data.total_pages || 1;
         
         renderCameras();
         
@@ -138,18 +134,7 @@ function renderCameras() {
     const camerasList = document.getElementById('camerasList');
     const paginationContainer = document.getElementById('paginationContainer');
     
-    // 计算分页
-    totalItems = cameras.length;
-    totalPages = Math.ceil(totalItems / pageSize);
-    
-    if (totalPages < 1) totalPages = 1;
-    if (currentPage > totalPages) currentPage = totalPages;
-    
-    // 获取当前页数据
-    const startIndex = (currentPage - 1) * pageSize;
-    const endIndex = startIndex + pageSize;
-    const pageCameras = cameras.slice(startIndex, endIndex);
-    
+    // 后端分页：cameras已经是当前页的数据，不需要前端切片
     if (cameras.length === 0) {
         camerasList.innerHTML = '';  // 显示空白列表
         paginationContainer.style.display = 'none';
@@ -157,6 +142,9 @@ function renderCameras() {
     }
     
     paginationContainer.style.display = 'flex';
+    
+    // 直接使用后端返回的当前页数据
+    const pageCameras = cameras;
     
     if (viewMode === 'list') {
         camerasList.className = 'cameras-list list-view';
@@ -534,18 +522,6 @@ async function registerOnvifCamera() {
 // 创建/编辑摄像机
 // ========================================
 
-function openCreateModal() {
-    document.getElementById('modalTitle').textContent = '添加摄像机';
-    document.getElementById('cameraId').value = '';
-    document.getElementById('cameraForm').reset();
-    document.getElementById('cameraEnabled').value = 'true';
-    
-    // 加载目录选项
-    loadDirectories();
-    
-    document.getElementById('cameraModal').classList.add('show');
-}
-
 async function openEditModal(cameraId, event) {
     if (event) event.stopPropagation();
     
@@ -811,6 +787,12 @@ function resetFilters() {
     document.getElementById('filterStatus').value = '';
     document.getElementById('filterEnabled').value = '';
     document.getElementById('filterSearch').value = '';
+    currentPage = 1;  // 重置到第一页
+    loadCameras();
+}
+
+function applyFilters() {
+    currentPage = 1;  // 筛选条件变化时重置到第一页
     loadCameras();
 }
 
@@ -963,27 +945,27 @@ function updatePagination() {
 
 function goToPage(page) {
     currentPage = page;
-    renderCameras();
+    loadCameras();
 }
 
 function goToPrevPage() {
     if (currentPage > 1) {
         currentPage--;
-        renderCameras();
+        loadCameras();
     }
 }
 
 function goToNextPage() {
     if (currentPage < totalPages) {
         currentPage++;
-        renderCameras();
+        loadCameras();
     }
 }
 
 function changePageSize() {
     pageSize = parseInt(document.getElementById('pageSizeSelect').value);
     currentPage = 1;  // 重置到第一页
-    renderCameras();
+    loadCameras();
 }
 
 // ========================================

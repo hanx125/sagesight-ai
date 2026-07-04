@@ -27,10 +27,12 @@ detector:
   
   # 推理后端
   # 可选值：
-  # - onnx_cuda: ONNX Runtime + CUDA Execution Provider（默认）
-  # - onnx_tensorrt: ONNX Runtime + TensorRT Execution Provider（推荐，FP16 加速）
-  # - tensorrt: 直接加载 TensorRT Engine（需要 cuda-python）
-  backend: "onnx_tensorrt"
+  # - onnx_cpu: ONNX Runtime CPU（纯CPU推理，无需GPU，适合无GPU环境）
+  # - onnx_cuda: ONNX Runtime + CUDA Execution Provider（CUDA加速，适合NVIDIA GPU）
+  # - onnx_tensorrt: ONNX Runtime + TensorRT Execution Provider（TensorRT EP，推荐，FP16加速）
+  # - tensorrt: 直接加载 TensorRT Engine（需要 cuda-python，高性能）
+  # - rknn: RKNN模型（RK3588/RK3566等瑞芯微平台NPU加速）
+  backend: "onnx_cuda"
   
   # TensorRT 配置参数（扁平结构，与代码命名一致）
   
@@ -48,7 +50,18 @@ detector:
   
   # TensorRT lib 目录路径（Windows 需要配置）
   # 说明：如果已配置系统环境变量，则不需要此配置
-  tensorrt_lib_path: "D:\\TensorRT-10.5.0.18.Windows.win10.cuda-12.6\\TensorRT-10.5.0.18\\lib"
+  # 支持空值，会自动检测常见路径
+  tensorrt_lib_path: ""
+
+  # RKNN 配置（仅 backend="rknn" 时使用）
+  # 目标平台：rk3588 | rk3566 | rk3568 | rv1103 | rv1106
+  rknn_target: "rk3588"
+
+  # RKNN 设备 ID（多设备时使用）
+  rknn_device_id: ""
+
+  # RKNN 核心掩码（0=自动，1=NPU0，2=NPU1，3=双核）
+  rknn_core_mask: 0
   
   # 全局置信度阈值（低于此值的检测结果将被过滤）
   # 可以在 class_config 中为每个类别单独设置

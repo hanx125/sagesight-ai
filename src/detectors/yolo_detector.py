@@ -30,30 +30,114 @@ from typing import List, Dict, Optional, Tuple, Literal, Union
 from dataclasses import dataclass, field
 import time
 
+# RKNN Executor 导入（仅RK3588等平台可用）
+try:
+    from src.utils.rknn_executor import RKNNExecutor, is_rknn_available
+    RKNN_EXECUTOR_AVAILABLE = True
+except ImportError:
+    RKNN_EXECUTOR_AVAILABLE = False
+    print("[YOLODetector] RKNN Executor 未安装（仅RK3588平台可用）")
+
 # TensorRT 支持
 # 必须在导入 tensorrt 之前设置 PATH
 TRT_AVAILABLE = False
-try:
-    # 优先使用环境变量中的路径
+TRT_CONFIG = {}
+
+def _load_hardware_config():
+    """
+    从system_config.yaml加载硬件配置
+    
+    Returns:
+        Dict: 硬件配置字典
+    """
+    import yaml
+    from pathlib import Path
+    
+    try:
+        # 获取项目根目录
+        project_root = Path(__file__).parent.parent.parent
+        config_path = project_root / 'config' / 'system_config.yaml'
+        
+        if not config_path.exists():
+            print("[YOLODetector] system_config.yaml 不存在，使用默认配置")
+            return {}
+        
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        
+        return config.get('hardware', {})
+    except Exception as e:
+        print(f"[YOLODetector] 加载硬件配置失败: {e}")
+        return {}
+
+def _setup_tensorrt_lib_path():
+    """
+    设置TensorRT lib路径（模块初始化时）
+    
+    优先级：
+    1. 环境变量 TENSORRT_LIB_PATH
+    2. system_config.yaml中的hardware.tensorrt.lib_path
+    3. 自动检测常见路径
+    
+    注意：DetectorConfig中的tensorrt_lib_path会在YOLODetector初始化时覆盖
+    
+    Returns:
+        str: TensorRT lib路径，失败返回空字符串
+    """
+    tensorrt_lib = ""
+    
+    # 1. 使用环境变量（最高优先级，便于临时测试）
     tensorrt_lib = os.environ.get("TENSORRT_LIB_PATH", "")
     
-    # 如果环境变量未设置，尝试使用默认路径
+    # 2. 从配置文件读取
     if not tensorrt_lib:
+        hw_config = _load_hardware_config()
+        trt_config = hw_config.get('tensorrt', {})
+        tensorrt_lib = trt_config.get('lib_path', '')
+    
+    # 3. 自动检测常见路径（Windows）
+    if not tensorrt_lib:
+        hw_config = _load_hardware_config()
+        trt_config = hw_config.get('tensorrt', {})
+        
+        # 根据配置文件中的版本号构建路径
+        trt_version = trt_config.get('version', '10.5.0.18')
+        cuda_version = hw_config.get('cuda', {}).get('version', '12.6')
+        
         default_paths = [
-            "D:\\TensorRT-10.5.0.18.Windows.win10.cuda-12.6\\TensorRT-10.5.0.18\\lib",
-            "D:\\TensorRT-10.5.0.18.Windows10.x86_64.cuda-12.6\\lib",
+            f"D:\\TensorRT-{trt_version}.Windows.win10.cuda-{cuda_version}\\TensorRT-{trt_version}\\lib",
+            f"D:\\TensorRT-{trt_version}.Windows10.x86_64.cuda-{cuda_version}\\lib",
+            "C:\\Program Files\\TensorRT\\lib",
+            "/usr/local/TensorRT/lib",  # Linux
         ]
+        
         for path in default_paths:
             if os.path.exists(path):
                 tensorrt_lib = path
+                print(f"[YOLODetector] 自动检测到TensorRT路径: {path}")
                 break
     
+    # 添加到系统PATH
     if tensorrt_lib and tensorrt_lib not in os.environ.get("PATH", ""):
         os.environ["PATH"] = tensorrt_lib + ";" + os.environ.get("PATH", "")
+        print(f"[YOLODetector] TensorRT lib路径已添加到PATH: {tensorrt_lib}")
+    
+    return tensorrt_lib
+
+# 初始化TensorRT
+try:
+    tensorrt_lib = _setup_tensorrt_lib_path()
     
     import tensorrt as trt
     TRT_AVAILABLE = True
-except ImportError:
+    
+    # 保存配置供后续使用
+    TRT_CONFIG = _load_hardware_config().get('tensorrt', {})
+    print(f"[YOLODetector] TensorRT 已加载")
+    
+except ImportError as e:
+    print(f"[YOLODetector] TensorRT 未安装或加载失败: {e}")
+    print("[YOLODetector] 将使用 ONNX Runtime + CUDA 后端")
     pass
 
 
@@ -65,16 +149,23 @@ class DetectorConfig:
     model_type: str = "yolov8n"  # 模型类型：yolov8n 或 yolo11n
 
     # 推理后端配置
-    backend: Literal["onnx_cuda", "onnx_tensorrt", "tensorrt"] = "onnx_cuda"
+    backend: Literal["onnx_cpu", "onnx_cuda", "onnx_tensorrt", "tensorrt", "rknn"] = "onnx_cuda"
+    # onnx_cpu: ONNX Runtime CPU（纯CPU推理，无需GPU）
     # onnx_cuda: ONNX Runtime + CUDA Execution Provider
     # onnx_tensorrt: ONNX Runtime + TensorRT Execution Provider（自动转换）
     # tensorrt: 直接加载 TensorRT Engine（需要 .engine 文件）
+    # rknn: RKNN模型（RK3588/RK3566等瑞芯微平台，需要.rknn文件）
 
     # TensorRT 配置（扁平结构，与配置文件一致）
     tensorrt_engine_path: str = ""  # TensorRT Engine 路径（backend="tensorrt" 时使用）
     tensorrt_engine_cache_path: str = "./trt_cache"  # Engine 缓存路径
     tensorrt_lib_path: str = ""  # TensorRT lib 目录路径（Windows 需要配置）
     use_fp16: bool = True  # 使用 FP16 精度（仅 TensorRT）
+    
+    # RKNN 配置（RK3588等瑞芯微平台）
+    rknn_target: str = "rk3588"  # 目标平台：rk3588 | rk3566 | rk3568 | rv1103 | rv1106
+    rknn_device_id: str = ""  # RKNN设备ID（多设备时使用）
+    rknn_core_mask: int = 0  # RKNN核心掩码（0=自动，1=NPU0，2=NPU1，3=双核）
 
     # 推理配置
     conf_threshold: float = 0.25  # 置信度阈值
@@ -175,23 +266,30 @@ class YOLODetector:
             self.config = DetectorConfig(
                 # 模型配置
                 model_path=config.get('model_path', 'models/yolov11n.onnx'),
-                
+
                 # 推理后端配置
-                backend=config.get('backend', 'onnx_tensorrt'),
-                
+                backend=config.get('backend', 'onnx_cuda'),
+
                 # TensorRT 配置
                 tensorrt_engine_cache_path=config.get('engine_cache_path', './trt_cache'),
+                tensorrt_lib_path=config.get('tensorrt_lib_path', ''),
+                tensorrt_engine_path=config.get('tensorrt_engine_path', ''),
                 use_fp16=config.get('use_fp16', True),
-                
+
+                # RKNN 配置
+                rknn_target=config.get('rknn_target', 'rk3588'),
+                rknn_device_id=config.get('rknn_device_id', ''),
+                rknn_core_mask=config.get('rknn_core_mask', 0),
+
                 # 推理配置
                 conf_threshold=config.get('conf_threshold', 0.25),
                 iou_threshold=config.get('iou_threshold', 0.45),
                 min_box_area=config.get('min_box_area', 10.0),
-                
+
                 # GPU 配置
                 device_id=config.get('device_id', 0),
                 gpu_mem_limit=config.get('gpu_mem_limit', 6 * 1024 * 1024 * 1024),
-                
+
                 # 类别配置：从标签文件读取或使用COCO默认类别
                 class_names=class_names
             )
@@ -207,29 +305,21 @@ class YOLODetector:
             self.config = config or DetectorConfig()
             print(f"[YOLODetector] 使用 DetectorConfig 对象: backend={self.config.backend}")
 
-        # TensorRT lib 路径配置（必须在导入 TensorRT 前设置）
+        # TensorRT lib 路径配置
+        # DetectorConfig中的tensorrt_lib_path优先级最高（来自detector_config.yaml）
         if self.config.backend in ["onnx_tensorrt", "tensorrt"]:
-            tensorrt_lib = self.config.tensorrt_lib_path
-
-            # 如果未配置 tensorrt_lib_path，尝试使用默认路径或环境变量
-            if not tensorrt_lib:
-                tensorrt_lib = os.environ.get("TENSORRT_LIB_PATH", "")
-
-                # 如果环境变量也未设置，尝试使用硬编码默认路径（兜底）
-                if not tensorrt_lib:
-                    default_paths = [
-                        "D:\\TensorRT-10.5.0.18.Windows.win10.cuda-12.6\\TensorRT-10.5.0.18\\lib",
-                        "D:\\TensorRT-10.5.0.18.Windows10.x86_64.cuda-12.6\\lib",
-                    ]
-                    for path in default_paths:
-                        if os.path.exists(path):
-                            tensorrt_lib = path
-                            break
-
-            # 将 TensorRT lib 路径添加到 PATH（Windows）
-            if tensorrt_lib and tensorrt_lib not in os.environ.get("PATH", ""):
-                os.environ["PATH"] = tensorrt_lib + ";" + os.environ.get("PATH", "")
-
+            # 如果DetectorConfig指定了路径，使用它覆盖
+            if self.config.tensorrt_lib_path:
+                tensorrt_lib = self.config.tensorrt_lib_path
+                if tensorrt_lib not in os.environ.get("PATH", ""):
+                    os.environ["PATH"] = tensorrt_lib + ";" + os.environ.get("PATH", "")
+                    print(f"[YOLODetector] 使用DetectorConfig中的TensorRT路径: {tensorrt_lib}")
+            
+            if TRT_AVAILABLE:
+                print(f"[YOLODetector] TensorRT 已加载")
+            else:
+                print(f"[YOLODetector] [警告] TensorRT 未加载，将回退到 CUDA 后端")
+        
         # ONNX Runtime 会话
         self.session: Optional[ort.InferenceSession] = None
         self.input_name: Optional[str] = None
@@ -295,6 +385,10 @@ class YOLODetector:
             self._load_tensorrt_engine()
         elif self.config.backend == "onnx_tensorrt":
             self._load_onnx_with_tensorrt(model_path)
+        elif self.config.backend == "rknn":
+            self._load_rknn(model_path)
+        elif self.config.backend == "onnx_cpu":
+            self._load_onnx_with_cpu(model_path)
         else:  # onnx_cuda
             self._load_onnx_with_cuda(model_path)
     
@@ -475,6 +569,78 @@ class YOLODetector:
         except Exception as e:
             raise RuntimeError(f"TensorRT Engine 加载失败：{e}")
     
+    def _load_onnx_with_cpu(self, model_path: str):
+        """使用 ONNX Runtime CPU 加载模型（纯CPU推理，无需GPU）"""
+        if not model_path.endswith('.onnx'):
+            raise ValueError(f"模型文件必须是 ONNX 格式：{model_path}")
+        
+        try:
+            # 创建会话选项（CPU优化）
+            session_options = ort.SessionOptions()
+            session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            
+            # CPU线程数优化（使用所有可用核心）
+            import multiprocessing
+            num_cores = multiprocessing.cpu_count()
+            session_options.intra_op_num_threads = num_cores
+            session_options.inter_op_num_threads = num_cores
+            
+            # CPU Execution Provider
+            providers = ['CPUExecutionProvider']
+            
+            # 创建推理会话
+            self.session = ort.InferenceSession(
+                model_path,
+                sess_options=session_options,
+                providers=providers
+            )
+            
+            # 获取输入信息
+            inputs = self.session.get_inputs()
+            self.input_name = inputs[0].name
+            self.input_shape = inputs[0].shape
+            
+            print(f"[YOLODetector] ONNX 模型加载成功（CPU 后端）：{model_path}")
+            print(f"  输入名称：{self.input_name}")
+            print(f"  输入形状：{self.input_shape}")
+            print(f"  CPU 核心数：{num_cores}")
+            print(f"  提示：CPU推理速度较慢，建议使用GPU后端（onnx_cuda/onnx_tensorrt）")
+            
+        except Exception as e:
+            raise RuntimeError(f"模型加载失败：{e}")
+    
+    def _load_rknn(self, model_path: str):
+        """加载 RKNN 模型（RK3588/RK3566等瑞芯微平台NPU推理）"""
+        if not RKNN_EXECUTOR_AVAILABLE:
+            raise ImportError(
+                "RKNN Executor 未安装，无法使用 RKNN 后端。\n"
+                "请在RK3588平台上安装 rknn-toolkit2:\n"
+                "pip install rknn-toolkit2"
+            )
+        
+        if not model_path.endswith('.rknn'):
+            raise ValueError(f"模型文件必须是 RKNN 格式：{model_path}")
+        
+        try:
+            # 创建 RKNN Executor
+            self.rknn_executor = RKNNExecutor(
+                model_path=model_path,
+                target=self.config.rknn_target,
+                device_id=self.config.rknn_device_id
+            )
+            
+            # RKNN模型输入通常为NHWC格式（与ONNX的NCHW不同）
+            # 输入形状需要根据实际模型调整，这里假设为(1, 640, 640, 3)
+            self.input_shape = (1, 640, 640, 3)  # NHWC格式
+            
+            print(f"[YOLODetector] RKNN 模型加载成功：{model_path}")
+            print(f"  目标平台：{self.config.rknn_target}")
+            print(f"  输入形状：{self.input_shape} (NHWC格式)")
+            print(f"  提示：RKNN推理使用NPU加速，性能优于CPU")
+            
+        except Exception as e:
+            raise RuntimeError(f"RKNN 模型加载失败：{e}")
+    
     def infer(self, input_tensor: np.ndarray) -> List[Detection]:
         """
         执行推理
@@ -500,6 +666,8 @@ class YOLODetector:
             infer_start = time.time()
             if self.config.backend == "tensorrt" and self.trt_context is not None:
                 output = self._infer_tensorrt(input_tensor)
+            elif self.config.backend == "rknn" and hasattr(self, 'rknn_executor'):
+                output = self._infer_rknn(input_tensor)
             else:
                 output = self._infer_onnx(input_tensor)
             infer_time = time.time() - infer_start
@@ -571,6 +739,39 @@ class YOLODetector:
             "请使用 backend='onnx_tensorrt' 或安装 cuda-python:\n"
             "pip install cuda-python"
         )
+    
+    def _infer_rknn(self, input_tensor: np.ndarray) -> np.ndarray:
+        """使用 RKNN 执行推理（RK3588 NPU加速）"""
+        if not hasattr(self, 'rknn_executor') or self.rknn_executor is None:
+            raise RuntimeError("RKNN 模型未加载")
+        
+        # RKNN模型输入格式转换（NCHW→NHWC）
+        # ONNX输入： (1, 3, 640, 640) NCHW格式
+        # RKNN输入： (1, 640, 640, 3) NHWC格式
+        if input_tensor.shape == (1, 3, 640, 640):
+            # 转换NCHW到NHWC
+            input_tensor = np.transpose(input_tensor, (0, 2, 3, 1))
+        elif input_tensor.shape != (1, 640, 640, 3):
+            raise ValueError(f"RKNN输入形状错误：期望 (1, 640, 640, 3) 或 (1, 3, 640, 640)，得到 {input_tensor.shape}")
+        
+        # 执行RKNN推理
+        outputs = self.rknn_executor.run(input_tensor)
+        
+        # RKNN输出格式处理
+        # YOLO模型RKNN输出通常是多个分支（boxes, classes, scores）
+        # 需要根据实际模型输出结构调整
+        
+        # 如果输出是列表，取第一个元素
+        if isinstance(outputs, list) and len(outputs) > 0:
+            output = outputs[0]
+        else:
+            output = outputs
+        
+        # 输出格式转换（根据RKNN模型实际情况）
+        # RKNN输出可能是NHWC格式，需要转换为NCHW以便后处理
+        # 这里假设输出已经是正确格式，后续可根据实际情况调整
+        
+        return output
     
     def _postprocess(self, output: np.ndarray, img_height: int, img_width: int) -> List[Detection]:
         """

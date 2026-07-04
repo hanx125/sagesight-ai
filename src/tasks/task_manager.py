@@ -443,8 +443,15 @@ class EventRecord:
     class_name: str = ""
     confidence: float = 0.0
     bbox: List[float] = field(default_factory=list)
-    image_url: str = ""
+    local_image_url: str = ""  # 本地图片路径
+    minio_image_url: str = ""  # MinIO图片路径
+    ftp_image_url: str = ""    # FTP图片路径
+    local_gif_url: str = ""    # 本地GIF路径
+    minio_gif_url: str = ""    # MinIO GIF路径
+    ftp_gif_url: str = ""      # FTP GIF路径
     metadata: Dict = field(default_factory=dict)
+    start_time: Optional[datetime] = None  # 跟踪起始时间
+    end_time: Optional[datetime] = None    # 跟踪终止时间
     created_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
@@ -468,8 +475,15 @@ class EventRecord:
             'class_name': self.class_name,
             'confidence': self.confidence,
             'bbox': self.bbox,
-            'image_url': self.image_url,
+            'local_image_url': self.local_image_url,
+            'minio_image_url': self.minio_image_url,
+            'ftp_image_url': self.ftp_image_url,
+            'local_gif_url': self.local_gif_url,
+            'minio_gif_url': self.minio_gif_url,
+            'ftp_gif_url': self.ftp_gif_url,
             'metadata': self.metadata,
+            'start_time': format_datetime(self.start_time),
+            'end_time': format_datetime(self.end_time),
             'created_at': format_datetime(self.created_at)
         }
 
@@ -606,15 +620,46 @@ class TaskManager:
                     class_name VARCHAR(50),
                     confidence FLOAT,
                     bbox TEXT,
-                    image_url VARCHAR(500),
+                    local_image_url VARCHAR(500),
+                    minio_image_url VARCHAR(500),
+                    ftp_image_url VARCHAR(500),
+                    local_gif_url VARCHAR(500),
+                    minio_gif_url VARCHAR(500),
+                    ftp_gif_url VARCHAR(500),
                     metadata TEXT,
+                    start_time DATETIME,
+                    end_time DATETIME,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (task_id) REFERENCES detection_tasks(id)
                 )
             ''')
             
+            # 数据库迁移：如果旧表存在但缺少新字段，则添加
+            cursor.execute("PRAGMA table_info(events)")
+            columns = [col[1] for col in cursor.fetchall()]
+
+            # 迁移：添加GIF存储路径字段
+            if 'local_gif_url' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN local_gif_url VARCHAR(500)")
+                print("[TaskManager] events 表添加 local_gif_url 字段")
+            if 'minio_gif_url' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN minio_gif_url VARCHAR(500)")
+                print("[TaskManager] events 表添加 minio_gif_url 字段")
+            if 'ftp_gif_url' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN ftp_gif_url VARCHAR(500)")
+                print("[TaskManager] events 表添加 ftp_gif_url 字段")
+            
+            # 迁移：添加 start_time 和 end_time 字段
+            if 'start_time' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN start_time DATETIME")
+                print("[TaskManager] events 表添加 start_time 字段")
+            if 'end_time' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN end_time DATETIME")
+                print("[TaskManager] events 表添加 end_time 字段")
+            
             # ========================================
-            # 算法注册表（保留原有）
+            # 算法注册表（保留表结构，避免旧触发器/外键引用失败）
+            # 实际使用 algorithm_configs 表，此表仅作兼容性保留
             # ========================================
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS algorithms (
@@ -648,9 +693,8 @@ class TaskManager:
                 cursor.execute("ALTER TABLE detection_tasks ADD COLUMN model_type VARCHAR(50) DEFAULT 'yolov11n'")
                 logger.info("数据库迁移: 添加model_type字段到detection_tasks表")
             
-            # 删除废弃的algorithms表（如果存在）
-            cursor.execute('DROP TABLE IF EXISTS algorithms')
-            logger.info("删除废弃的algorithms表（统一使用algorithm_configs表）")
+            # algorithms 表保留（不删除），避免旧触发器/外键引用失败
+            # 实际算法配置已迁移到 algorithm_configs 表
             
             conn.commit()
             print(f"[TaskManager] 数据库初始化完成: {self.db_path}")
@@ -902,8 +946,10 @@ class TaskManager:
             cursor.execute('''
                 INSERT INTO events 
                 (event_id, task_id, camera_id, algorithm, type, class_name, 
-                 confidence, bbox, image_url, metadata, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
+                 local_gif_url, minio_gif_url, ftp_gif_url,
+                 metadata, start_time, end_time, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 event.event_id,
                 event.task_id,
@@ -913,8 +959,15 @@ class TaskManager:
                 event.class_name,
                 event.confidence,
                 json.dumps(event.bbox),
-                event.image_url,
+                event.local_image_url,
+                event.minio_image_url,
+                event.ftp_image_url,
+                event.local_gif_url,
+                event.minio_gif_url,
+                event.ftp_gif_url,
                 json.dumps(event.metadata),
+                event.start_time,
+                event.end_time,
                 datetime.now()
             ))
             
@@ -933,7 +986,11 @@ class TaskManager:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             
-            query = 'SELECT * FROM events WHERE 1=1'
+            # 明确指定列名查询，避免ALTER TABLE导致的列顺序问题
+            query = '''SELECT id, event_id, task_id, camera_id, algorithm, type, class_name, 
+                       confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
+                       local_gif_url, minio_gif_url, ftp_gif_url,
+                       metadata, start_time, end_time, created_at FROM events WHERE 1=1'''
             params = []
             
             if task_id:
@@ -1006,6 +1063,24 @@ class TaskManager:
             except (json.JSONDecodeError, TypeError):
                 return default
         
+        # 解析时间字段
+        def parse_datetime(value):
+            if not value:
+                return None
+            try:
+                if isinstance(value, datetime):
+                    return value
+                return datetime.fromisoformat(str(value))
+            except (ValueError, TypeError):
+                try:
+                    return datetime.strptime(str(value), '%Y-%m-%d %H:%M:%S')
+                except (ValueError, TypeError):
+                    return value  # 保持原字符串
+        
+        created_at = parse_datetime(row[18])  # created_at 在 index 18
+        start_time = parse_datetime(row[16])  # start_time 在 index 16
+        end_time = parse_datetime(row[17])    # end_time 在 index 17
+        
         return EventRecord(
             id=row[0],
             event_id=row[1],
@@ -1016,9 +1091,16 @@ class TaskManager:
             class_name=row[6],
             confidence=row[7],
             bbox=safe_json_loads(row[8], []),
-            image_url=row[9] or '',
-            metadata=safe_json_loads(row[10], {}),
-            created_at=row[11]
+            local_image_url=row[9] or '',
+            minio_image_url=row[10] or '',
+            ftp_image_url=row[11] or '',
+            local_gif_url=row[12] or '',
+            minio_gif_url=row[13] or '',
+            ftp_gif_url=row[14] or '',
+            metadata=safe_json_loads(row[15], {}),
+            start_time=start_time,
+            end_time=end_time,
+            created_at=created_at
         )
     
     # ========================================

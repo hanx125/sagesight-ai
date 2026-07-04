@@ -46,6 +46,8 @@ event_output:
     local_retention_days: 7       # 本地保存天数（默认7天）
     auto_cleanup: true            # 是否自动清理过期文件
     cleanup_interval_hours: 24    # 清理间隔（小时）
+    # 是否在事件图片上绘制检测框（前端开关控制）
+    draw_bbox: true
   
   # ========================================
   # 图片压缩配置
@@ -70,12 +72,26 @@ event_output:
     cleanup_interval_hours: 24    # 清理间隔（小时）
 
     # GIF 参数
-    max_frames: 30                # 最大帧数
-    fps: 5                        # GIF 播放帧率
+    max_frames: 60                # 最大帧数（增加到60，覆盖更长时间跨度）
+    fps: 10                       # GIF 播放帧率（提高到10，配合时长计算）
     max_width: 320                # 最大宽度
     max_height: 240               # 最大高度
     draw_trajectory: true         # 是否绘制轨迹
     trajectory_color: [0, 255, 0] # 轨迹颜色（BGR格式，绿色）
+    # 是否在GIF帧上绘制检测框（前端开关控制）
+    draw_bbox: true
+
+    # GIF 生成模式（基于帧缓存）
+    # crop_mode: 裁剪模式 - 'full' 全场景帧（不裁剪，bbox直接画在完整画面上）
+    #                    - 'target' 裁剪目标区域（旧逻辑，裁剪到目标附近）
+    crop_mode: full
+    # pre_seconds: 事件起始前多少秒的帧纳入GIF（需 <= cache_retention）
+    pre_seconds: 5.0
+    # post_seconds: 事件结束后多少秒的帧纳入GIF（目标消失后等待此时间再生成）
+    post_seconds: 5.0
+    # 帧缓存配置（用于GIF原始帧回放）
+    cache_fps: 10                 # 缓存采样率（帧/秒）
+    cache_retention: 20.0         # 缓存保留秒数（需 >= pre_seconds + 最长事件时长 + post_seconds）
 
     # MinIO 存储桶（使用全局 storage.minio 配置）
     minio_bucket: "sagesight-gifs"
@@ -91,7 +107,24 @@ event_output:
   # ========================================
   # 截图配置（固定）
   # ========================================
-  capture: {}
+  # ========================================
+  # 关键帧采集配置
+  # ========================================
+  capture:
+    # 采集策略：full（完整帧）| cropped（裁剪帧）| keyframe（关键帧）| periodic（周期采集）
+    strategy: periodic
+    # 周期采集间隔（每 N 帧采集一帧，越小采集越密集）
+    interval: 5
+    # 变化阈值（像素，用于关键帧策略判断）
+    change_threshold: 50
+    # 首次出现时保存完整帧
+    save_full_on_start: true
+    # 目标消失时保存完整帧
+    save_full_on_end: true
+    # 裁剪边距比例：在 bbox 各方向扩展 bbox 尺寸的比例
+    # 0.5=扩展50%（裁剪范围=bbox的2倍），1.0=扩展100%（裁剪范围=bbox的3倍）
+    # 值越大，裁剪画面范围越大，目标占比越小，保留更多上下文，避免过度放大导致模糊
+    crop_margin_ratio: 1.0
   
   # ========================================
   # 事件过滤配置

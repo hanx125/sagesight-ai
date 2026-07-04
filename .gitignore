@@ -1,0 +1,162 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+python/
+TraeAI-*/
+.idea/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+
+# ==================== 项目特定忽略 ====================
+
+# 日志文件
+logs/
+*.log
+
+# 输出文件（事件图片、GIF等）
+output/
+
+# 临时文件
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# SQLite临时文件
+*.db-shm
+*.db-wal
+
+# 测试文件
+test_*.py
+test_*.html
+test_*.mp4
+test_*.avi
+benchmark_output.txt
+
+# 性能分析文件
+profile_*.py
+
+# 启动脚本（已废弃）
+start.bat
+start_web.bat
+stop.bat
+
+# TensorRT缓存
+trt_cache/
+*.engine
+*.plan
+
+# 模型文件（太大，不上传）
+models/*.onnx
+models/*.engine
+models/*.rknn
+models/*.pt
+models/*.pth
+
+# 配置备份文件
+config/*.bak
+config/*.backup
+
+# 数据库文件（根据需要可以上传）
+# data/*.db
+
+# MinIO临时文件
+.minio/
+
+# FTP临时文件
+.ftp/
