@@ -145,10 +145,12 @@ pip install -r requirements.txt
 ### 3. 配置文件
 
 **核心配置文件**（`config/` 目录）：
-- `system_config.yaml`：系统配置（硬件、流媒体、远程存储）
+- `system_config.yaml`：系统配置（Web服务端口、硬件加速、存储配置）
 - `detector_config.yaml`：检测器配置（推理后端、阈值）
 - `decoder_config.yaml`：解码器配置（硬件加速）
 - `event_output.yaml`：事件输出配置（GIF、存储方式）
+- `tracker_config.yaml`：跟踪器配置（BoT-SORT参数）
+- `motion_config.yaml`：运动检测配置
 
 **推理后端选择**：
 - `onnx_cuda`：CUDA 加速推理（推荐 NVIDIA GPU）
@@ -165,7 +167,7 @@ python run.py
 ```
 
 **访问平台**：
-- 打开浏览器访问：`http://localhost:5000`
+- 打开浏览器访问：`http://localhost:5555`
 - 默认用户名：`admin`
 - 默认密码：`admin123`
 
@@ -217,29 +219,128 @@ python run.py
 ```
 sagesight-AI/
 ├── config/              # 配置文件目录
-│   ├── system_config.yaml    # 系统配置
-│   ├── detector_config.yaml  # 检测器配置
-│   ├── decoder_config.yaml   # 解码器配置
-│   └── event_output.yaml     # 事件输出配置
+│   ├── system_config.yaml    # 系统配置（Web服务、硬件加速、存储）
+│   ├── detector_config.yaml  # 检测器配置（推理后端、阈值）
+│   ├── decoder_config.yaml   # 解码器配置（硬件加速）
+│   ├── event_output.yaml     # 事件输出配置（GIF、存储方式）
+│   ├── tracker_config.yaml   # 跟踪器配置（BoT-SORT参数）
+│   ├── motion_config.yaml    # 运动检测配置
+│   └── display_config.yaml   # 显示配置
 ├── src/                 # 源代码目录
 │   ├── decoders/        # 视频解码器
+│   │   ├── __init__.py
+│   │   └── video_decoder.py
 │   ├── detectors/       # 目标检测器
+│   │   ├── __init__.py
+│   │   ├── yolo_detector.py
+│   │   ├── motion_detector.py
+│   │   └── preprocessor.py
 │   ├── tracking/        # 目标跟踪器
+│   │   ├── __init__.py
+│   │   └── botsort/
+│   │       ├── __init__.py
+│   │       ├── botsort_tracker.py
+│   │       ├── kalman_filter_h.py
+│   │       ├── reid_extractor.py
+│   │       └── track.py
 │   ├── events/          # 事件输出处理
+│   │   ├── __init__.py
+│   │   ├── event_output.py
+│   │   ├── gif_generator.py
+│   │   ├── minio_outputter.py
+│   │   ├── ftp_outputter.py
+│   │   ├── mqtt_outputter.py
+│   │   └── websocket_outputter.py
 │   ├── tasks/           # 任务管理
+│   │   ├── __init__.py
+│   │   ├── task_manager.py
+│   │   ├── task_executor.py
+│   │   ├── task_api.py
+│   │   ├── device_channel_pool_manager.py
+│   │   └── device_channel_pool_api.py
 │   ├── cameras/         # 摄像机管理
+│   │   ├── __init__.py
+│   │   ├── camera_manager.py
+│   │   ├── camera_api.py
+│   │   ├── stream_service.py
+│   │   ├── stream_api.py
+│   │   ├── ptz_service.py
+│   │   ├── ptz_api.py
+│   │   ├── directory_service.py
+│   │   ├── directory_api.py
+│   │   ├── audio_talk_service_onvif.py
+│   │   ├── audio_talk_api.py
+│   │   ├── onvif_client.py
+│   │   └── onvif_audio_backchannel.py
 │   ├── algorithms/      # 算法管理
+│   │   ├── __init__.py
+│   │   ├── algorithm_manager.py
+│   │   ├── algorithm_api.py
+│   │   ├── algorithm_factory.py
+│   │   └── model_manager.py
 │   ├── system/          # 系统管理
-│   └ auth/              # 用户认证
-│   └ utils/             # 工具类
+│   │   ├── __init__.py
+│   │   ├── system_manager.py
+│   │   └── system_api.py
+│   ├── auth/            # 用户认证
+│   │   ├── __init__.py
+│   │   ├── auth_manager.py
+│   │   └── auth_api.py
+│   └── utils/           # 工具类
+│       ├── __init__.py
+│       ├── frame_queue.py
+│       ├── frame_index_queue.py
+│       ├── shared_memory.py
+│       ├── shared_memory_ring_buffer.py
+│       └── rknn_executor.py
 ├── static/              # 静态资源
 │   ├── css/             # 样式文件
+│   │   ├── style.css
+│   │   ├── audio-talk.css
+│   │   └── nipplejs-ptz.css
 │   ├── js/              # JavaScript 文件
-│   └ images/            # 图片资源
+│   │   ├── main.js
+│   │   ├── tasks.js
+│   │   ├── cameras.js
+│   │   ├── monitor.js
+│   │   ├── algorithms.js
+│   │   ├── system.js
+│   │   ├── audio_talk.js
+│   │   ├── audio_talk_onvif.js
+│   │   ├── ptz_joystick.js
+│   │   ├── config_modal.js
+│   │   ├── ZLMRTCClient.js
+│   │   ├── jessibuca/    # 视频播放器
+│   │   └── h265web/      # H265解码
+│   └── images/          # 图片资源
+│       └── algorithms/  # 算法示例图片
 ├── templates/           # HTML 模板
+│   ├── base.html        # 基础布局模板
+│   ├── login.html       # 登录页面
+│   ├── monitor.html     # 电视墙页面
+│   ├── tasks.html       # 任务管理页面
+│   ├── cameras.html     # 摄像机管理页面
+│   ├── events.html      # 事件管理页面
+│   ├── algorithms.html  # 算法库页面
+│   └── system.html      # 系统管理页面
+├── models/              # 模型文件目录
+│   ├── detection/       # 检测模型
+│   ├── labels/          # 标签文件
+│   └── coco_labels.txt  # COCO类别标签
 ├── data/                # 数据文件
 │   ├── sagesight.db     # SQLite 数据库
-│   └ tasks.db           # 任务数据库
+│   └── tasks.db         # 任务数据库
+├── docs/                # 文档目录
+│   ├── images/          # 功能截图
+│   ├── 参数配置说明.md
+│   ├── video_decoder_documentation.md
+│   ├── BoT-SORT_Integration_Guide.md
+│   ├── SHARED_MEMORY_FRAME_QUEUE_ARCHITECTURE.md
+│   ├── MULTIPROCESS_OPTIMIZATION.md
+│   └── yolo_detection_channel_development_plan.md
+├── examples/            # 示例代码
+├── scripts/             # 辅助脚本
+├── tests/               # 测试脚本
 ├── logs/                # 日志文件
 ├── output/              # 输出文件（图片、GIF）
 ├── requirements.txt     # Python 依赖清单
