@@ -197,6 +197,45 @@ python run.py
 - 右侧显示最新事件列表
 - 点击事件查看详细信息和 GIF 动画
 
+### 6. 部署说明
+
+**推荐使用 phpStudy 管理数据库和 FTP：**
+
+phpStudy 是一款集成了 Apache/Nginx、MySQL/MariaDB、FTP 等服务的一键式服务器管理工具，非常适合本地开发和部署：
+
+1. **下载地址**：[https://www.xp.cn/download.html](https://www.xp.cn/download.html)
+2. **安装配置**：
+   - 安装后启动 MySQL 服务，用于管理数据库
+   - 启动 FTP 服务，用于远程存储事件图片和 GIF
+   - 默认端口：MySQL 3306，FTP 21
+3. **配置连接**：
+   - 在 `config/system_config.yaml` 中配置 FTP 连接信息
+   - 在 `config/system_config.yaml` 中配置 MinIO 连接信息（可选）
+
+**ZLMediaKit 流媒体服务器配置：**
+
+本项目使用 ZLMediaKit 作为流媒体服务器，支持 RTSP/RTMP/HTTP-FLV/HLS/WebRTC 等协议。配置文件参考：[docs/流媒体服务器参数配置.MD](docs/流媒体服务器参数配置.MD)
+
+**关键配置说明：**
+- **API 配置**：`api.secret` 设置 API 密钥
+- **HTTP 服务**：默认端口 88，支持跨域访问
+- **RTSP 服务**：默认端口 554，支持直接代理
+- **RTMP 服务**：默认端口 1935
+- **RTC 服务**：默认端口 8000，支持 WebRTC 语音对讲
+- **钩子配置**：配置回调地址，用于流媒体事件通知
+
+**配置文件路径**：将配置文件保存为 `config.ini` 放在 ZLMediaKit 目录下，启动服务即可。
+
+**启动命令**（Windows）：
+```bash
+MediaServer.exe
+```
+
+**启动命令**（Linux）：
+```bash
+./MediaServer
+```
+
 ## 应用场景
 
 ### 安防监控
