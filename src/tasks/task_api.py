@@ -223,26 +223,127 @@ def create_task():
 
 @task_bp.route('/tasks/<int:task_id>', methods=['PUT'])
 def update_task(task_id: int):
-    """更新任务"""
+    """更新任务
+
+    更新任务时会：
+    1. 更新任务本身的配置
+    2. 处理通道数据的更新（新增临时通道、更新已有通道绑定）
+    3. 更新摄像机信息（如果更换了摄像机）
+    """
     data = request.json
-    
+
     if not data:
         return jsonify({'error': '请求数据无效'}), 400
-    
+
     task_manager = get_task_manager()
+
+    # 检查任务是否存在
+    task = task_manager.get_task(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+
+    # 1. 更新任务本身的配置
     success = task_manager.update_task(task_id, data)
-    
+
     if success:
+        # 2. 处理通道数据的更新
+        temp_channels = data.get('temp_channels', [])
+        existing_channel_ids = data.get('existing_channel_ids', [])
+
+        if temp_channels or existing_channel_ids:
+            from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager, DeviceChannelPool
+            from src.cameras.camera_manager import get_camera_manager
+
+            channel_pool_manager = get_device_channel_pool_manager()
+            camera_manager = get_camera_manager()
+
+            # 获取任务现有的通道绑定
+            existing_task_channels = channel_pool_manager.get_task_device_channels(task_id)
+            existing_task_channel_ids = [ch.id for ch in existing_task_channels]
+
+            # 2.1 批量入库临时通道到 device_channel_pool 表
+            new_channel_ids = []
+            for temp_channel in temp_channels:
+                channel = DeviceChannelPool(
+                    channel_name=temp_channel.get('channel_name', ''),
+                    rtsp_url=temp_channel.get('rtsp_url', ''),
+                    channel_source=temp_channel.get('channel_source', 'local_platform'),
+                    enabled=temp_channel.get('enabled', True)
+                )
+                channel_id = channel_pool_manager.add_device_channel(channel)
+                new_channel_ids.append(channel_id)
+
+                # 更新摄像机表的 ai_detection 状态
+                camera_id = temp_channel.get('camera_id')
+                if camera_id:
+                    camera_manager.update_camera(camera_id, {'ai_detection': True})
+                    # 创建摄像机与设备通道池的关联
+                    try:
+                        channel_pool_manager.bind_camera_to_channel(camera_id, channel_id)
+                        logger.info(f"摄像机与通道已关联: camera_id={camera_id}, channel_id={channel_id}")
+                    except Exception as bind_err:
+                        logger.warning(f"关联摄像机与通道失败: camera_id={camera_id}, channel_id={channel_id}, error={bind_err}")
+
+            # 2.2 合并已存在的通道ID
+            all_channel_ids = new_channel_ids + [int(id) for id in existing_channel_ids]
+
+            # 2.3 解绑不在新列表中的通道，并删除不再使用的通道池记录
+            for old_channel_id in existing_task_channel_ids:
+                if old_channel_id not in all_channel_ids:
+                    # 解绑通道与任务
+                    channel_pool_manager.unbind_device_channel_from_task(task_id, old_channel_id)
+                    logger.info(f"解绑旧通道: task_id={task_id}, channel_id={old_channel_id}")
+
+                    # 检查该通道是否还被其他任务使用
+                    other_task_ids = channel_pool_manager.get_device_channel_tasks(old_channel_id)
+
+                    # 如果该通道不再被任何任务使用，删除通道池记录
+                    if len(other_task_ids) == 0:
+                        # 获取通道信息，用于更新摄像机ai_detection状态
+                        old_channel = channel_pool_manager.get_device_channel(old_channel_id)
+                        if old_channel:
+                            # 删除通道池记录
+                            channel_pool_manager.delete_device_channel(old_channel_id)
+                            logger.info(f"删除不再使用的通道池记录: channel_id={old_channel_id}")
+
+                            # 更新camera.ai_detection状态（根据rtsp_url匹配）
+                            try:
+                                all_cameras = camera_manager.get_all_cameras()
+                                matching_camera = None
+
+                                # 尝试通过rtsp_url匹配
+                                for camera in all_cameras:
+                                    if camera.rtsp_stream == old_channel.rtsp_url or camera.source == old_channel.rtsp_url:
+                                        matching_camera = camera
+                                        break
+
+                                if matching_camera:
+                                    # 检查该摄像机是否还被其他通道使用
+                                    other_channels = channel_pool_manager.get_camera_channels(matching_camera.id)
+                                    if len(other_channels) == 0:
+                                        # 该摄像机不再被任何通道使用，更新ai_detection状态
+                                        camera_manager.update_camera(matching_camera.id, {'ai_detection': False})
+                                        logger.info(f"更新摄像机ai_detection状态为False: camera_id={matching_camera.id}")
+                            except Exception as camera_err:
+                                logger.warning(f"更新摄像机ai_detection状态失败: {camera_err}")
+
+            # 2.4 绑定新的通道（确保所有通道都绑定）
+            for channel_id in all_channel_ids:
+                if channel_id not in existing_task_channel_ids:
+                    channel_pool_manager.bind_device_channel_to_task(task_id, channel_id)
+                    logger.info(f"绑定新通道: task_id={task_id}, channel_id={channel_id}")
+
         task = task_manager.get_task(task_id)
-        
+
         # WebSocket 通知
         if _socketio:
             _socketio.emit('task_updated', {'task_id': task_id})
-        
+
         return jsonify({
             'message': '任务更新成功',
             'task': task.to_dict()
         })
+
     return jsonify({'error': '任务不存在'}), 404
 
 
