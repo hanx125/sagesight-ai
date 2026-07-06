@@ -171,7 +171,34 @@ class CameraWorker:
     def init_components(self):
         """初始化摄像机专属组件"""
         try:
-            # 初始化解码器
+            # ========================================
+            # 重要：先启动ZLM推流（确保流已推送）
+            # ========================================
+            # 根据项目约束：Media stream playback must first check and auto-start stream
+            # 任务进程启动时，需要先启动ZLM推流，否则FFmpeg连接ZLM代理地址会失败
+            print(f"[CameraWorker-{self.camera_id}] 检查并启动ZLM推流...")
+            
+            try:
+                from src.cameras.stream_service import StreamService
+                stream_service = StreamService()
+                
+                # 调用start_stream API启动推流
+                result = stream_service.start_stream(self.camera_id)
+                
+                if result.get('success'):
+                    print(f"[CameraWorker-{self.camera_id}] ZLM推流已启动")
+                    print(f"[CameraWorker-{self.camera_id}]   RTSP代理地址: {result.get('rtsp', self.rtsp_url)}")
+                else:
+                    print(f"[CameraWorker-{self.camera_id}] ⚠️ ZLM推流启动失败: {result.get('message', '未知错误')}")
+                    print(f"[CameraWorker-{self.camera_id}] 将继续尝试连接...")
+                    
+            except Exception as stream_err:
+                print(f"[CameraWorker-{self.camera_id}] ⚠️ ZLM推流启动异常: {stream_err}")
+                print(f"[CameraWorker-{self.camera_id}] 将继续尝试连接...")
+            
+            # ========================================
+            # 初始化解码器（使用ZLM代理地址）
+            # ========================================
             from src.decoders.video_decoder import VideoDecoder
             
             decoder_config = {
