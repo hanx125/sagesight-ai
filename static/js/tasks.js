@@ -711,10 +711,13 @@ function clearTargetClassesContainer() {
 async function loadAvailableCameras() {
     try {
         const response = await fetch('/api/cameras');
-        availableCameras = await response.json();
+        const data = await response.json();
+        // API返回对象格式，提取cameras数组
+        availableCameras = data.cameras || [];
 
     } catch (error) {
         console.error('加载监控设备列表失败:', error);
+        availableCameras = [];
     }
 }
 
