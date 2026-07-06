@@ -194,7 +194,7 @@ class CameraWorker:
                     
                     if server:
                         server_host = server.get('host', '127.0.0.1')
-                        http_port = server.get('http_port', 80)
+                        http_port = server.get('http_port', server.get('api_port', 88))
                         secret = server.get('secret') or server.get('config', {}).get('secret', '035c73f7-bb6b-4880-a316-36af2cf4c6fb')
                         app = 'AI'
                         stream_id = self.camera_id
