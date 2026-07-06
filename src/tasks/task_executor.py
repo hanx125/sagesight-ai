@@ -203,24 +203,24 @@ class CameraWorker:
                         stream_exists = check_stream_online(server_host, http_port, secret, app, stream_id)
                         
                         if stream_exists:
-                            print(f"[CameraWorker-{self.camera_id}] ✅ ZLM推流已存在（流已在线）")
+                            print(f"[CameraWorker-{self.camera_id}] [OK] ZLM推流已存在（流已在线）")
                         else:
                             # 流不存在，启动推流
-                            print(f"[CameraWorker-{self.camera_id}] ⚠️ ZLM推流不存在，启动推流...")
+                            print(f"[CameraWorker-{self.camera_id}] [WARN] ZLM推流不存在，启动推流...")
                             result = stream_service.start_stream(self.camera_id)
                             
                             if result.get('success'):
-                                print(f"[CameraWorker-{self.camera_id}] ✅ ZLM推流已启动")
+                                print(f"[CameraWorker-{self.camera_id}] [OK] ZLM推流已启动")
                                 stream_exists = True
                             else:
-                                print(f"[CameraWorker-{self.camera_id}] ⚠️ ZLM推流启动失败: {result.get('message', '未知错误')}")
+                                print(f"[CameraWorker-{self.camera_id}] [WARN] ZLM推流启动失败: {result.get('message', '未知错误')}")
                     else:
-                        print(f"[CameraWorker-{self.camera_id}] ⚠️ 没有配置流媒体服务器")
+                        print(f"[CameraWorker-{self.camera_id}] [WARN] 没有配置流媒体服务器")
                 else:
-                    print(f"[CameraWorker-{self.camera_id}] ⚠️ 摄像机信息获取失败")
+                    print(f"[CameraWorker-{self.camera_id}] [WARN] 摄像机信息获取失败")
                     
             except Exception as stream_err:
-                print(f"[CameraWorker-{self.camera_id}] ⚠️ ZLM推流检查异常: {stream_err}")
+                print(f"[CameraWorker-{self.camera_id}] [WARN] ZLM推流检查异常: {stream_err}")
                 print(f"[CameraWorker-{self.camera_id}] 将继续尝试连接...")
             
             # ========================================
