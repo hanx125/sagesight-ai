@@ -984,7 +984,8 @@ class CameraWorker:
                     'last_update': time.time(),
                     'start_time': time.time(),
                     'class_id': class_id,
-                    'confidence': confidence
+                    'confidence': confidence,
+                    'last_visible_frame': frame.copy(),  # 保存目标最后可见时的帧
                 }
                 
                 # 采集首帧（完整帧或裁剪帧）- 始终采集，用于GIF生成
@@ -1004,6 +1005,7 @@ class CameraWorker:
                 # 更新活动跟踪目标
                 self.active_tracks[track_id]['last_bbox'] = bbox
                 self.active_tracks[track_id]['last_update'] = time.time()
+                self.active_tracks[track_id]['last_visible_frame'] = frame.copy()  # 保存目标最后可见时的帧
                 
                 # 周期性采集（根据策略）- 始终采集，用于GIF生成
                 if self.capture_strategy == 'periodic':
@@ -1047,11 +1049,13 @@ class CameraWorker:
                 active_info = self.active_tracks[disappeared_id]
                 last_bbox = active_info['last_bbox']
                 
-                # 使用当前完整帧采集（保证事件图片为完整检测帧尺寸，而非裁剪帧）
-                # 注意：目标可能已离开当前帧，bbox 为最后已知位置
+                # 使用目标最后可见时的帧（而非当前帧），确保框在目标上
+                # 如果 last_visible_frame 不存在，则使用当前帧
+                last_visible_frame = active_info.get('last_visible_frame', frame)
+                
                 self._capture_frame(
                     track_id=disappeared_id,
-                    frame=frame,
+                    frame=last_visible_frame,  # 使用目标最后可见时的帧
                     bbox=last_bbox,
                     frame_id=frame_id,
                     is_full_frame=True,
