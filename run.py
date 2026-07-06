@@ -708,6 +708,47 @@ if __name__ == '__main__':
     # 初始化任务管理器
     tm = get_task_manager()
     
+    # ========================================
+    # 注册信号处理（确保Ctrl+C时正确清理）
+    # ========================================
+    import atexit
+    
+    def cleanup_handler():
+        """清理处理函数（atexit注册）"""
+        logger.info("\n[Cleanup] 正在清理系统资源...")
+        
+        pm.running = False
+        
+        # 停止所有任务进程
+        try:
+            pm.stop_all_tasks()
+        except Exception as e:
+            logger.error(f"[Cleanup] 停止任务进程失败: {e}")
+        
+        # 更新数据库状态
+        try:
+            running_ids = pm.get_running_tasks()
+            for task_id in running_ids:
+                tm.update_task(task_id, {'status': 'stopped'})
+        except Exception as e:
+            logger.error(f"[Cleanup] 更新任务状态失败: {e}")
+        
+        logger.info("[Cleanup] 系统清理完成")
+    
+    # 注册清理函数（atexit会在Python退出时调用，比finally更可靠）
+    atexit.register(cleanup_handler)
+    
+    # 注册信号处理（Windows平台）
+    def signal_handler(signum, frame):
+        """信号处理函数"""
+        logger.info(f"\n[Signal] 收到信号 {signum}，正在关闭系统...")
+        cleanup_handler()
+        sys.exit(0)
+    
+    # 注册SIGINT（Ctrl+C）和SIGTERM信号处理
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     # 加载所有启用的任务并启动
     tasks = tm.get_all_tasks(enabled_only=True)
     logger.info(f"\n[Main] 发现 {len(tasks)} 个启用的任务")
@@ -735,15 +776,12 @@ if __name__ == '__main__':
     # 运行Flask应用（前台）
     try:
         socketio.run(app, host='0.0.0.0', port=5555, debug=False)
+    except KeyboardInterrupt:
+        logger.info("\n[Main] 用户按下Ctrl+C，正在关闭...")
+    except Exception as e:
+        logger.error(f"\n[Main] 应用异常退出: {e}")
     finally:
-        logger.info("\n[Main] 正在关闭系统...")
-
-        pm.running = False
-        pm.stop_all_tasks()
-
-        # 更新所有任务状态
-        for task_id in pm.get_running_tasks():
-            tm.update_task(task_id, {'status': 'stopped'})
-
+        # 调用清理函数（双重保险）
+        cleanup_handler()
         logger.info("[Main] 系统已关闭")
         logger.info("="*60)
