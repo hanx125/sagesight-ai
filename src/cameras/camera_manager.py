@@ -586,7 +586,56 @@ class CameraManager:
             conn.commit()
             
             logger.info(f"[CameraManager] 更新摄像机成功: ID={camera_id}")
+            
+            # 同步更新关联的通道池表中的rtsp_url
+            # 如果更新了rtsp_stream或source字段，需要同步更新device_channel_pool表
+            if 'rtsp_stream' in update_data or 'source' in update_data:
+                self._sync_channel_pool_rtsp_url(camera_id, update_data)
+            
             return True
+    
+    def _sync_channel_pool_rtsp_url(self, camera_id: str, update_data: Dict):
+        """同步更新通道池表中的rtsp_url
+        
+        当摄像机的rtsp_stream或source字段更新时，需要同步更新
+        device_channel_pool表中关联的通道的rtsp_url。
+        
+        Args:
+            camera_id: 摄像机ID
+            update_data: 更新数据字典
+        """
+        try:
+            from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager
+            
+            channel_pool_manager = get_device_channel_pool_manager()
+            
+            # 获取该摄像机关联的所有通道
+            channels = channel_pool_manager.get_camera_channels(camera_id)
+            
+            if not channels:
+                logger.info(f"[CameraManager] 摄像机 {camera_id} 没有关联的通道池记录")
+                return
+            
+            # 获取新的rtsp_url
+            new_rtsp_url = update_data.get('rtsp_stream') or update_data.get('source')
+            
+            if not new_rtsp_url:
+                logger.warning(f"[CameraManager] 更新数据中没有rtsp_stream或source字段")
+                return
+            
+            # 更新每个通道的rtsp_url
+            for channel in channels:
+                # 使用DeviceChannelPoolManager的update方法（需要添加）
+                channel_pool_manager.update_device_channel(
+                    channel.id,
+                    {'rtsp_url': new_rtsp_url, 'channel_name': update_data.get('name', channel.channel_name)}
+                )
+                logger.info(f"[CameraManager] 同步更新通道池rtsp_url: channel_id={channel.id}, new_url={new_rtsp_url}")
+            
+            logger.info(f"[CameraManager] 成功同步更新 {len(channels)} 个通道池记录的rtsp_url")
+            
+        except Exception as e:
+            logger.warning(f"[CameraManager] 同步更新通道池rtsp_url失败: {e}")
     
     def delete_camera(self, camera_id: str) -> bool:
         """删除摄像机"""
