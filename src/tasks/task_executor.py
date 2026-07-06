@@ -172,28 +172,55 @@ class CameraWorker:
         """初始化摄像机专属组件"""
         try:
             # ========================================
-            # 重要：先启动ZLM推流（确保流已推送）
+            # 重要：检查ZLM推流状态（如果已推送则跳过启动）
             # ========================================
-            # 根据项目约束：Media stream playback must first check and auto-start stream
-            # 任务进程启动时，需要先启动ZLM推流，否则FFmpeg连接ZLM代理地址会失败
-            print(f"[CameraWorker-{self.camera_id}] 检查并启动ZLM推流...")
+            # 根据项目约束：摄像机注册时已启动ZLM推流
+            # 任务进程启动时，先检查推流状态，如果已存在则跳过启动
+            print(f"[CameraWorker-{self.camera_id}] 检查ZLM推流状态...")
             
+            stream_exists = False
             try:
-                from src.cameras.stream_service import StreamService
-                stream_service = StreamService()
+                from src.cameras.stream_service import StreamService, check_stream_online
+                from src.cameras.camera_manager import get_camera_manager
                 
-                # 调用start_stream API启动推流
-                result = stream_service.start_stream(self.camera_id)
+                # 获取摄像机信息和流媒体服务器配置
+                camera_manager = get_camera_manager()
+                camera = camera_manager.get_camera(self.camera_id)
                 
-                if result.get('success'):
-                    print(f"[CameraWorker-{self.camera_id}] ZLM推流已启动")
-                    print(f"[CameraWorker-{self.camera_id}]   RTSP代理地址: {result.get('rtsp', self.rtsp_url)}")
+                if camera:
+                    # 获取流媒体服务器配置
+                    stream_service = StreamService(db_path='data/tasks.db')
+                    server = stream_service._get_streaming_server()
+                    
+                    if server:
+                        server_host = server.get('host', '127.0.0.1')
+                        http_port = server.get('http_port', 80)
+                        secret = server.get('secret') or server.get('config', {}).get('secret', '035c73f7-bb6b-4880-a316-36af2cf4c6fb')
+                        app = 'AI'
+                        stream_id = self.camera_id
+                        
+                        # 检查流是否已经在线
+                        stream_exists = check_stream_online(server_host, http_port, secret, app, stream_id)
+                        
+                        if stream_exists:
+                            print(f"[CameraWorker-{self.camera_id}] ✅ ZLM推流已存在（流已在线）")
+                        else:
+                            # 流不存在，启动推流
+                            print(f"[CameraWorker-{self.camera_id}] ⚠️ ZLM推流不存在，启动推流...")
+                            result = stream_service.start_stream(self.camera_id)
+                            
+                            if result.get('success'):
+                                print(f"[CameraWorker-{self.camera_id}] ✅ ZLM推流已启动")
+                                stream_exists = True
+                            else:
+                                print(f"[CameraWorker-{self.camera_id}] ⚠️ ZLM推流启动失败: {result.get('message', '未知错误')}")
+                    else:
+                        print(f"[CameraWorker-{self.camera_id}] ⚠️ 没有配置流媒体服务器")
                 else:
-                    print(f"[CameraWorker-{self.camera_id}] ⚠️ ZLM推流启动失败: {result.get('message', '未知错误')}")
-                    print(f"[CameraWorker-{self.camera_id}] 将继续尝试连接...")
+                    print(f"[CameraWorker-{self.camera_id}] ⚠️ 摄像机信息获取失败")
                     
             except Exception as stream_err:
-                print(f"[CameraWorker-{self.camera_id}] ⚠️ ZLM推流启动异常: {stream_err}")
+                print(f"[CameraWorker-{self.camera_id}] ⚠️ ZLM推流检查异常: {stream_err}")
                 print(f"[CameraWorker-{self.camera_id}] 将继续尝试连接...")
             
             # ========================================
