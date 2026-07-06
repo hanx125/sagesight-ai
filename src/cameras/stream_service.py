@@ -634,7 +634,7 @@ class StreamService:
             
             # 提取服务器配置
             server_host = server.get('host', 'localhost')
-            http_port = server.get('http_port', 80)
+            http_port = server.get('http_port', 88)
             rtmp_port = server.get('port', 1935)
             rtsp_port = server.get('config', {}).get('rtsp_port', 554)
             secret = server.get('secret', server.get('config', {}).get('secret', 'FpvUDVyWlqohv98EEE5Of3UcFhc18Ipt'))
