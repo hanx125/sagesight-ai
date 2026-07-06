@@ -387,7 +387,7 @@ function switchDiscoverTab(tabName) {
 function openManualAddModal() {
     document.getElementById('manualAddModal').classList.add('show');
     document.getElementById('onvifRegisterForm').reset();
-    document.getElementById('onvifTestResult').style.display = 'none';
+    // 注意：测试连接功能已取消，无需隐藏测试结果元素
 }
 
 // 关闭手动添加模态框
@@ -396,13 +396,31 @@ function closeManualAddModal() {
 }
 
 // 兼容原有函数名（用于从ONVIF扫描结果点击注册）
-function openOnvifRegisterModal(ip) {
+function openOnvifRegisterModal(ip, port) {
+    // 调试：打印接收的参数
+    console.log('openOnvifRegisterModal 参数:', { ip, port });
     closeDiscoverModal();
     openManualAddModal();
     
-    // 预填充IP地址
+    // 预填充IP地址和端口
     setTimeout(() => {
-        document.getElementById('onvifIp').value = ip;
+        console.log('预填充IP和端口:', { ip, port });
+        const ipInput = document.getElementById('onvifIp');
+        const portInput = document.getElementById('onvifPort');
+        
+        if (ipInput) {
+            ipInput.value = ip;
+            console.log('IP已填充:', ipInput.value);
+        } else {
+            console.error('找不到onvifIp输入框');
+        }
+        
+        if (portInput && port) {
+            portInput.value = port;
+            console.log('端口已填充:', portInput.value);
+        } else {
+            console.error('找不到onvifPort输入框或port参数无效');
+        }
     }, 100);
 }
 
@@ -423,6 +441,12 @@ async function startDiscover() {
     try {
         const response = await fetch('/api/cameras/onvif/discover?timeout=5');
         const devices = await response.json();
+        
+        // 调试：打印扫描结果
+        console.log('ONVIF扫描结果:', devices);
+        if (devices.length > 0) {
+            console.log('第一个设备的端口:', devices[0].port);
+        }
         
         discoverLoading.style.display = 'none';
         discoverResults.style.display = 'block';
@@ -452,7 +476,7 @@ async function startDiscover() {
                                     </div>
                                 </td>
                                 <td class="discover-actions-cell">
-                                    <button class="btn btn-primary btn-sm" onclick="registerDiscoveredDevice('${escapeHtml(device.ip)}')">
+                                    <button class="btn btn-primary btn-sm" onclick="registerDiscoveredDevice('${escapeHtml(device.ip)}', ${device.port || 80})">
                                         注册
                                     </button>
                                 </td>
@@ -472,9 +496,11 @@ async function startDiscover() {
     discoverBtn.disabled = false;
 }
 
-function registerDiscoveredDevice(ip) {
+function registerDiscoveredDevice(ip, port) {
+    // 调试：打印传递的参数
+    console.log('registerDiscoveredDevice 参数:', { ip, port });
     closeDiscoverModal();
-    openOnvifRegisterModal(ip);
+    openOnvifRegisterModal(ip, port);
 }
 
 // ========================================

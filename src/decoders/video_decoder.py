@@ -227,15 +227,24 @@ class VideoDecoder:
 
         print(f"[VideoDecoder] 输出格式：{pix_fmt}（硬件加速：{self.config.hwaccel}，配置：{self.config.output_format}）")
 
-        # 缩放和格式转换（使用滤镜确保正确的 stride）
-        # 注意：DXVA2/QSV 件加速解码后，FFmpeg 输出的 rawvideo 可能有 stride 对齐
-        # 使用 -vf 滤镜可以确保输出紧凑的帧数据（无 stride 填充）
+        # 缩放和格式转换（使用滤镜确保去除 stride 对齐）
+        # 问题根源：DXVA2/CUDA/QSV 硬件解码器输出 stride 对齐的帧数据
+        # - Direct3D 要求 128 字节对齐（DirectX 10.0+）
+        # - CUDA/NVDEC 也有 stride 对齐要求
+        # - stride 对齐会导致画面裁剪错乱（左右互换、绿色条纹）
+        # 解决方案：使用 hwdownload 滤镜强制去除 stride 对齐
         vf_filters = []
+        
+        # 硬件解码器需要 hwdownload 将帧从 GPU 下载到 CPU 内存，去除 stride 对齐
+        # 注意：hwdownload 必须放在 scale 之前，确保下载后再缩放
+        if self.config.hwaccel in ['dxva2', 'cuda', 'qsv']:
+            vf_filters.append('hwdownload')
+        
         if self.config.width or self.config.height:
-            # 使用flags=lanczos确保高质量缩放，避免画面错乱
+            # 使用 flags=lanczos 确保高质量缩放
             vf_filters.append(f'scale={self.config.width}:{self.config.height}:flags=lanczos')
-        # 强制使用指定的像素格式（去除硬件解码器的 stride 对齐）
-        # 使用format滤镜确保输出紧凑数据，无padding
+        
+        # 强制使用指定的像素格式，确保输出紧凑数据
         vf_filters.append(f'format={pix_fmt}')
 
         if vf_filters:

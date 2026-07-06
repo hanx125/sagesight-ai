@@ -299,22 +299,40 @@ def discover_onvif_cameras(timeout: int = 5) -> list:
             
             for svc in services:
                 try:
-                    # 提取IP地址
-                    ip_match = next(
-                        (m[1] for m in
-                         (re.search(r'(\d+\.\d+\.\d+\.\d+)', addr) for addr in svc.getXAddrs())
-                         if m),
-                        None
-                    )
+                    # 提取IP地址和端口
+                    xaddrs_list = [str(addr) for addr in svc.getXAddrs()]
+                    
+                    # 从第一个xaddr中提取IP和端口
+                    ip_match = None
+                    port_match = None
+                    
+                    if xaddrs_list:
+                        first_xaddr = xaddrs_list[0]
+                        
+                        # 提取IP地址（支持IPv4）
+                        ip_search = re.search(r'(\d+\.\d+\.\d+\.\d+)', first_xaddr)
+                        if ip_search:
+                            ip_match = ip_search.group(1)
+                        
+                        # 提取端口（如果存在）
+                        port_search = re.search(r':(\d+)', first_xaddr)
+                        if port_search:
+                            port_match = int(port_search.group(1))
+                        else:
+                            # 如果没有明确端口，根据协议推断
+                            if first_xaddr.startswith('https://'):
+                                port_match = 443
+                            elif first_xaddr.startswith('http://'):
+                                port_match = 80
+                            else:
+                                port_match = 80  # 默认ONVIF端口
                     
                     if ip_match:
-                        # 将xaddrs转换为字符串列表
-                        xaddrs = [str(addr) for addr in svc.getXAddrs()]
-                        
                         onvif_cameras.append({
                             'ip': ip_match,
+                            'port': port_match,  # 添加端口字段
                             'name': 'ONVIF Camera',
-                            'xaddrs': xaddrs
+                            'xaddrs': xaddrs_list
                         })
                         
                 except Exception as e:
