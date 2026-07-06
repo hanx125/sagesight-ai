@@ -578,12 +578,20 @@ class YOLODetector:
             # 创建会话选项（CPU优化）
             session_options = ort.SessionOptions()
             session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            
-            # CPU线程数优化（使用所有可用核心）
+
+            # CPU线程数优化（限制线程数，避免多任务时CPU占用过高）
+            # 建议：每个任务使用 2-4 个线程，而不是所有核心
             import multiprocessing
             num_cores = multiprocessing.cpu_count()
-            session_options.intra_op_num_threads = num_cores
-            session_options.inter_op_num_threads = num_cores
+
+            # 限制每个任务的线程数（最多4个，避免多任务时CPU翻倍）
+            # 如果总核心数 < 4，则使用实际核心数的一半
+            max_threads_per_task = min(4, num_cores // 2 if num_cores > 2 else 1)
+
+            session_options.intra_op_num_threads = max_threads_per_task
+            session_options.inter_op_num_threads = max_threads_per_task
+
+            print(f"[YOLODetector] CPU线程数限制: {max_threads_per_task} (总核心数: {num_cores})")
             
             # CPU Execution Provider
             providers = ['CPUExecutionProvider']

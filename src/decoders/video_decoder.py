@@ -228,14 +228,16 @@ class VideoDecoder:
         print(f"[VideoDecoder] 输出格式：{pix_fmt}（硬件加速：{self.config.hwaccel}，配置：{self.config.output_format}）")
 
         # 缩放和格式转换（使用滤镜确保正确的 stride）
-        # 注意：DXVA2/QSV 硬件加速解码后，FFmpeg 输出的 rawvideo 可能有 stride 对齐
+        # 注意：DXVA2/QSV 件加速解码后，FFmpeg 输出的 rawvideo 可能有 stride 对齐
         # 使用 -vf 滤镜可以确保输出紧凑的帧数据（无 stride 填充）
         vf_filters = []
         if self.config.width or self.config.height:
-            vf_filters.append(f'scale={self.config.width}:{self.config.height}')
+            # 使用flags=lanczos确保高质量缩放，避免画面错乱
+            vf_filters.append(f'scale={self.config.width}:{self.config.height}:flags=lanczos')
         # 强制使用指定的像素格式（去除硬件解码器的 stride 对齐）
+        # 使用format滤镜确保输出紧凑数据，无padding
         vf_filters.append(f'format={pix_fmt}')
-        
+
         if vf_filters:
             self.ffmpeg_args.extend([
                 '-vf', ','.join(vf_filters),

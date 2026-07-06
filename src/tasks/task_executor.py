@@ -456,7 +456,9 @@ class CameraWorker:
                 get_index_time = time.time() - get_index_start
                 
                 if frame_index is None:
-                    time.sleep(0.01)
+                    # 没有帧索引：适当休眠，避免CPU过度占用
+                    # 建议休眠50-100毫秒，而不是10毫秒
+                    time.sleep(0.05)
                     continue
                 
                 # 根据索引从环形缓冲区读取帧数据（零拷贝）
@@ -1201,7 +1203,9 @@ class CameraWorker:
             print(f"[CameraWorker-{self.camera_id}] 目标已处理过事件，跳过: ID={tid}")
             return
         self.processed_track_ids.add(tid)
-        if len(self.processed_track_ids) > 500:
+        # 定期清理已处理的track_ids，避免内存累积（降低阈值到200）
+        if len(self.processed_track_ids) > 200:
+            print(f"[CameraWorker-{self.camera_id}] 清理processed_track_ids（当前{len(self.processed_track_ids)}个）")
             self.processed_track_ids.clear()
             self.processed_track_ids.add(tid)
         

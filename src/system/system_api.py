@@ -181,17 +181,6 @@ def delete_streaming_server(server_id: int):
     return jsonify({'error': '删除失败'}), 500
 
 
-@system_bp.route('/streaming-servers/<int:server_id>/status', methods=['GET'])
-def check_streaming_server_status(server_id: int):
-    """检查流媒体服务器状态"""
-    manager = get_system_manager()
-    status = manager.check_server_status(server_id)
-    
-    return jsonify({
-        'server_id': server_id,
-        'status': status
-    })
-
 
 @system_bp.route('/streaming-servers/<int:server_id>/set-default', methods=['POST'])
 def set_default_streaming_server(server_id: int):

@@ -349,12 +349,65 @@ function renderCameraListItem(camera) {
 
 function openDiscoverModal() {
     document.getElementById('discoverModal').classList.add('show');
+    // 重置所有Tab状态
+    switchDiscoverTab('scan');
     document.getElementById('discoverResults').style.display = 'none';
     document.getElementById('discoverLoading').style.display = 'none';
+    document.getElementById('networkScanResults').style.display = 'none';
+    document.getElementById('networkScanLoading').style.display = 'none';
 }
 
 function closeDiscoverModal() {
     document.getElementById('discoverModal').classList.remove('show');
+}
+
+// Tab切换函数
+function switchDiscoverTab(tabName) {
+    // 更新Tab按钮状态
+    const tabs = document.querySelectorAll('.discover-tab');
+    tabs.forEach(tab => tab.classList.remove('active'));
+    
+    // 找到对应的Tab按钮并激活
+    const activeTab = document.querySelector(`.discover-tab[onclick*="${tabName}"]`);
+    if (activeTab) {
+        activeTab.classList.add('active');
+    }
+    
+    // 更新Tab内容显示
+    const tabContents = document.querySelectorAll('.discover-tab-content');
+    tabContents.forEach(content => content.classList.remove('active'));
+    
+    const activeContent = document.getElementById(`${tabName}Tab`);
+    if (activeContent) {
+        activeContent.classList.add('active');
+    }
+}
+
+// 打开手动添加模态框
+function openManualAddModal() {
+    document.getElementById('manualAddModal').classList.add('show');
+    document.getElementById('onvifRegisterForm').reset();
+    document.getElementById('onvifTestResult').style.display = 'none';
+}
+
+// 关闭手动添加模态框
+function closeManualAddModal() {
+    document.getElementById('manualAddModal').classList.remove('show');
+}
+
+// 兼容原有函数名（用于从ONVIF扫描结果点击注册）
+function openOnvifRegisterModal(ip) {
+    closeDiscoverModal();
+    openManualAddModal();
+    
+    // 预填充IP地址
+    setTimeout(() => {
+        document.getElementById('onvifIp').value = ip;
+    }, 100);
+}
+
+function closeOnvifRegisterModal() {
+    closeManualAddModal();
 }
 
 async function startDiscover() {
@@ -428,61 +481,6 @@ function registerDiscoveredDevice(ip) {
 // ONVIF注册
 // ========================================
 
-function openOnvifRegisterModal(ip = '') {
-    document.getElementById('onvifRegisterModal').classList.add('show');
-    document.getElementById('onvifRegisterForm').reset();
-    document.getElementById('onvifIp').value = ip;
-    document.getElementById('onvifTestResult').style.display = 'none';
-}
-
-function closeOnvifRegisterModal() {
-    document.getElementById('onvifRegisterModal').classList.remove('show');
-}
-
-async function testOnvifConnection() {
-    const ip = document.getElementById('onvifIp').value;
-    const port = document.getElementById('onvifPort').value || 80;
-    const username = document.getElementById('onvifUsername').value;
-    const password = document.getElementById('onvifPassword').value;
-    
-    if (!ip) {
-        showNotification('请输入IP地址', 'error');
-        return;
-    }
-    
-    const testResult = document.getElementById('onvifTestResult');
-    testResult.style.display = 'block';
-    testResult.innerHTML = '<p class="loading-text">正在测试连接...</p>';
-    
-    try {
-        const response = await fetch('/api/cameras/onvif/connect', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ip, port: parseInt(port), username, password })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            testResult.innerHTML = `
-                <div class="test-success">
-                    <p><strong>连接成功!</strong></p>
-                    <p>制造商: ${escapeHtml(data.info.manufacturer)}</p>
-                    <p>型号: ${escapeHtml(data.info.model)}</p>
-                    <p>固件版本: ${escapeHtml(data.info.firmware_version)}</p>
-                    <p>RTSP地址: ${escapeHtml(data.info.source)}</p>
-                    ${data.info.support_move ? '<p>支持PTZ控制</p>' : ''}
-                </div>
-            `;
-        } else {
-            testResult.innerHTML = `<p class="error-text">连接失败: ${escapeHtml(data.error)}</p>`;
-        }
-        
-    } catch (error) {
-        testResult.innerHTML = `<p class="error-text">测试失败: ${escapeHtml(error.message)}</p>`;
-    }
-}
-
 async function registerOnvifCamera() {
     const ip = document.getElementById('onvifIp').value;
     const port = document.getElementById('onvifPort').value || 80;
@@ -516,6 +514,119 @@ async function registerOnvifCamera() {
     } catch (error) {
         showNotification('注册失败: ' + error.message, 'error');
     }
+}
+
+// ========================================
+// 网络端口扫描
+// ========================================
+
+async function startNetworkScan() {
+    const ipRange = document.getElementById('scanIpRange').value.trim();
+    const ports = document.getElementById('scanPorts').value.trim();
+    const timeout = parseInt(document.getElementById('scanTimeout').value) || 3;
+
+    if (!ipRange) {
+        showNotification('请输入IP范围', 'error');
+        return;
+    }
+
+    const scanBtn = document.getElementById('networkScanBtn');
+    const scanLoading = document.getElementById('networkScanLoading');
+    const scanResults = document.getElementById('networkScanResults');
+    const scanList = document.getElementById('networkScanList');
+    const scanProgress = document.getElementById('networkScanProgress');
+
+    scanBtn.disabled = true;
+    scanLoading.style.display = 'block';
+    scanResults.style.display = 'none';
+    scanProgress.textContent = '正在扫描网络端口...';
+
+    try {
+        const response = await fetch('/api/cameras/network/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ip_range: ipRange,
+                ports: ports,
+                check_onvif: true,
+                timeout: timeout
+            })
+        });
+
+        const data = await response.json();
+
+        scanLoading.style.display = 'none';
+        scanResults.style.display = 'block';
+
+        if (data.devices && data.devices.length > 0) {
+            scanList.innerHTML = `
+                <table class="discover-table">
+                    <thead>
+                        <tr>
+                            <th>IP地址</th>
+                            <th>端口</th>
+                            <th>制造商</th>
+                            <th>型号</th>
+                            <th>认证</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${data.devices.map(device => `
+                            <tr>
+                                <td>
+                                    <div class="discover-device-ip">${escapeHtml(device.ip)}</div>
+                                </td>
+                                <td>${device.port}</td>
+                                <td>${escapeHtml(device.manufacturer || '-')}</td>
+                                <td>${escapeHtml(device.model || '-')}</td>
+                                <td>
+                                    ${device.need_auth ?
+                                        '<span style="color: #ff9800;">需要认证</span>' :
+                                        (device.onvif ?
+                                            '<span style="color: #52c41a;">已识别</span>' :
+                                            '<span style="color: #999;">端口开放</span>')
+                                    }
+                                </td>
+                                <td class="discover-actions-cell">
+                                    <button class="algorithm-action-btn edit" onclick="registerNetworkDevice('${escapeHtml(device.ip)}', ${device.port})">
+                                        <svg viewBox="0 0 24 24" fill="currentColor">
+                                            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                                        </svg>
+                                        注册
+                                    </button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+            
+            showNotification(`扫描完成，发现 ${data.devices.length} 个设备`, 'success');
+        } else {
+            scanList.innerHTML = '<p class="no-devices">未发现ONVIF设备</p>';
+            showNotification('扫描完成，未发现设备', 'info');
+        }
+        
+    } catch (error) {
+        scanLoading.style.display = 'none';
+        scanResults.style.display = 'block';
+        scanList.innerHTML = `<p class="error-text">扫描失败: ${escapeHtml(error.message)}</p>`;
+        showNotification('扫描失败: ' + error.message, 'error');
+    }
+    
+    scanBtn.disabled = false;
+}
+
+function registerNetworkDevice(ip, port) {
+    closeDiscoverModal();
+    openManualAddModal();
+    
+    // 预填充IP地址和端口
+    setTimeout(() => {
+        document.getElementById('onvifIp').value = ip;
+        document.getElementById('onvifPort').value = port;
+    }, 100);
 }
 
 // ========================================

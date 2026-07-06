@@ -179,12 +179,6 @@ function renderServersList() {
                 
                 <div class="server-card-footer">
                     <div class="server-actions">
-                        <button class="server-btn" onclick="checkServerStatus(${server.id})">
-                            <svg viewBox="0 0 24 24" fill="currentColor">
-                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm0-4h-2V7h2v8z"/>
-                            </svg>
-                            检测状态
-                        </button>
                         ${!server.is_default ? `
                         <button class="server-btn" onclick="setDefaultServer(${server.id})">
                             <svg viewBox="0 0 24 24" fill="currentColor">
@@ -387,20 +381,6 @@ async function confirmDeleteServer() {
 // ========================================
 // 检查服务器状态
 // ========================================
-
-async function checkServerStatus(serverId) {
-    try {
-        const response = await fetch(`/api/system/streaming-servers/${serverId}/status`);
-        const result = await response.json();
-        
-        showNotification(`服务器状态: ${result.status === 'online' ? '在线' : (result.status === 'offline' ? '离线' : '未知')}`, 'info');
-        loadStreamingServers();
-        
-    } catch (error) {
-        console.error('检查服务器状态失败:', error);
-        showNotification('检查服务器状态失败', 'error');
-    }
-}
 
 // ========================================
 // 设置默认服务器

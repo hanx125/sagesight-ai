@@ -335,6 +335,42 @@ def test_onvif_connection():
         return jsonify({'error': str(e)}), 500
 
 
+@camera_bp.route('/network/scan', methods=['POST'])
+def scan_network_ports():
+    """扫描网络端口（支持跨网段）"""
+    try:
+        data = request.get_json()
+
+        # 获取扫描参数
+        ip_range = data.get('ip_range', '').strip()
+        ports = data.get('ports', '80,8080').strip()
+        check_onvif = data.get('check_onvif', True)
+        timeout = data.get('timeout', 3)
+
+        if not ip_range:
+            return jsonify({'error': 'IP范围不能为空'}), 400
+
+        # 导入网络扫描模块
+        from src.cameras.network_scanner import scan_network_ports as do_scan
+
+        # 开始扫描（不使用用户名和密码，扫描结果在注册时填写认证信息）
+        devices = do_scan(
+            ip_range=ip_range,
+            ports=ports,
+            username='',
+            password='',
+            check_onvif=check_onvif,
+            timeout=timeout
+        )
+
+        logger.info(f"网络扫描完成: {ip_range}, 端口: {ports}, 发现设备: {len(devices)}")
+        return jsonify({'devices': devices})
+
+    except Exception as e:
+        logger.error(f"网络扫描失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @camera_bp.route('/<camera_id>', methods=['PUT'])
 def update_camera(camera_id):
     """更新摄像机"""

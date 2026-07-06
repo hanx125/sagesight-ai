@@ -156,31 +156,122 @@
     </div>
 </div>
 
-<!-- ONVIF发现模态框 -->
+<!-- 新增摄像机模态框（三合一：扫描发现、手动添加、网络扫描） -->
 <div id="discoverModal" class="modal">
     <div class="modal-content modal-large">
         <div class="modal-header">
-            <h3>ONVIF设备发现</h3>
+            <h3>新增摄像机</h3>
             <button class="modal-close" onclick="closeDiscoverModal()">&times;</button>
         </div>
         <div class="modal-body">
-            <div class="discover-actions" style="text-align: center; padding: 20px 0;">
-                <button class="btn btn-primary" id="discoverBtn" onclick="startDiscover()">
+            <!-- Tab导航 -->
+            <div class="discover-tabs">
+                <button class="discover-tab active" onclick="switchDiscoverTab('scan')">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
                     </svg>
-                    开始发现
+                    ONVIF扫描
+                </button>
+                <button class="discover-tab" onclick="switchDiscoverTab('manual')">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+                    </svg>
+                    手动添加
+                </button>
+                <button class="discover-tab" onclick="switchDiscoverTab('network')">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                    </svg>
+                    网络扫描
                 </button>
             </div>
             
-            <div id="discoverResults" class="discover-results" style="display: none;">
-                <h4>发现的设备</h4>
-                <div id="discoverList"></div>
+            <!-- Tab 1: ONVIF扫描发现 -->
+            <div id="scanTab" class="discover-tab-content active">
+                <div class="discover-intro">
+                    <p>使用ONVIF协议自动发现同一网段内的摄像机设备</p>
+                </div>
+                <div class="discover-actions" style="text-align: center; padding: 20px 0;">
+                    <button class="btn btn-primary" id="discoverBtn" onclick="startDiscover()">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                        </svg>
+                        开始扫描
+                    </button>
+                </div>
+                
+                <div id="discoverResults" class="discover-results" style="display: none;">
+                    <h4>发现的设备</h4>
+                    <div id="discoverList"></div>
+                </div>
+                
+                <div id="discoverLoading" class="discover-loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>正在搜索网络中的ONVIF设备...</p>
+                </div>
             </div>
             
-            <div id="discoverLoading" class="discover-loading" style="display: none;">
-                <div class="spinner"></div>
-                <p>正在搜索网络中的ONVIF设备...</p>
+            <!-- Tab 2: 手动添加 -->
+            <div id="manualTab" class="discover-tab-content">
+                <div class="discover-intro">
+                    <p>手动填写ONVIF摄像机信息，适合跨网段或已知设备的添加</p>
+                </div>
+                <div class="discover-actions" style="text-align: center; padding: 20px 0;">
+                    <button class="btn btn-primary" onclick="closeDiscoverModal(); openManualAddModal()">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                        </svg>
+                        手动添加ONVIF设备
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Tab 3: 网络端口扫描 -->
+            <div id="networkTab" class="discover-tab-content">
+                <div class="discover-intro">
+                    <p>扫描指定IP范围和端口的ONVIF设备，支持跨网段扫描</p>
+                </div>
+                
+                <form id="networkScanForm">
+                    <div class="form-group">
+                        <label for="scanIpRange">IP范围 <span class="required">*</span></label>
+                        <input type="text" id="scanIpRange" name="ip_range" required
+                               placeholder="例如：192.168.1.1-192.168.1.255 或 192.168.1.0/24">
+                        <small class="form-hint">支持单个IP、IP范围（如192.168.1.1-192.168.1.255）、CIDR格式（如192.168.1.0/24）或网段简写（如192.168.1）</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="scanPorts">端口列表</label>
+                        <input type="text" id="scanPorts" name="ports" value="80,8080"
+                               placeholder="例如：80,8080,443 或 80-100">
+                        <small class="form-hint">支持端口列表（如80,8080,443）或端口范围（如80-100），默认：80,8080</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="scanTimeout">扫描超时（秒）</label>
+                        <input type="number" id="scanTimeout" name="timeout" value="3" min="1" max="10">
+                        <small class="form-hint">每个端口连接的超时时间，默认：3秒</small>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-primary" id="networkScanBtn" onclick="startNetworkScan()">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                            </svg>
+                            开始扫描
+                        </button>
+                    </div>
+                </form>
+                
+                <div id="networkScanResults" class="discover-results" style="display: none;">
+                    <h4>扫描结果</h4>
+                    <div id="networkScanList"></div>
+                </div>
+                
+                <div id="networkScanLoading" class="discover-loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <p id="networkScanProgress">正在扫描网络端口...</p>
+                </div>
             </div>
         </div>
         <div class="modal-footer">
@@ -189,8 +280,8 @@
     </div>
 </div>
 
-<!-- ONVIF注册模态框 -->
-<div id="onvifRegisterModal" class="modal">
+<!-- 手动添加ONVIF模态框（原有注册模态框） -->
+<div id="manualAddModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
             <h3>ONVIF注册摄像机</h3>
@@ -222,17 +313,11 @@
                     <label for="onvifPassword">密码</label>
                     <input type="password" id="onvifPassword" name="password" placeholder="摄像机密码">
                 </div>
-                
-                <div class="form-actions">
-                    <button type="button" class="btn btn-secondary" onclick="testOnvifConnection()">测试连接</button>
-                    <button type="button" class="btn btn-primary" onclick="registerOnvifCamera()">注册</button>
-                </div>
-                
-                <div id="onvifTestResult" class="test-result" style="display: none;"></div>
             </form>
         </div>
         <div class="modal-footer">
             <button type="button" class="btn btn-secondary" onclick="closeOnvifRegisterModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="registerOnvifCamera()">注册</button>
         </div>
     </div>
 </div>

@@ -2549,185 +2549,6 @@ body.theme-light {
 }
 
 /* ========================================
-   文件上传样式
-   ======================================== */
-.file-upload-area {
-    border: 2px dashed var(--border-color);
-    border-radius: 8px;
-    padding: 40px 20px;
-    text-align: center;
-    cursor: pointer;
-    transition: all 0.3s;
-    background: #fafafa;
-}
-
-.file-upload-area:hover {
-    border-color: var(--primary-color);
-    background: rgba(38, 108, 251, 0.05);
-}
-
-.file-upload-area.dragover {
-    border-color: var(--primary-color);
-    background: rgba(38, 108, 251, 0.1);
-}
-
-.file-upload-icon {
-    width: 60px;
-    height: 60px;
-    margin: 0 auto 16px;
-    color: var(--primary-color);
-}
-
-.file-upload-icon svg {
-    width: 60px;
-    height: 60px;
-}
-
-.file-upload-text {
-    color: var(--text-secondary);
-}
-
-.file-upload-text p {
-    margin-bottom: 8px;
-}
-
-.file-upload-hint {
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.selected-file-info {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    background: rgba(82, 196, 26, 0.1);
-    border-radius: 6px;
-    margin-top: 12px;
-}
-
-.selected-file-info .file-name {
-    font-weight: 500;
-    color: var(--text-primary);
-}
-
-.selected-file-info .file-size {
-    color: var(--text-secondary);
-    font-size: 13px;
-}
-
-/* 上传进度 */
-.upload-progress {
-    margin-top: 16px;
-}
-
-.progress-bar {
-    height: 8px;
-    background: #e8e8e8;
-    border-radius: 4px;
-    overflow: hidden;
-}
-
-.progress-fill {
-    height: 100%;
-    background: var(--primary-color);
-    border-radius: 4px;
-    transition: width 0.3s;
-    width: 0%;
-}
-
-.progress-text {
-    text-align: center;
-    margin-top: 8px;
-    font-size: 14px;
-    color: var(--text-secondary);
-}
-
-/* 模型文件列表 */
-.models-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 16px;
-}
-
-.model-item {
-    background: #fafafa;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 16px;
-    transition: all 0.3s;
-}
-
-.model-item:hover {
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-    border-color: var(--primary-color);
-}
-
-.model-item-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 12px;
-}
-
-.model-item-name {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 4px;
-}
-
-.model-item-format {
-    font-size: 12px;
-    color: var(--text-muted);
-    background: rgba(38, 108, 251, 0.1);
-    padding: 2px 8px;
-    border-radius: 4px;
-}
-
-.model-item-body {
-    margin-bottom: 12px;
-}
-
-.model-item-info {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 8px;
-    font-size: 13px;
-}
-
-.model-item-label {
-    color: var(--text-secondary);
-}
-
-.model-item-value {
-    color: var(--text-primary);
-    font-weight: 500;
-}
-
-.model-item-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-top: 12px;
-    border-top: 1px solid var(--border-color);
-}
-
-.model-item-path {
-    font-size: 12px;
-    color: var(--text-muted);
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.model-item-actions {
-    display: flex;
-    gap: 8px;
-}
-
-/* ========================================
    算法详情模态框样式
    ======================================== */
 .detail-section {
@@ -5686,6 +5507,77 @@ body.theme-light {
 
 .voice-talk-info {
     font-size: 14px;
+}
+
+/* ========================================
+   新增摄像机模态框Tab样式
+   ======================================== */
+.discover-tabs {
+    display: flex;
+    gap: 12px;
+    padding: 0 0 20px 0;
+    border-bottom: 2px solid var(--border-color);
+    margin-bottom: 20px;
+}
+
+.discover-tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.discover-tab svg {
+    width: 20px;
+    height: 20px;
+}
+
+.discover-tab:hover {
+    background: rgba(38, 108, 251, 0.05);
+    color: var(--primary-color);
+}
+
+.discover-tab.active {
+    background: var(--primary-color);
+    color: white;
+}
+
+.discover-tab-content {
+    display: none;
+}
+
+.discover-tab-content.active {
+    display: block;
+}
+
+.discover-intro {
+    padding: 16px;
+    background: rgba(38, 108, 251, 0.05);
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.discover-intro p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin: 0;
+    line-height: 1.6;
+}
+
+.form-hint {
+    display: block;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    line-height: 1.4;
 }
 
 /* ========================================

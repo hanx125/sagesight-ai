@@ -372,36 +372,6 @@ class SystemManager:
             logger.info(f"删除流媒体服务器配置: ID {server_id}")
         return success
     
-    def check_server_status(self, server_id: int) -> str:
-        """检查流媒体服务器状态"""
-        server = self.get_streaming_server(server_id)
-        if not server:
-            return 'unknown'
-        
-        # TODO: 实现实际的服务器状态检查
-        # 可以通过 HTTP API 或 TCP 连接检查服务器状态
-        
-        # 模拟状态检查
-        try:
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            result = sock.connect_ex((server.host, server.api_port))
-            sock.close()
-            
-            status = 'online' if result == 0 else 'offline'
-            
-            # 更新状态
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute('UPDATE streaming_servers SET status = ? WHERE id = ?', (status, server_id))
-            conn.commit()
-            conn.close()
-            
-            return status
-        except Exception as e:
-            logger.error(f"检查服务器状态失败: {e}")
-            return 'unknown'
     
     def _row_to_streaming_server(self, row: tuple) -> StreamingServer:
         """将数据库行转换为 StreamingServer 对象"""

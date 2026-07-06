@@ -73,13 +73,14 @@ class OptimizedPreprocessor:
         # YUV420p → RGB 转换
         # 方法：先上采样 U/V 到完整分辨率，然后合并为 YUV 三通道图像
         # 使用 INTER_LINEAR 插值保持颜色平滑
+        # 注意：U/V 平面原始尺寸是 (h//2, w//2)，上采样到 (h, w)
         u_resized = cv2.resize(u, (w, h), interpolation=cv2.INTER_LINEAR)
         v_resized = cv2.resize(v, (w, h), interpolation=cv2.INTER_LINEAR)
-        
+
         # 合并为 YUV 三通道图像 (H, W, 3)
         # OpenCV 的 COLOR_YUV2RGB 期望 YUV 格式为 (Y, U, V) 三通道
         yuv_image = np.stack([y, u_resized, v_resized], axis=-1)
-        
+
         # YUV → RGB
         rgb = cv2.cvtColor(yuv_image, cv2.COLOR_YUV2RGB)
         
