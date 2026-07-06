@@ -151,6 +151,14 @@ class CameraWorker:
         self.ai_stream_thread = None
         self.ai_stream_stop_event = threading.Event()
         
+        # ========================================
+        # GIF生成线程池（限制并发，避免线程泄漏）
+        # ========================================
+        # 说明：GIF生成是耗时IO操作（编码+上传），使用线程池限制并发数
+        # - max_workers=2：最多同时生成2个GIF，避免CPU占用过高
+        # - 防止线程泄漏：每次GIF生成不再创建新线程，而是提交到线程池
+        self.gif_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix=f'GIF-{self.camera_id}')
+        
         print(f"[CameraWorker-{self.camera_id}] 初始化")
         print(f"[CameraWorker-{self.camera_id}] RTSP: {self.rtsp_url}")
         print(f"[CameraWorker-{self.camera_id}] 任务名称: {self.task_name}")
@@ -158,6 +166,7 @@ class CameraWorker:
         print(f"[CameraWorker-{self.camera_id}] 目标类别: {task_config.get('target_classes', [])}")
         print(f"[CameraWorker-{self.camera_id}] GIF输出方法: {self.gif_cfg.get('output_method', 'none')}")
         print(f"[CameraWorker-{self.camera_id}] GIF生成: {self.generate_gif}")
+        print(f"[CameraWorker-{self.camera_id}] GIF线程池: 2个并发")
     
     def init_components(self):
         """初始化摄像机专属组件"""
@@ -1268,7 +1277,22 @@ class CameraWorker:
                 self.track_frame_sequences.pop(tid, None)
                 self.track_trajectories.pop(tid, None)
         
-        _threading.Thread(target=_async_finalize, daemon=True).start()
+        # ========================================
+        # 使用线程池执行GIF生成（避免线程泄漏）
+        # ========================================
+        # 修改说明：
+        # - 原来每次GIF生成创建新线程，可能导致线程泄漏
+        # - 现在使用ThreadPoolExecutor限制并发数（max_workers=2）
+        # - 优点：
+        #   1. 防止线程泄漏：线程池管理线程生命周期
+        #   2. 限制并发：最多同时生成2个GIF，避免CPU占用过高
+        #   3. 线程复用：提高性能，减少线程创建开销
+        try:
+            self.gif_executor.submit(_async_finalize)
+        except Exception as e:
+            # 线程池提交失败（例如线程池已关闭），回退到直接创建线程
+            print(f"[CameraWorker-{self.camera_id}] 线程池提交失败，回退到直接创建线程: {e}")
+            _threading.Thread(target=_async_finalize, daemon=True).start()
     
     def _build_gif_frames_from_cache(self, cache_frames: list, trajectory: dict,
                                       start_time: float, end_time: float) -> List[Dict]:
@@ -1694,6 +1718,27 @@ class CameraWorker:
                 self.ai_stream_thread.join(timeout=2.0)  # 最多等待2秒
             self.ai_stream_thread = None
             print(f"[CameraWorker-{self.camera_id}] AI 流处理线程已停止")
+        
+        # ========================================
+        # 关闭GIF生成线程池（防止资源泄漏）
+        # ========================================
+        # 说明：
+        # - shutdown(wait=True)：等待所有提交的任务完成
+        # - wait=False：立即关闭（但已提交的任务会继续执行）
+        # - 这里使用wait=True，确保所有GIF生成完成后再关闭
+        # - 防止线程泄漏：线程池会正确清理所有线程资源
+        if hasattr(self, 'gif_executor') and self.gif_executor:
+            try:
+                print(f"[CameraWorker-{self.camera_id}] 正在关闭GIF线程池...")
+                self.gif_executor.shutdown(wait=True)  # 等待所有任务完成
+                print(f"[CameraWorker-{self.camera_id}] GIF线程池已关闭")
+            except Exception as e:
+                print(f"[CameraWorker-{self.camera_id}] GIF线程池关闭失败: {e}")
+                # 强制关闭
+                try:
+                    self.gif_executor.shutdown(wait=False)
+                except:
+                    pass
         
         if self.decoder:
             self.decoder.stop()
