@@ -1266,10 +1266,11 @@ class CameraWorker:
             print(f"[CameraWorker-{self.camera_id}] 目标已处理过事件，跳过: ID={tid}")
             return
         self.processed_track_ids.add(tid)
-        # 定期清理已处理的track_ids，避免内存累积（降低阈值到200）
+        # 定期清理已处理的track_ids，避免内存累积（保留最近100个）
         if len(self.processed_track_ids) > 200:
             print(f"[CameraWorker-{self.camera_id}] 清理processed_track_ids（当前{len(self.processed_track_ids)}个）")
-            self.processed_track_ids.clear()
+            # 只保留最近100个，而不是全部清空
+            self.processed_track_ids = set(list(self.processed_track_ids)[-100:])
             self.processed_track_ids.add(tid)
         
         traj = pending['trajectory']
@@ -1468,32 +1469,36 @@ class CameraWorker:
 
             # 在图片上绘制跟踪框和类别信息（受前端开关控制）
             if last_frame_image is not None and len(frame_sequence) > 0 and self.event_image_draw_bbox:
-                if is_full_frame:
-                    # 完整帧：bbox 坐标就是原图坐标，直接画
-                    draw_bbox = last_bbox
+                # 确保bbox有有效的坐标
+                if len(last_bbox) != 4:
+                    print(f"[CameraWorker-{self.camera_id}] 警告: bbox坐标无效，跳过绘制: {last_bbox}")
                 else:
-                    # 裁剪帧：用采集时存储的精确裁剪偏移调整 bbox
-                    crop_x1, crop_y1 = last_frame_data.get('crop_offset', (0, 0))
-                    draw_bbox = [
-                        last_bbox[0] - crop_x1,
-                        last_bbox[1] - crop_y1,
-                        last_bbox[2] - crop_x1,
-                        last_bbox[3] - crop_y1
-                    ]
-                    # 确保坐标不越界
-                    img_h, img_w = last_frame_image.shape[:2]
-                    draw_bbox[0] = max(0, min(draw_bbox[0], img_w))
-                    draw_bbox[1] = max(0, min(draw_bbox[1], img_h))
-                    draw_bbox[2] = max(0, min(draw_bbox[2], img_w))
-                    draw_bbox[3] = max(0, min(draw_bbox[3], img_h))
-                
-                tracks_array = np.array([[draw_bbox[0], draw_bbox[1], draw_bbox[2], draw_bbox[3], 
-                                         track_id, trajectory.get('class_id', 0)]], dtype=np.float32)
-                last_frame_image = self._draw_boxes_on_frame(
-                    frame=last_frame_image,
-                    detections=[],  # 事件图片只画跟踪框
-                    tracks=tracks_array
-                )
+                    if is_full_frame:
+                        # 完整帧：bbox 坐标就是原图坐标，直接画
+                        draw_bbox = last_bbox
+                    else:
+                        # 裁剪帧：用采集时存储的精确裁剪偏移调整 bbox
+                        crop_x1, crop_y1 = last_frame_data.get('crop_offset', (0, 0))
+                        draw_bbox = [
+                            last_bbox[0] - crop_x1,
+                            last_bbox[1] - crop_y1,
+                            last_bbox[2] - crop_x1,
+                            last_bbox[3] - crop_y1
+                        ]
+                        # 确保坐标不越界
+                        img_h, img_w = last_frame_image.shape[:2]
+                        draw_bbox[0] = max(0, min(draw_bbox[0], img_w))
+                        draw_bbox[1] = max(0, min(draw_bbox[1], img_h))
+                        draw_bbox[2] = max(0, min(draw_bbox[2], img_w))
+                        draw_bbox[3] = max(0, min(draw_bbox[3], img_h))
+                    
+                    tracks_array = np.array([[draw_bbox[0], draw_bbox[1], draw_bbox[2], draw_bbox[3], 
+                                             track_id, trajectory.get('class_id', 0)]], dtype=np.float32)
+                    last_frame_image = self._draw_boxes_on_frame(
+                        frame=last_frame_image,
+                        detections=[],  # 事件图片只画跟踪框
+                        tracks=tracks_array
+                    )
 
         # 发送事件（传入图片，会自动保存到本地）
         self.event_output.emit(
