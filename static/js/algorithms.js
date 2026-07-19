@@ -867,39 +867,6 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-function showNotification(message, type) {
-    // 创建通知元素
-    const notification = document.createElement('div');
-    notification.className = `notification notification-${type}`;
-    notification.textContent = message;
-    
-    // 添加样式
-    notification.style.cssText = `
-        position: fixed;
-        top: 80px;
-        right: 24px;
-        padding: 12px 20px;
-        background: ${type === 'success' ? '#52c41a' : type === 'error' ? '#ff4d4f' : type === 'warning' ? '#faad14' : '#266CFB'};
-        color: #fff;
-        border-radius: 6px;
-        font-size: 14px;
-        font-weight: 500;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        z-index: 3000;
-        animation: slideInRight 0.3s;
-    `;
-    
-    document.body.appendChild(notification);
-    
-    // 3秒后移除
-    setTimeout(() => {
-        notification.style.animation = 'slideOutRight 0.3s';
-        setTimeout(() => {
-            notification.remove();
-        }, 300);
-    }, 3000);
-}
-
 // ========================================
 // 算法详情（可选）
 // ========================================

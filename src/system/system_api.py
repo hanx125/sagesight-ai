@@ -509,7 +509,15 @@ def get_system_config():
         return jsonify({
             'storage': config.get('storage', {}),
             'mqtt': config.get('mqtt', {}),
-            'websocket': config.get('websocket', {})
+            'websocket': config.get('websocket', {}),
+            'video_file_upload': config.get('video_file_upload', {
+                'max_file_size_mb': 100,
+                'allowed_formats': ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv'],
+                'upload_dir': 'uploads/video_files',
+                'max_batch_count': 20
+            }),
+            # 简化字段名（前端使用）
+            'video_file_max_size_mb': config.get('video_file_upload', {}).get('max_file_size_mb', 100)
         })
     except Exception as e:
         logger.error(f"获取系统配置失败: {e}")

@@ -54,29 +54,38 @@ async function openConfigModal(taskId, event) {
 
 // 加载配置到表单
 function loadConfigToForm(task) {
-    // 解码器配置（完整配置）
+    // 解码器配置（新架构）
     const decoderConfig = task.decoder_config || {};
+    
+    // ========== 视频参数 ==========
     document.getElementById('decoderWidth').value = decoderConfig.width || 640;
     document.getElementById('decoderHeight').value = decoderConfig.height || 640;
-    document.getElementById('decoderHwaccel').value = decoderConfig.hwaccel || 'dxva2';
+    document.getElementById('decoderFps').value = decoderConfig.fps || 30;  // 新增：检测帧率
+    
+    // ========== 硬件加速配置 ==========
+    document.getElementById('decoderHwaccelPreset').value = decoderConfig.hwaccel_preset || 'preset-dxva2';  // 新版参数
+    
+    // ========== 输入预设配置 ==========
+    document.getElementById('decoderInputPreset').value = decoderConfig.input_preset || 'preset-rtsp-generic';  // 新增：输入预设
+    
+    // ========== 输出配置 ==========
     document.getElementById('decoderOutputFormat').value = decoderConfig.output_format || 'auto';
+    
+    // ========== RTSP 配置 ==========
     document.getElementById('decoderRtspTransport').value = decoderConfig.rtsp_transport || 'tcp';
     document.getElementById('decoderReconnect').value = decoderConfig.reconnect ? 'true' : 'false';
     document.getElementById('decoderReconnectDelay').value = decoderConfig.reconnect_delay || 5;
-    document.getElementById('decoderBufferSize').value = decoderConfig.buffer_size || 1048576;
-    document.getElementById('decoderFrameQueueSize').value = decoderConfig.frame_queue_size || 30;
-    document.getElementById('decoderUseRingBuffer').value = decoderConfig.use_ring_buffer ? 'true' : 'false';
-    document.getElementById('decoderRingBufferBlockCount').value = decoderConfig.ring_buffer_block_count || 5;
-    document.getElementById('decoderIndexQueueSize').value = decoderConfig.index_queue_size || 30;
+    document.getElementById('decoderBufferSize').value = decoderConfig.buffer_size || 2097152;  // 2MB
     
-    // 共享内存配置（新增）
-    const sharedMemoryTotalSize = decoderConfig.shared_memory_total_size;
-    if (sharedMemoryTotalSize === null || sharedMemoryTotalSize === undefined) {
-        document.getElementById('decoderSharedMemoryTotalSize').value = 'null';
-    } else {
-        document.getElementById('decoderSharedMemoryTotalSize').value = sharedMemoryTotalSize;
-    }
-    document.getElementById('decoderSharedMemoryMaxRetries').value = decoderConfig.shared_memory_max_retries || 3;
+    // ========== 环形缓冲区配置（新架构）==========
+    document.getElementById('decoderRingBufferBlockCount').value = decoderConfig.ring_buffer_block_count || 10;
+    document.getElementById('decoderIndexQueueSize').value = decoderConfig.index_queue_size || 50;
+    
+    // ========== FFmpeg 滤镜参数（视频预处理）==========
+    document.getElementById('decoderFfmpegFilters').value = (decoderConfig.ffmpeg_filters || []).join(' ');  // FFmpeg 滤镜参数
+
+    // ✅ Zone配置已改为通道级别，不再在任务级别配置
+    // 每个通道的Zone配置在通道列表中单独配置
 
     // 检测器配置（完整配置）
     const detectorConfig = task.detector_config || {};
@@ -91,6 +100,13 @@ function loadConfigToForm(task) {
     const gpuMemLimitBytes = detectorConfig.gpu_mem_limit || 6442450944;  // 6GB
     const gpuMemLimitMB = Math.round(gpuMemLimitBytes / (1024 * 1024));  // 转换为MB
     document.getElementById('detectorGpuMemLimit').value = gpuMemLimitMB || 6144;
+
+    // 预处理器配置（扁平格式，直接从 detector_config 读取）
+    document.getElementById('detectorPreprocessorWidth').value = detectorConfig.width || 640;
+    document.getElementById('detectorPreprocessorHeight').value = detectorConfig.height || 640;
+    document.getElementById('detectorPreprocessorModelInputSize').value = detectorConfig.model_input_size || 640;
+    document.getElementById('detectorPreprocessorRgbMean').value = (detectorConfig.rgb_mean || [0.0, 0.0, 0.0]).join(',');
+    document.getElementById('detectorPreprocessorRgbStd').value = (detectorConfig.rgb_std || [1.0, 1.0, 1.0]).join(',');
 
     // 跟踪器配置
     const trackerConfig = task.tracker_config || {};
@@ -117,6 +133,18 @@ function loadConfigToForm(task) {
     document.getElementById('motionConfidenceBoost').value = motionConfig.confidence_boost || 0.15;
     document.getElementById('motionConfidencePenalty').value = motionConfig.confidence_penalty || 0.05;
 
+    // 新增：高级运动检测参数
+    document.getElementById('motionDetectShadows').value = motionConfig.detect_shadows ? 'true' : 'false';
+    document.getElementById('motionBlurSize').value = motionConfig.blur_size || 5;
+    document.getElementById('motionMorphSize').value = motionConfig.morph_size || 5;
+    document.getElementById('motionLearningRate').value = motionConfig.learning_rate || -1;
+    document.getElementById('motionHistoryLength').value = motionConfig.motion_history_length || 10;
+    document.getElementById('motionInitThreshold').value = motionConfig.init_threshold || 30;
+    document.getElementById('motionForegroundThreshold').value = motionConfig.foreground_threshold || 0.3;
+    document.getElementById('motionMaxMotionRegions').value = motionConfig.max_motion_regions || 20;
+    document.getElementById('motionShowVisualization').value = motionConfig.show_visualization ? 'true' : 'false';
+    document.getElementById('motionUseForReid').value = motionConfig.use_for_reid ? 'true' : 'false';
+
     // 事件输出配置
     const eventConfig = task.event_config || {};
     const imageOutputObj = eventConfig.image_output || {};
@@ -131,6 +159,8 @@ function loadConfigToForm(task) {
     document.getElementById('eventImageOutputDir').value = imageOutputObj.output_dir || 'output/images';
     document.getElementById('eventImageDrawBbox').value = imageOutputObj.draw_bbox !== false ? 'true' : 'false';
     document.getElementById('eventMinConfidence').value = filterObj.min_confidence || 0.5;
+    document.getElementById('eventGifEnabled').value = gifObj.enabled !== false ? 'true' : 'false';
+    document.getElementById('eventGifOutputMethod').value = gifObj.output_method || 'both';
     document.getElementById('eventGifOutputDir').value = gifObj.output_dir || 'output/gifs';
     document.getElementById('eventGifDrawBbox').value = gifObj.draw_bbox !== false ? 'true' : 'false';
     document.getElementById('eventCropMarginRatio').value = captureObj.crop_margin_ratio !== undefined ? captureObj.crop_margin_ratio : 1.0;
@@ -144,6 +174,7 @@ function loadConfigToForm(task) {
     const detectionBoxObj = displayConfig.detection_box || {};
     const trackBoxObj = displayConfig.track_box || {};
     const trajectoryObj = displayConfig.trajectory || {};
+    const debugInfoObj = displayConfig.debug_info || {};
 
     document.getElementById('displayShowBoxes').value = displayObj.show_detection_boxes !== false ? 'true' : 'false';
     document.getElementById('displayShowTracks').value = displayObj.show_track_boxes !== false ? 'true' : 'false';
@@ -167,6 +198,15 @@ function loadConfigToForm(task) {
     document.getElementById('displayTrajectoryThickness').value = trajectoryObj.thickness || 1;
     document.getElementById('displayTrajectoryPointSize').value = trajectoryObj.point_size || 2;
     document.getElementById('displayTrajectoryPointColor').value = (trajectoryObj.point_color || [0, 0, 255]).join(',');
+
+    // 新增：调试信息配置
+    document.getElementById('debugShowFps').value = debugInfoObj.show_fps ? 'true' : 'false';
+    document.getElementById('debugShowDetectionCount').value = debugInfoObj.show_detection_count ? 'true' : 'false';
+    document.getElementById('debugShowTrackCount').value = debugInfoObj.show_track_count ? 'true' : 'false';
+    document.getElementById('debugShowFrameId').value = debugInfoObj.show_frame_id ? 'true' : 'false';
+    document.getElementById('debugFpsPosition').value = (debugInfoObj.fps_position || [10, 30]).join(',');
+    document.getElementById('debugFontScale').value = debugInfoObj.font_scale || 0.6;
+    document.getElementById('debugTextColor').value = (debugInfoObj.text_color || [255, 255, 255]).join(',');
 }
 
 // 关闭参数配置模态框
@@ -183,31 +223,40 @@ async function saveConfig() {
     }
 
     try {
-        // 获取共享内存大小（特殊处理null值）
-        const sharedMemoryTotalSizeStr = document.getElementById('decoderSharedMemoryTotalSize').value.trim();
-        let sharedMemoryTotalSize = null;
-        if (sharedMemoryTotalSizeStr !== 'null' && sharedMemoryTotalSizeStr !== '') {
-            sharedMemoryTotalSize = parseInt(sharedMemoryTotalSizeStr);
-        }
+        // 解析 FFmpeg 滤镜参数（字符串转数组）
+        const ffmpegFiltersStr = document.getElementById('decoderFfmpegFilters').value.trim();
+        const ffmpegFilters = ffmpegFiltersStr ? ffmpegFiltersStr.split(/\s+/) : [];
 
         // 构建配置数据
         const configData = {
-            // 解码器配置（完整配置）
+            // 解码器配置（新架构）
             decoder_config: {
+                // ========== 视频参数 ==========
                 width: parseInt(document.getElementById('decoderWidth').value) || 640,
                 height: parseInt(document.getElementById('decoderHeight').value) || 640,
-                hwaccel: document.getElementById('decoderHwaccel').value || 'dxva2',
+                fps: parseInt(document.getElementById('decoderFps').value) || 30,  // 新增：检测帧率
+
+                // ========== 硬件加速配置 ==========
+                hwaccel_preset: document.getElementById('decoderHwaccelPreset').value || 'preset-dxva2',  // 新版参数
+
+                // ========== 输入预设配置 ==========
+                input_preset: document.getElementById('decoderInputPreset').value || 'preset-rtsp-generic',  // 新增：输入预设
+
+                // ========== 输出配置 ==========
                 output_format: document.getElementById('decoderOutputFormat').value || 'auto',
+
+                // ========== RTSP 配置 ==========
                 rtsp_transport: document.getElementById('decoderRtspTransport').value || 'tcp',
                 reconnect: document.getElementById('decoderReconnect').value === 'true',
                 reconnect_delay: parseInt(document.getElementById('decoderReconnectDelay').value) || 5,
-                buffer_size: parseInt(document.getElementById('decoderBufferSize').value) || 1048576,
-                frame_queue_size: parseInt(document.getElementById('decoderFrameQueueSize').value) || 30,
-                use_ring_buffer: document.getElementById('decoderUseRingBuffer').value === 'true',
-                ring_buffer_block_count: parseInt(document.getElementById('decoderRingBufferBlockCount').value) || 5,
-                index_queue_size: parseInt(document.getElementById('decoderIndexQueueSize').value) || 30,
-                shared_memory_total_size: sharedMemoryTotalSize,  // null表示自动计算
-                shared_memory_max_retries: parseInt(document.getElementById('decoderSharedMemoryMaxRetries').value) || 3
+                buffer_size: parseInt(document.getElementById('decoderBufferSize').value) || 2097152,  // 2MB
+
+                // ========== 环形缓冲区配置（新架构）==========
+                ring_buffer_block_count: parseInt(document.getElementById('decoderRingBufferBlockCount').value) || 10,
+                index_queue_size: parseInt(document.getElementById('decoderIndexQueueSize').value) || 50,
+
+                // ========== FFmpeg 滤镜参数（视频预处理）==========
+                ffmpeg_filters: ffmpegFilters  // FFmpeg 滤镜参数
             },
 
             // 检测器配置（完整配置）
@@ -222,20 +271,16 @@ async function saveConfig() {
                 // ✅ 显存限制（MB转换为字节）
                 gpu_mem_limit: (parseInt(document.getElementById('detectorGpuMemLimit').value) || 6144) * 1024 * 1024,
 
-                // ✅ 高级配置项（自动补充默认值，不从前端读取）
-                input_width: 640,
-                input_height: 640,
-                tensorrt_engine_cache_path: './trt_cache',
-                tensorrt_lib_path: 'D:\\TensorRT-10.5.0.18.Windows.win10.cuda-12.6\\TensorRT-10.5.0.18\\lib',
+                // ✅ 预处理器配置（扁平保存，直接放在 detector_config 下）
+                width: parseInt(document.getElementById('detectorPreprocessorWidth').value) || 640,
+                height: parseInt(document.getElementById('detectorPreprocessorHeight').value) || 640,
+                model_input_size: parseInt(document.getElementById('detectorPreprocessorModelInputSize').value) || 640,
+                rgb_mean: document.getElementById('detectorPreprocessorRgbMean').value.split(',').map(Number),
+                rgb_std: document.getElementById('detectorPreprocessorRgbStd').value.split(',').map(Number)
 
-                // ✅ 预处理器配置（固定值，不从前端读取）
-                width: 640,
-                height: 640,
-                model_input_size: 640,
-                rgb_mean: [0.0, 0.0, 0.0],
-                rgb_std: [1.0, 1.0, 1.0]
-
-                // 注意：target_classes是任务表的单独字段，不放在detector_config中
+                // 注意：
+                // 1. target_classes是任务表的单独字段，不放在detector_config中
+                // 2. input_width/input_height等高级配置项不保存，由后端使用默认值
             },
 
             // 跟踪器配置
@@ -275,17 +320,17 @@ async function saveConfig() {
                 confidence_boost: parseFloat(document.getElementById('motionConfidenceBoost').value) || 0.15,
                 confidence_penalty: parseFloat(document.getElementById('motionConfidencePenalty').value) || 0.05,
 
-                // ✅ 固定配置项（不从前端读取）
-                detect_shadows: false,
-                blur_size: 5,
-                morph_size: 5,
-                learning_rate: -1,
-                motion_history_length: 10,
-                init_threshold: 30,
-                foreground_threshold: 0.3,
-                max_motion_regions: 20,
-                show_visualization: false,  // ✅ 新增：固定（禁用可视化）
-                use_for_reid: true  // ✅ 新增：固定（启用ReID辅助）
+                // 新增：高级运动检测参数（从前端读取）
+                detect_shadows: document.getElementById('motionDetectShadows').value === 'true',
+                blur_size: parseInt(document.getElementById('motionBlurSize').value) || 5,
+                morph_size: parseInt(document.getElementById('motionMorphSize').value) || 5,
+                learning_rate: parseFloat(document.getElementById('motionLearningRate').value) || -1,
+                motion_history_length: parseInt(document.getElementById('motionHistoryLength').value) || 10,
+                init_threshold: parseInt(document.getElementById('motionInitThreshold').value) || 30,
+                foreground_threshold: parseFloat(document.getElementById('motionForegroundThreshold').value) || 0.3,
+                max_motion_regions: parseInt(document.getElementById('motionMaxMotionRegions').value) || 20,
+                show_visualization: document.getElementById('motionShowVisualization').value === 'true',
+                use_for_reid: document.getElementById('motionUseForReid').value === 'true'
             },
 
             // 事件输出配置
@@ -318,7 +363,8 @@ async function saveConfig() {
 
                 // GIF输出配置
                 gif: {
-                    output_method: 'both',
+                    enabled: document.getElementById('eventGifEnabled').value === 'true',
+                    output_method: document.getElementById('eventGifOutputMethod').value || 'both',
                     output_dir: document.getElementById('eventGifOutputDir').value || 'output/gifs',
                     local_retention_days: 7,
                     auto_cleanup: true,
@@ -396,15 +442,18 @@ async function saveConfig() {
                     fill_alpha: 50
                 },
                 debug_info: {
-                    show_fps: true,
-                    show_detection_count: true,
-                    show_track_count: true,
-                    show_frame_id: true,
-                    fps_position: [10, 30],
-                    font_scale: 0.6,
-                    text_color: [255, 255, 255]
+                    show_fps: document.getElementById('debugShowFps').value === 'true',
+                    show_detection_count: document.getElementById('debugShowDetectionCount').value === 'true',
+                    show_track_count: document.getElementById('debugShowTrackCount').value === 'true',
+                    show_frame_id: document.getElementById('debugShowFrameId').value === 'true',
+                    fps_position: document.getElementById('debugFpsPosition').value.split(',').map(Number),
+                    font_scale: parseFloat(document.getElementById('debugFontScale').value) || 0.6,
+                    text_color: document.getElementById('debugTextColor').value.split(',').map(Number)
                 }
-            }
+            },
+
+            // ✅ 新增：Zone区域配置
+            zones_config: getZonesConfigFromForm()
         };
 
         // 发送更新请求
@@ -438,3 +487,157 @@ document.addEventListener('click', function(event) {
         closeConfigModal();
     }
 });
+
+// ========================================
+// ✅ 新增：Zone区域配置管理
+// ========================================
+
+let zoneConfigCounter = 0;  // Zone配置计数器
+
+/**
+ * 添加Zone区域配置
+ */
+function addZoneConfig() {
+    zoneConfigCounter++;
+
+    const container = document.getElementById('zonesConfigContainer');
+
+    const zoneDiv = document.createElement('div');
+    zoneDiv.className = 'zone-config-item';
+    zoneDiv.id = `zoneConfig${zoneConfigCounter}`;
+    zoneDiv.style.cssText = 'border: 1px solid #e0e0e0; border-radius: 8px; padding: 15px; margin-bottom: 15px; background-color: #fafafa;';
+
+    zoneDiv.innerHTML = `
+        <div class="form-row" style="margin-bottom: 10px;">
+            <div class="form-group" style="flex: 1;">
+                <label>区域名称</label>
+                <input type="text" id="zoneName${zoneConfigCounter}" name="zone_name_${zoneConfigCounter}" placeholder="例如：入口区域">
+            </div>
+            <div class="form-group" style="flex: 0 0 auto; margin-left: 20px;">
+                <button type="button" class="btn btn-danger" onclick="removeZoneConfig('zoneConfig${zoneConfigCounter}')">删除</button>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>区域多边形坐标</label>
+                <input type="text" id="zonePolygon${zoneConfigCounter}" name="zone_polygon_${zoneConfigCounter}" placeholder="x1,y1;x2,y2;x3,y3;x4,y4">
+                <small style="color: #888; font-size: 12px;">多边形顶点坐标，用分号分隔（例如：100,100;200,100;200,200;100,200）</small>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="zoneRequired${zoneConfigCounter}">必需区域</label>
+                <select id="zoneRequired${zoneConfigCounter}" name="zone_required_${zoneConfigCounter}">
+                    <option value="false">否</option>
+                    <option value="true">是</option>
+                </select>
+                <small style="color: #888; font-size: 12px;">必需区域：只有在此区域内才触发事件</small>
+            </div>
+            <div class="form-group">
+                <label for="zoneLoitering${zoneConfigCounter}">徘徊检测</label>
+                <select id="zoneLoitering${zoneConfigCounter}" name="zone_loitering_${zoneConfigCounter}">
+                    <option value="false">禁用</option>
+                    <option value="true">启用</option>
+                </select>
+                <small style="color: #888; font-size: 12px;">检测对象在区域内长时间停留</small>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="zoneLoiteringTime${zoneConfigCounter}">徘徊判定时间（帧）</label>
+                <input type="number" id="zoneLoiteringTime${zoneConfigCounter}" name="zone_loitering_time_${zoneConfigCounter}" placeholder="30">
+                <small style="color: #888; font-size: 12px;">超过多少帧判定为徘徊（30帧≈1秒）</small>
+            </div>
+            <div class="form-group">
+                <label for="zoneColor${zoneConfigCounter}">区域颜色（BGR）</label>
+                <input type="text" id="zoneColor${zoneConfigCounter}" name="zone_color_${zoneConfigCounter}" placeholder="255,0,0">
+            </div>
+        </div>
+    `;
+
+    container.appendChild(zoneDiv);
+}
+
+/**
+ * 删除Zone区域配置
+ */
+function removeZoneConfig(zoneConfigId) {
+    const zoneDiv = document.getElementById(zoneConfigId);
+    if (zoneDiv) {
+        zoneDiv.remove();
+    }
+}
+
+/**
+ * 加载Zone配置到表单
+ */
+function loadZonesConfigToForm(zonesConfig) {
+    // 清空现有配置
+    document.getElementById('zonesConfigContainer').innerHTML = '';
+    zoneConfigCounter = 0;
+
+    if (!zonesConfig || zonesConfig.length === 0) {
+        return;
+    }
+
+    // 加载每个Zone配置
+    zonesConfig.forEach((zone, index) => {
+        zoneConfigCounter++;
+        addZoneConfig();
+
+        // 填充数据
+        document.getElementById(`zoneName${zoneConfigCounter}`).value = zone.name || '';
+        document.getElementById(`zonePolygon${zoneConfigCounter}`).value = 
+            (zone.polygon || []).map(p => `${p[0]},${p[1]}`).join(';');
+        document.getElementById(`zoneRequired${zoneConfigCounter}`).value = zone.required ? 'true' : 'false';
+        document.getElementById(`zoneLoitering${zoneConfigCounter}`).value = zone.enable_loitering_detection ? 'true' : 'false';
+        document.getElementById(`zoneLoiteringTime${zoneConfigCounter}`).value = zone.loitering_time || 30;
+        document.getElementById(`zoneColor${zoneConfigCounter}`).value = 
+            (zone.color || [255, 0, 0]).join(',');
+    });
+}
+
+/**
+ * 从表单获取Zone配置
+ */
+function getZonesConfigFromForm() {
+    const zonesConfig = [];
+    const container = document.getElementById('zonesConfigContainer');
+    if (!container) {
+        return zonesConfig;
+    }
+    const zoneItems = container.querySelectorAll('.zone-config-item');
+
+    zoneItems.forEach((item, index) => {
+        const counter = parseInt(item.id.replace('zoneConfig', ''));
+
+        const name = document.getElementById(`zoneName${counter}`).value.trim();
+        const polygonStr = document.getElementById(`zonePolygon${counter}`).value.trim();
+
+        if (!name || !polygonStr) {
+            return;  // 跳过空配置
+        }
+
+        // 解析多边形坐标
+        const polygon = polygonStr.split(';').map(point => {
+            const [x, y] = point.split(',').map(Number);
+            return [x, y];
+        });
+
+        // 解析颜色
+        const colorStr = document.getElementById(`zoneColor${counter}`).value.trim();
+        const color = colorStr ? colorStr.split(',').map(Number) : [255, 0, 0];
+
+        zonesConfig.push({
+            name: name,
+            polygon: polygon,
+            required: document.getElementById(`zoneRequired${counter}`).value === 'true',
+            color: color,
+            min_area: 0,
+            loitering_time: parseInt(document.getElementById(`zoneLoiteringTime${counter}`).value) || 30,
+            enable_loitering_detection: document.getElementById(`zoneLoitering${counter}`).value === 'true'
+        });
+    });
+
+    return zonesConfig;
+}

@@ -7,6 +7,12 @@ SageSight AI 检测系统 - 统一主程序
 
 import os
 import sys
+
+# 过滤 Eventlet 废弃警告（必须在导入 eventlet 之前设置）
+os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning'
+import warnings
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+
 import time
 import json
 import signal
@@ -94,13 +100,18 @@ logger.info(f"日志系统初始化完成: file={_log_file}, level={_log_cfg.get
 
 def _run_executor_process(task_config: Dict):
     """运行任务执行器（在独立进程中）
-    
+
     Args:
         task_config: 任务配置字典
-    
+
     Note:
         此函数必须在模块级别定义，以便multiprocessing能够pickle
     """
+    # 禁用 stdout/stderr 缓冲（确保日志立即输出）
+    import sys
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+
     # 从数据库加载设备通道（摄像机）列表
     from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager
     
@@ -109,19 +120,35 @@ def _run_executor_process(task_config: Dict):
     
     # 获取任务关联的所有设备通道
     channels = channel_pool_manager.get_task_device_channels(task_id)
-    
+
+    # 获取摄像机管理器（用于查询protocol字段）
+    from src.cameras.camera_manager import get_camera_manager
+    camera_manager = get_camera_manager()
+
     # 将设备通道转换为摄像机配置列表
     cameras = []
     for channel in channels:
         # 优先使用关联的摄像机 ID，如果没有则使用通道 ID 作为降级方案
         effective_camera_id = channel.camera_id if channel.camera_id else str(channel.id)
-        
+
+        # 从摄像机表获取protocol字段（用于判断视频文件）
+        camera_info = camera_manager.get_camera(effective_camera_id)
+        protocol = camera_info.protocol if camera_info else 'rtsp'
+
+        # 获取视频流地址
+        rtsp_url = channel.rtsp_url
+        if protocol == 'file' and camera_info:
+            # 视频文件：从cameras表获取source字段，并去除file://前缀
+            source = camera_info.source if hasattr(camera_info, 'source') else ''
+            rtsp_url = source.replace('file://', '') if source.startswith('file://') else source
+
         camera_config = {
             'camera_id': effective_camera_id,
             'channel_id': str(channel.id),  # 保留通道 ID 用于日志和调试
             'camera_name': channel.channel_name,
-            'rtsp_url': channel.rtsp_url,
-            'channel_source': channel.channel_source
+            'rtsp_url': rtsp_url,  # 使用处理后的路径
+            'channel_source': channel.channel_source,
+            'protocol': protocol  # 添加protocol字段（视频文件需要）
         }
         cameras.append(camera_config)
     
@@ -309,6 +336,12 @@ def serve_output_file(filename):
     output_dir = os.path.join(os.path.dirname(__file__), 'output')
     return send_from_directory(output_dir, filename)
 
+@app.route('/uploads/<path:filename>')
+def serve_upload_file(filename):
+    """提供uploads目录下的文件访问（视频文件等）"""
+    uploads_dir = os.path.join(os.path.dirname(__file__), 'uploads')
+    return send_from_directory(uploads_dir, filename)
+
 # 全局实例
 task_manager = None
 process_manager = None
@@ -487,28 +520,31 @@ def push_ai_stream_frame():
     """接收任务进程推送的 AI 视频帧，并通过 WebSocket 广播"""
     try:
         data = request.get_json()
+        task_id = data.get('task_id')
         camera_id = data.get('camera_id')
         frame = data.get('frame')
         timestamp = data.get('timestamp')
-        
+
         if not camera_id or not frame:
             return jsonify({'error': '参数不完整'}), 400
-        
+
         # 缓存最新帧
         _ai_stream_cache[camera_id] = {
             'frame': frame,
-            'timestamp': timestamp
+            'timestamp': timestamp,
+            'task_id': task_id
         }
-        
+
         # 通过 WebSocket 广播给订阅的客户端
         socketio.emit('ai_stream_frame', {
+            'task_id': task_id,
             'camera_id': camera_id,
             'frame': frame,
             'timestamp': timestamp
         }, namespace='/ws')
-        
+
         return jsonify({'success': True})
-        
+
     except Exception as e:
         logger.error(f"推送 AI 视频帧失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -554,11 +590,33 @@ def disable_ai_stream(camera_id):
     try:
         # 清除缓存
         _ai_stream_cache.pop(camera_id, None)
-        
+
         return jsonify({'success': True, 'message': 'AI 视频流已禁用'})
-        
+
     except Exception as e:
         logger.error(f"禁用 AI 视频流失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ai-stream/frame/<camera_id>', methods=['GET'])
+def get_ai_stream_frame(camera_id):
+    """获取摄像机的最新 AI 视频帧（用于视频文件播放）"""
+    try:
+        # 从缓存获取最新帧
+        frame_data = _ai_stream_cache.get(camera_id)
+
+        if not frame_data:
+            return jsonify({'error': '没有可用的帧数据'}), 404
+
+        return jsonify({
+            'success': True,
+            'camera_id': camera_id,
+            'frame': frame_data.get('frame'),
+            'timestamp': frame_data.get('timestamp')
+        })
+
+    except Exception as e:
+        logger.error(f"获取 AI 视频帧失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 

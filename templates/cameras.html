@@ -87,6 +87,12 @@
                 </svg>
                 目录管理
             </button>
+            <button class="btn btn-secondary" onclick="openVideoFileModal()">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z"/>
+                </svg>
+                添加视频文件
+            </button>
             <button class="btn btn-primary" onclick="openDiscoverModal()">
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
@@ -521,8 +527,79 @@
         </div>
     </div>
 </div>
+
+<!-- 视频文件上传模态框 -->
+<div id="videoFileModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>添加视频文件（虚拟设备）</h3>
+            <button class="modal-close" onclick="closeVideoFileModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="videoFileForm">
+                <!-- 批量上传模式开关 -->
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="batchUploadMode" onchange="toggleBatchMode()">
+                        <span>启用批量上传模式</span>
+                    </label>
+                    <small style="color: #888; font-size: 12px;">批量模式下可选择多个视频文件，每个文件将创建独立的虚拟设备</small>
+                </div>
+
+                <div class="form-group">
+                    <label>视频文件路径 *</label>
+                    <div style="display: flex; gap: 10px;">
+                        <input type="text" id="videoFilePath" placeholder="选择视频文件（支持多选）" readonly style="flex: 1; background-color: #f5f5f5;">
+                        <button type="button" class="btn btn-secondary" onclick="selectVideoFile()">浏览...</button>
+                    </div>
+                    <input type="file" id="videoFileInput" accept="video/*" style="display: none;" onchange="handleVideoFileSelect(event)">
+                    <small style="color: #888; font-size: 12px;">
+                        支持格式：MP4、AVI、MKV、MOV等常见视频格式<br>
+                        单文件大小限制：<span id="fileSizeLimit">100MB</span>
+                    </small>
+                </div>
+
+                <!-- 文件列表（批量上传时显示） -->
+                <div id="fileListContainer" style="display: none;">
+                    <label>已选择的文件：</label>
+                    <div id="fileList" style="max-height: 200px; overflow-y: auto; border: 1px solid #e0e0e0; border-radius: 4px; padding: 10px; margin-top: 5px;"></div>
+                </div>
+
+                <div class="form-group">
+                    <label>设备名称 *</label>
+                    <input type="text" id="videoFileDeviceName" placeholder="例如：测试视频-入口监控">
+                    <small style="color: #888; font-size: 12px;" id="deviceNameHint">作为虚拟设备的显示名称</small>
+                </div>
+                <div class="form-group">
+                    <label>设备描述</label>
+                    <textarea id="videoFileDescription" placeholder="可选：设备描述信息"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>所属目录</label>
+                    <select id="videoFileDirectory">
+                        <option value="">无目录</option>
+                    </select>
+                </div>
+                <div class="alert alert-info" style="margin-top: 15px;">
+                    <strong>说明：</strong>
+                    <ul style="margin: 10px 0 0 20px; padding: 0;">
+                        <li>视频文件将作为一个虚拟监控设备添加到系统中</li>
+                        <li>设备状态默认为在线，可用于测试和演示</li>
+                        <li>支持在任务配置中选择此视频文件作为检测源</li>
+                        <li>批量上传时，设备名称为前缀，自动添加序号</li>
+                    </ul>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeVideoFileModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="uploadVideoFile()">添加设备</button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/cameras.js') }}"></script>
+<script src="{{ url_for('static', filename='js/video_file_upload.js') }}"></script>
 {% endblock %}

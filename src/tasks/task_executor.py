@@ -17,10 +17,15 @@ import math
 import queue
 import cv2
 import numpy as np
+import base64
 from collections import deque
 from datetime import datetime
 from typing import Dict, Optional, List
 from concurrent.futures import ThreadPoolExecutor
+
+# ✅ 全局锁：保护 OpenCV 操作的线程安全
+# OpenCV 在多线程环境中可能使用全局缓冲区，导致数据混淆
+_opencv_lock = threading.Lock()
 
 # 添加项目路径
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,13 +42,31 @@ class CameraWorker:
         Args:
             camera_config: 摄像机配置
             task_config: 任务配置（从数据库读取的完整配置）
-            detector: 共享的检测器实例
+            detector: 共享的检测器实例或检测进程池（根据 use_detection_pool）
             tracker_class: 跟踪器类
         """
         self.camera_config = camera_config
         self.task_config = task_config
-        self.detector = detector
+        self.detector = detector  # 单线程检测器（传统模式）
         self.tracker_class = tracker_class
+        
+        # ========================================
+        # 检测进程池配置（向后兼容）
+        # ========================================
+        # 判断是检测器还是检测进程池
+        self.use_detection_pool = task_config.get('use_detection_pool', False)
+        
+        if self.use_detection_pool:
+            # 检测进程池模式
+            self.detection_pool = detector  # detector 参数实际是 DetectionProcessPool
+            self.detector = None  # 单线程检测器为 None
+            self.detection_event = None  # 检测完成事件
+            self.latest_detections = []  # 最新检测结果缓存
+        else:
+            # 传统单线程检测模式
+            self.detection_pool = None
+            self.detection_event = None
+            self.latest_detections = []
         
         self.camera_id = camera_config.get('camera_id', 'unknown')
         self.rtsp_url = camera_config.get('rtsp_url', '')
@@ -90,7 +113,7 @@ class CameraWorker:
         
         # GIF 输出配置（从 event_config.gif 读取）
         self.gif_cfg = self.event_cfg.get('gif', {})
-        self.generate_gif = self.gif_cfg.get('output_method', 'none') != 'none'  # 根据输出方法判断是否启用
+        self.generate_gif = self.gif_cfg.get('enabled', True) and self.gif_cfg.get('output_method', 'none') != 'none'  # 同时检查 enabled 开关和输出方法
         self.gif_max_frames = self.gif_cfg.get('max_frames', 30)  # GIF 最大帧数
         self.gif_fps = self.gif_cfg.get('fps', 5)  # GIF 帧率
         self.gif_max_width = self.gif_cfg.get('max_width', 320)  # GIF 最大宽度
@@ -105,6 +128,22 @@ class CameraWorker:
         self.frame_cache_fps = self.gif_cfg.get('cache_fps', 10)  # 缓存采样率
         self.frame_cache_retention = float(self.gif_cfg.get('cache_retention', 20.0))  # 缓存保留秒数
         self.frame_cache_last_ts = 0.0  # 上次缓存时间
+
+        # ========================================
+        # 新增：原始视频流尺寸（从 ZLM 获取）
+        # ========================================
+        # 用于坐标映射：检测框（640x640）-> 原始尺寸
+        self.zlm_original_width = 0  # ZLM 原始流宽度
+        self.zlm_original_height = 0  # ZLM 原始流高度
+
+        # ========================================
+        # 新增：视频文件原始分辨率（用于AI流还原）
+        # ========================================
+        # 视频文件解码后缩放到640x640，推送AI流时需要还原到原始分辨率
+        self.source_original_width = 0  # 视频文件原始宽度
+        self.source_original_height = 0  # 视频文件原始高度
+
+        # 兼容旧代码（GIF生成使用）
         self.frame_orig_w = 0  # 原始帧宽（用于bbox缩放）
         self.frame_orig_h = 0  # 原始帧高
         
@@ -159,6 +198,24 @@ class CameraWorker:
         # - 防止线程泄漏：每次GIF生成不再创建新线程，而是提交到线程池
         self.gif_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix=f'GIF-{self.camera_id}')
         
+        # ========================================
+        # 新增：Zone 区域管理（借鉴 Frigate）
+        # ========================================
+        # 功能：区域检测、事件过滤、入侵检测
+        self.zone_manager = None  # 延迟初始化（需要读取 Zone 配置）
+        self.zones_config = task_config.get('zones_config', [])  # Zone 配置列表
+        
+        # ========================================
+        # 新增：对象状态管理（借鉴 Frigate）
+        # ========================================
+        # 功能：静止/移动状态判断、推理优化
+        from src.detection.object_state_manager import ObjectStateManager
+        self.object_state_manager = ObjectStateManager(
+            position_change_threshold=task_config.get('position_change_threshold', 50.0),
+            min_history_length=task_config.get('min_history_length', 10),
+            stationary_skip_frames=task_config.get('stationary_skip_frames', 5)
+        )
+        
         print(f"[CameraWorker-{self.camera_id}] 初始化")
         print(f"[CameraWorker-{self.camera_id}] RTSP: {self.rtsp_url}")
         print(f"[CameraWorker-{self.camera_id}] 任务名称: {self.task_name}")
@@ -167,90 +224,175 @@ class CameraWorker:
         print(f"[CameraWorker-{self.camera_id}] GIF输出方法: {self.gif_cfg.get('output_method', 'none')}")
         print(f"[CameraWorker-{self.camera_id}] GIF生成: {self.generate_gif}")
         print(f"[CameraWorker-{self.camera_id}] GIF线程池: 2个并发")
+        print(f"[CameraWorker-{self.camera_id}] Zone 区域: {len(self.zones_config)} 个")
+        print(f"[CameraWorker-{self.camera_id}] 对象状态管理: 已启用")
     
     def init_components(self):
         """初始化摄像机专属组件"""
         try:
             # ========================================
-            # 重要：检查ZLM推流状态（如果已推送则跳过启动）
+            # 重要：检查摄像机类型（视频文件跳过ZLM推流）
             # ========================================
-            # 根据项目约束：摄像机注册时已启动ZLM推流
-            # 任务进程启动时，先检查推流状态，如果已存在则跳过启动
-            print(f"[CameraWorker-{self.camera_id}] 检查ZLM推流状态...")
-            
-            stream_exists = False
-            try:
-                from src.cameras.stream_service import StreamService, check_stream_online
-                from src.cameras.camera_manager import get_camera_manager
+            camera_protocol = self.camera_config.get('protocol', 'rtsp')
+            is_video_file = camera_protocol == 'file'
+
+            if is_video_file:
+                print(f"[CameraWorker-{self.camera_id}] 视频文件模式，跳过ZLM推流检查")
                 
-                # 获取摄像机信息和流媒体服务器配置
-                camera_manager = get_camera_manager()
-                camera = camera_manager.get_camera(self.camera_id)
-                
-                if camera:
-                    # 获取流媒体服务器配置
-                    stream_service = StreamService(db_path='data/tasks.db')
-                    server = stream_service._get_streaming_server()
-                    
-                    if server:
-                        server_host = server.get('host', '127.0.0.1')
-                        http_port = server.get('http_port', server.get('api_port', 88))
-                        secret = server.get('secret') or server.get('config', {}).get('secret', '035c73f7-bb6b-4880-a316-36af2cf4c6fb')
-                        app = 'AI'
-                        stream_id = self.camera_id
-                        
-                        # 检查流是否已经在线
-                        stream_exists = check_stream_online(server_host, http_port, secret, app, stream_id)
-                        
-                        if stream_exists:
-                            print(f"[CameraWorker-{self.camera_id}] [OK] ZLM推流已存在（流已在线）")
+                # ========================================
+                # 新增：获取视频文件原始分辨率（用于AI流还原）
+                # ========================================
+                try:
+                    from src.utils.video_utils import get_video_original_resolution
+
+                    # 从摄像机配置获取视频文件路径
+                    # 注意：视频文件路径存储在 self.rtsp_url 中（第369行）
+                    video_file = self.camera_config.get('video_file', '') or self.rtsp_url
+
+                    # 去除 file:// 前缀（如果有）
+                    if video_file.startswith('file://'):
+                        video_file = video_file[7:]
+
+                    if video_file:
+                        self.source_original_width, self.source_original_height = get_video_original_resolution(video_file)
+
+                        if self.source_original_width > 0 and self.source_original_height > 0:
+                            print(f"[CameraWorker-{self.camera_id}] [OK] 视频文件原始尺寸: {self.source_original_width}x{self.source_original_height}")
+                            print(f"[CameraWorker-{self.camera_id}]   解码尺寸: 640x640")
+                            print(f"[CameraWorker-{self.camera_id}]   AI流还原: 将启用（{self.source_original_width}x{self.source_original_height}）")
                         else:
-                            # 流不存在，启动推流
-                            print(f"[CameraWorker-{self.camera_id}] [WARN] ZLM推流不存在，启动推流...")
-                            result = stream_service.start_stream(self.camera_id)
-                            
-                            if result.get('success'):
-                                print(f"[CameraWorker-{self.camera_id}] [OK] ZLM推流已启动")
-                                stream_exists = True
-                            else:
-                                print(f"[CameraWorker-{self.camera_id}] [WARN] ZLM推流启动失败: {result.get('message', '未知错误')}")
+                            print(f"[CameraWorker-{self.camera_id}] [WARN] 无法获取视频文件原始分辨率，AI流将使用解码尺寸")
                     else:
-                        print(f"[CameraWorker-{self.camera_id}] [WARN] 没有配置流媒体服务器")
-                else:
-                    print(f"[CameraWorker-{self.camera_id}] [WARN] 摄像机信息获取失败")
-                    
-            except Exception as stream_err:
-                print(f"[CameraWorker-{self.camera_id}] [WARN] ZLM推流检查异常: {stream_err}")
-                print(f"[CameraWorker-{self.camera_id}] 将继续尝试连接...")
+                        print(f"[CameraWorker-{self.camera_id}] [WARN] 视频文件路径为空，无法获取原始分辨率")
+
+                except Exception as e:
+                    print(f"[CameraWorker-{self.camera_id}] [ERROR] 获取视频文件信息失败: {e}")
+            else:
+                # ========================================
+                # 重要：检查ZLM推流状态（如果已推送则跳过启动）
+                # ========================================
+                # 根据项目约束：摄像机注册时已启动ZLM推流
+                # 任务进程启动时，先检查推流状态，如果已存在则跳过启动
+                print(f"[CameraWorker-{self.camera_id}] 检查ZLM推流状态...")
+
+                stream_exists = False
+                try:
+                    from src.cameras.stream_service import StreamService, check_stream_online
+                    from src.cameras.camera_manager import get_camera_manager
+
+                    # 获取摄像机信息和流媒体服务器配置
+                    camera_manager = get_camera_manager()
+                    camera = camera_manager.get_camera(self.camera_id)
+
+                    if camera:
+                        # 获取流媒体服务器配置
+                        stream_service = StreamService(db_path='data/tasks.db')
+                        server = stream_service._get_streaming_server()
+
+                        if server:
+                            server_host = server.get('host', '127.0.0.1')
+                            http_port = server.get('http_port', server.get('api_port', 88))
+                            secret = server.get('secret') or server.get('config', {}).get('secret', '035c73f7-bb6b-4880-a316-36af2cf4c6fb')
+                            app = 'AI'
+                            stream_id = self.camera_id
+
+                            # 检查流是否已经在线
+                            stream_exists = check_stream_online(server_host, http_port, secret, app, stream_id)
+
+                            if stream_exists:
+                                print(f"[CameraWorker-{self.camera_id}] [OK] ZLM推流已存在（流已在线）")
+                            else:
+                                # 流不存在，启动推流
+                                print(f"[CameraWorker-{self.camera_id}] [WARN] ZLM推流不存在，启动推流...")
+                                result = stream_service.start_stream(self.camera_id)
+
+                                if result.get('success'):
+                                    print(f"[CameraWorker-{self.camera_id}] [OK] ZLM推流已启动")
+                                    stream_exists = True
+                                else:
+                                    print(f"[CameraWorker-{self.camera_id}] [WARN] ZLM推流启动失败: {result.get('message', '未知错误')}")
+                        else:
+                            print(f"[CameraWorker-{self.camera_id}] [WARN] 没有配置流媒体服务器")
+                    else:
+                        print(f"[CameraWorker-{self.camera_id}] [WARN] 摄像机信息获取失败")
+
+                    # ========================================
+                    # 新增：从 ZLM 获取原始视频流尺寸（用于坐标映射）
+                    # ========================================
+                    if stream_exists and camera and server:
+                        try:
+                            from src.cameras.stream_service import get_stream_media_info
+
+                            # 获取 ZLM 流的媒体信息
+                            media_info = get_stream_media_info(
+                                server_host=server_host,
+                                http_port=http_port,
+                                secret=secret,
+                                app=app,
+                                stream_id=stream_id
+                            )
+
+                            if media_info.get('success'):
+                                self.zlm_original_width = media_info['width']
+                                self.zlm_original_height = media_info['height']
+
+                                print(f"[CameraWorker-{self.camera_id}] [OK] ZLM 原始尺寸: {self.zlm_original_width}x{self.zlm_original_height}")
+                                print(f"[CameraWorker-{self.camera_id}]   检测尺寸: 640x640")
+                                print(f"[CameraWorker-{self.camera_id}]   坐标映射: 将启用")
+                            else:
+                                print(f"[CameraWorker-{self.camera_id}] [WARN] 无法获取 ZLM 流媒体信息，坐标映射禁用")
+
+                        except Exception as e:
+                            print(f"[CameraWorker-{self.camera_id}] [WARN] 获取 ZLM 原始尺寸失败: {e}")
+
+                except Exception as stream_err:
+                    print(f"[CameraWorker-{self.camera_id}] [WARN] ZLM推流检查异常: {stream_err}")
+                    print(f"[CameraWorker-{self.camera_id}] 将继续尝试连接...")
             
             # ========================================
-            # 初始化解码器（使用ZLM代理地址）
+            # 初始化解码器（区分RTSP流和视频文件）
             # ========================================
             from src.decoders.video_decoder import VideoDecoder
-            
+
+            # 判断是视频文件还是RTSP流
+            camera_protocol = self.camera_config.get('protocol', 'rtsp')
+            is_video_file = camera_protocol == 'file'
+
             decoder_config = {
-                'input_uri': self.rtsp_url,
                 'width': self.decoder_cfg.get('width', 640),
                 'height': self.decoder_cfg.get('height', 640),
-                'hwaccel': self.decoder_cfg.get('hwaccel', 'dxva2'),
+                'hwaccel_preset': self.decoder_cfg.get('hwaccel_preset', 'preset-dxva2'),  # 使用新版参数（项目约束）
                 'rtsp_transport': self.decoder_cfg.get('rtsp_transport', 'tcp'),
                 'reconnect': self.decoder_cfg.get('reconnect', True),
                 'reconnect_delay': self.decoder_cfg.get('reconnect_delay', 5),
                 'buffer_size': self.decoder_cfg.get('buffer_size', 1048576),
                 'frame_queue_size': self.decoder_cfg.get('frame_queue_size', 30),
-                
+
                 # 新架构配置参数（默认启用）
                 'use_ring_buffer': self.decoder_cfg.get('use_ring_buffer', True),
                 'ring_buffer_block_count': self.decoder_cfg.get('ring_buffer_block_count', 5),
-                'index_queue_size': self.decoder_cfg.get('index_queue_size', 30)
+                'index_queue_size': self.decoder_cfg.get('index_queue_size', 30),
+
+                # ✅ 新增：传递 camera_id，避免共享内存冲突
+                'camera_id': self.camera_id
             }
-            
+
+            # 根据类型设置输入源
+            if is_video_file:
+                decoder_config['video_file'] = self.rtsp_url  # 视频文件路径（不带file://前缀）
+                decoder_config['rtsp_url'] = ''
+                print(f"[CameraWorker-{self.camera_id}] 视频文件输入: {self.rtsp_url}")
+            else:
+                decoder_config['rtsp_url'] = self.rtsp_url  # RTSP流地址
+                decoder_config['video_file'] = ''
+                print(f"[CameraWorker-{self.camera_id}] RTSP流输入: {self.rtsp_url}")
+
             self.decoder = VideoDecoder(decoder_config)
             self.decoder.start()
-            
+
             print(f"[CameraWorker-{self.camera_id}] 解码器初始化成功")
             print(f"[CameraWorker-{self.camera_id}]   分辨率: {decoder_config['width']}x{decoder_config['height']}")
-            print(f"[CameraWorker-{self.camera_id}]   硬件加速: {decoder_config['hwaccel']}")
+            print(f"[CameraWorker-{self.camera_id}]   硬件加速: {decoder_config['hwaccel_preset']}")
             
             # 初始化跟踪器
             tracker_config = {
@@ -268,12 +410,42 @@ class CameraWorker:
             print(f"[CameraWorker-{self.camera_id}] 跟踪器初始化成功")
             print(f"[CameraWorker-{self.camera_id}]   track_thresh: {tracker_config['track_thresh']}")
             print(f"[CameraWorker-{self.camera_id}]   max_age: {tracker_config['max_age']}")
-            
-            # 初始化预处理器
+
+            # 初始化预处理器（从配置读取参数）
             from src.detectors.preprocessor import OptimizedPreprocessor
-            self.preprocessor = OptimizedPreprocessor()
-            
+
+            # 从 detector_config 直接读取配置（扁平格式）
+            preprocessor_width = self.detector_cfg.get('width', 640)
+            preprocessor_height = self.detector_cfg.get('height', 640)
+            preprocessor_model_input_size = self.detector_cfg.get('model_input_size', 640)
+            preprocessor_rgb_mean = tuple(self.detector_cfg.get('rgb_mean', [0.0, 0.0, 0.0]))
+            preprocessor_rgb_std = tuple(self.detector_cfg.get('rgb_std', [1.0, 1.0, 1.0]))
+
+            self.preprocessor = OptimizedPreprocessor(
+                width=preprocessor_width,
+                height=preprocessor_height,
+                model_input_size=preprocessor_model_input_size,
+                rgb_mean=preprocessor_rgb_mean,
+                rgb_std=preprocessor_rgb_std
+            )
+
             print(f"[CameraWorker-{self.camera_id}] 预处理器初始化成功")
+            print(f"[CameraWorker-{self.camera_id}]   输入尺寸: {preprocessor_width}x{preprocessor_height}")
+            print(f"[CameraWorker-{self.camera_id}]   模型尺寸: {preprocessor_model_input_size}")
+            print(f"[CameraWorker-{self.camera_id}]   RGB归一化: mean={preprocessor_rgb_mean}, std={preprocessor_rgb_std}")
+            
+            # ========================================
+            # 注册到检测进程池（如果启用）
+            # ========================================
+            if self.use_detection_pool and self.detection_pool:
+                # 注册摄像机到检测进程池
+                self.detection_pool.register_camera(self.camera_id, self.decoder.shm_name)
+                
+                # 获取检测事件
+                self.detection_event = self.detection_pool.get_detection_event(self.camera_id)
+                
+                print(f"[CameraWorker-{self.camera_id}] 已注册到检测进程池")
+                print(f"[CameraWorker-{self.camera_id}]   共享内存名称: {self.decoder.shm_name}")
             
             # 初始化运动检测器（可选）
             self._init_motion_detector()
@@ -284,11 +456,103 @@ class CameraWorker:
             # 初始化 GIF 生成器（可选）
             self._init_gif_generator()
             
+            # ========================================
+            # 新增：初始化 Zone 区域管理器（借鉴 Frigate）
+            # ========================================
+            if self.zones_config:
+                from src.detection.zone_manager import ZoneManager, ZoneConfig
+                
+                self.zone_manager = ZoneManager()
+                
+                # 从配置加载 Zone
+                for zone_data in self.zones_config:
+                    zone_config = ZoneConfig.from_dict(zone_data)
+                    self.zone_manager.add_zone(zone_config)
+                
+                print(f"[CameraWorker-{self.camera_id}] Zone 区域管理器初始化成功")
+                print(f"[CameraWorker-{self.camera_id}]   区域数量: {len(self.zone_manager.zones)}")
+                print(f"[CameraWorker-{self.camera_id}]   必需区域: {len(self.zone_manager.required_zones)}")
+            else:
+                print(f"[CameraWorker-{self.camera_id}] Zone 区域管理器未配置")
+            
+            # ========================================
+            # 新增：启动事件输出线程（避免阻塞检测）
+            # ========================================
+            if hasattr(self, 'event_output_thread') and self.event_output_thread:
+                self.event_output_thread.start()
+                print(f"[CameraWorker-{self.camera_id}] 事件输出线程已启动")
+
+            # 强制刷新 stdout，确保日志立即输出
+            import sys
+            sys.stdout.flush()
+            sys.stderr.flush()
+
             return True
             
         except Exception as e:
             print(f"[CameraWorker-{self.camera_id}] 初始化失败: {e}")
             return False
+    
+    def _detect_with_pool(self, frame_index) -> List[Dict]:
+        """
+        使用检测进程池检测（核心方法）
+
+        Args:
+            frame_index: 帧索引（从解码器获取）
+
+        Returns:
+            list: 检测结果列表
+        """
+        if not self.detection_pool:
+            print(f"[CameraWorker-{self.camera_id}] 检测进程池未初始化")
+            return []
+        
+        try:
+            from src.detectors.detection_queue import DetectionTask
+            
+            # 创建检测任务
+            task = DetectionTask(
+                camera_id=self.camera_id,
+                frame_seq=frame_index.sequence_num,
+                shm_block_id=frame_index.shm_block_id,
+                shm_name=self.decoder.shm_name,
+                timestamp_ns=frame_index.timestamp_ns,
+                frame_shape=(self.decoder.height, self.decoder.width),
+                output_event_name=f"detection_done_{self.camera_id}"
+            )
+            
+            # 提交任务到检测进程池（非阻塞）
+            success = self.detection_pool.submit_detection(task)
+            
+            if not success:
+                print(f"[CameraWorker-{self.camera_id}] 检测队列已满，跳过帧 {frame_index.sequence_num}")
+                return []
+            
+            # 等待检测完成（阻塞）
+            completed = self.detection_pool.wait_for_detection(
+                self.camera_id,
+                timeout=5.0
+            )
+            
+            if not completed:
+                print(f"[CameraWorker-{self.camera_id}] 检测超时，跳过帧 {frame_index.sequence_num}")
+                return []
+            
+            # 获取检测结果
+            detections = self.detection_pool.get_detection_results(self.camera_id)
+            
+            # 可选：获取统计信息
+            # stats = self.detection_pool.get_detection_stats(self.camera_id)
+            # if stats:
+            #     print(f"[CameraWorker-{self.camera_id}] 检测耗时: {stats['inference_time_ms']:.1f}ms")
+            
+            return detections
+            
+        except Exception as e:
+            print(f"[CameraWorker-{self.camera_id}] 检测进程池检测失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     
     def _init_motion_detector(self):
         """初始化运动检测器 - 从任务表的 motion_detection_enabled 字段判断"""
@@ -298,7 +562,7 @@ class CameraWorker:
             return
         
         try:
-            from src.detectors.motion_detector import MotionDetector
+            from src.motion.motion_detector import MotionDetector
             
             # 从数据库配置构建运动检测参数（完整参数列表）
             motion_config = {
@@ -400,12 +664,24 @@ class CameraWorker:
             self.event_output.task_id = self.task_id
             self.event_output.algorithm = self.algorithm
 
+            # ========================================
+            # 新增：创建事件输出线程（避免阻塞检测）
+            # ========================================
+            from src.events.event_output_thread import EventOutputThread
+            
+            max_queue_size = event_config.get('event_queue_size', 100)
+            self.event_output_thread = EventOutputThread(
+                event_output=self.event_output,
+                max_queue_size=max_queue_size
+            )
+
             print(f"[CameraWorker-{self.camera_id}] 事件输出器初始化成功")
             print(f"[CameraWorker-{self.camera_id}]   图片本地保存: {event_config['image_output']['local_backup']}")
             print(f"[CameraWorker-{self.camera_id}]   图片保存目录: {event_config['image_output']['output_dir']}")
             print(f"[CameraWorker-{self.camera_id}]   图片输出方法: {event_config['image_output']['method']}")
             print(f"[CameraWorker-{self.camera_id}]   MinIO配置: {storage_cfg.get('minio', {}).get('enabled', False)}")
             print(f"[CameraWorker-{self.camera_id}]   FTP配置: {storage_cfg.get('ftp', {}).get('enabled', False)}")
+            print(f"[CameraWorker-{self.camera_id}]   事件线程队列: {max_queue_size}")
 
         except Exception as e:
             print(f"[CameraWorker-{self.camera_id}] 事件输出器初始化失败: {e}")
@@ -467,20 +743,37 @@ class CameraWorker:
     def run(self):
         """运行摄像机检测"""
         self.running = True
-        
+
         if not self.init_components():
             print(f"[CameraWorker-{self.camera_id}] 初始化失败，退出")
+            import sys
+            sys.stdout.flush()
+            sys.stderr.flush()
             return
-        
+
         print(f"[CameraWorker-{self.camera_id}] 开始检测")
+        import sys
+        sys.stdout.flush()
+        sys.stderr.flush()
 
         # 启动 AI 流处理线程（如果启用）
         if self.ai_stream_enabled:
             self._start_ai_stream_thread()
             print(f"[CameraWorker-{self.camera_id}] AI 流处理线程已启动")
 
-        # 从配置块读取 fps_limit
+        # ========================================
+        # 帧率限制配置（优先级）
+        # ========================================
+        # 1. display_config.target_fps（显示帧率限制）
+        # 2. decoder_config.fps（解码帧率）
+        # 3. 默认值10fps（避免CPU满载）
         fps_limit = self._display.get('target_fps', 0)
+        if fps_limit <= 0:
+            # 如果没有配置 target_fps，使用解码器的 fps 参数
+            fps_limit = self.decoder_cfg.get('fps', 10)
+            print(f"[CameraWorker-{self.camera_id}] 使用解码器帧率限制: {fps_limit}fps")
+        else:
+            print(f"[CameraWorker-{self.camera_id}] 使用显示帧率限制: {fps_limit}fps")
 
         # 运动检测模式标志（从任务配置读取,而不是从 motion_config 读取）
         motion_triggered_mode = self.task_config.get('motion_detection_enabled', False)
@@ -586,12 +879,26 @@ class CameraWorker:
                         # 有运动目标，执行YOLO推理
                         motion_frames += 1
                         
-                        # YOLO推理
+                        # ========================================
+                        # 关键修改：根据配置选择检测方式
+                        # ========================================
                         detect_start = time.time()
-                        result = self.detector.detect(tensor)
-                        detections = result.get('detections', [])
-                        detect_time = time.time() - detect_start
                         
+                        if self.use_detection_pool and self.detection_pool:
+                            # 使用检测进程池
+                            detections = self._detect_with_pool(frame_index)
+                        else:
+                            # 使用传统单线程检测
+                            result = self.detector.detect(tensor)
+                            detections = result.get('detections', [])
+
+                        # ✅ 新增：根据任务表的 target_classes 过滤检测结果
+                        target_classes = self.task_config.get('target_classes', [])
+                        if target_classes:
+                            detections = [det for det in detections if det.get('class_name') in target_classes]
+
+                        detect_time = time.time() - detect_start
+
                         detection_frames += 1
                         
                         # 运动检测融合（调整置信度）
@@ -626,12 +933,26 @@ class CameraWorker:
                 # 逐帧检测模式（预处理后，直接推理）
                 # ========================================
                 else:
-                    # YOLO推理
+                    # ========================================
+                    # 关键修改：根据配置选择检测方式
+                    # ========================================
                     detect_start = time.time()
-                    result = self.detector.detect(tensor)
-                    detections = result.get('detections', [])
-                    detect_time = time.time() - detect_start
                     
+                    if self.use_detection_pool and self.detection_pool:
+                        # 使用检测进程池
+                        detections = self._detect_with_pool(frame_index)
+                    else:
+                        # 使用传统单线程检测
+                        result = self.detector.detect(tensor)
+                        detections = result.get('detections', [])
+
+                    # ✅ 新增：根据任务表的 target_classes 过滤检测结果
+                    target_classes = self.task_config.get('target_classes', [])
+                    if target_classes:
+                        detections = [det for det in detections if det.get('class_name') in target_classes]
+
+                    detect_time = time.time() - detect_start
+
                     detection_frames += 1
                     
                     # 性能日志（每100帧打印一次）
@@ -952,6 +1273,32 @@ class CameraWorker:
             bbox = track[:4]
             confidence = float(track[5])  # score 在索引 5
             class_id = int(track[6]) if len(track) > 6 else 0  # cls_id 在索引 6
+            
+            # ========================================
+            # 新增：Zone 区域检测（借鉴 Frigate）
+            # ========================================
+            zone_events = {}
+            if self.zone_manager:
+                # 检查对象所在的区域（进入/离开）
+                zone_events = self.zone_manager.check_object_zones(track_id, tuple(bbox))
+                
+                # 发送区域事件
+                for zone_name, event_type in zone_events.items():
+                    self._emit_zone_event(track_id, zone_name, event_type, bbox, confidence)
+            
+            # ========================================
+            # 新增：对象状态管理（借鉴 Frigate）
+            # ========================================
+            # 更新对象状态（静止/移动）
+            object_state = self.object_state_manager.update_object(track_id, tuple(bbox))
+            
+            # ========================================
+            # 新增：必需区域过滤（借鉴 Frigate）
+            # ========================================
+            # 如果启用了 Zone，检查对象是否在必需区域内
+            if self.zone_manager and not self.zone_manager.should_emit_event(track_id, tuple(bbox)):
+                # 对象不在必需区域内，跳过事件发送
+                continue
             
             # 检查置信度是否达到事件触发阈值
             event_threshold = self.event_cfg.get('event_threshold', 0.7)
@@ -1504,8 +1851,8 @@ class CameraWorker:
                         tracks=tracks_array
                     )
 
-        # 发送事件（传入图片，会自动保存到本地）
-        self.event_output.emit(
+        # 发送事件（异步提交到事件线程，避免阻塞）
+        self.event_output_thread.submit_event(
             event_type=event_type,
             data=event_data,
             image=last_frame_image,  # ✅ 传入最后一帧的图片
@@ -1549,31 +1896,47 @@ class CameraWorker:
         if not self.event_output or not self.event_output.websocket_outputter:
             return
 
-        # 构建检测框数据
+        # 构建检测框数据（坐标映射到原始尺寸）
         detection_boxes = []
         for det in detections:
+            # ✅ 关键修改：坐标映射（640x640 -> 原始尺寸）
+            bbox_original = self._scale_bbox_to_original(det['bbox'])
+
             detection_boxes.append({
-                'bbox': det['bbox'],
+                'bbox': bbox_original,  # 原始尺寸坐标
                 'class_name': det['class_name'],
                 'confidence': det['confidence'],
                 'class_id': det['class_id']
             })
 
-        # 构建跟踪框数据（使用len判断避免布尔错误）
+        # 构建跟踪框数据（坐标映射到原始尺寸）
         track_boxes = []
         if len(tracks) > 0:
             for track in tracks:
+                # ✅ 关键修改：坐标映射（640x640 -> 原始尺寸）
+                bbox_original = self._scale_bbox_to_original(track[:4].tolist())
+
                 track_boxes.append({
-                    'bbox': track[:4].tolist(),
+                    'bbox': bbox_original,  # 原始尺寸坐标
                     'track_id': int(track[4]),
                     'confidence': float(track[5]),  # score 在索引 5
                     'class_id': int(track[6]) if len(track) > 6 else 0  # cls_id 在索引 6
                 })
 
-        # 构建轨迹数据（使用 list() 快照避免并发修改）
+        # 构建轨迹数据（坐标映射到原始尺寸）
         trajectory_data = {}
         for track_id, trajectory_info in list(self.track_trajectories.items()):
-            trajectory_data[track_id] = trajectory_info['points']
+            # ✅ 关键修改：轨迹点坐标映射
+            mapped_points = []
+            for point in trajectory_info['points']:
+                if 'bbox' in point:
+                    mapped_point = point.copy()
+                    mapped_point['bbox'] = self._scale_bbox_to_original(point['bbox'])
+                    mapped_points.append(mapped_point)
+                else:
+                    mapped_points.append(point)
+
+            trajectory_data[track_id] = mapped_points
 
         # 发送到WebSocket
         self.event_output.send_detection_frame(
@@ -1583,6 +1946,32 @@ class CameraWorker:
             tracks=track_boxes,
             trajectories=trajectory_data
         )
+
+    def _scale_bbox_to_original(self, bbox_640: List[float]) -> List[int]:
+        """
+        将检测框从 640x640 映射到原始分辨率
+
+        Args:
+            bbox_640: [x1, y1, x2, y2] in 640x640
+
+        Returns:
+            [x1, y1, x2, y2] in original resolution
+        """
+        # 如果没有获取到原始尺寸，返回原坐标（不映射）
+        if self.zlm_original_width == 0 or self.zlm_original_height == 0:
+            return [int(x) for x in bbox_640]
+
+        # 计算缩放比例
+        scale_x = self.zlm_original_width / 640.0
+        scale_y = self.zlm_original_height / 640.0
+
+        # 映射坐标
+        return [
+            int(bbox_640[0] * scale_x),
+            int(bbox_640[1] * scale_y),
+            int(bbox_640[2] * scale_x),
+            int(bbox_640[3] * scale_y)
+        ]
     
     def _draw_boxes_on_frame(self, frame: np.ndarray, detections: List[Dict], 
                             tracks: np.ndarray) -> np.ndarray:
@@ -1691,11 +2080,19 @@ class CameraWorker:
         try:
             # 只传递原始帧和检测数据，绘图在后台线程完成
             frame_copy = frame.copy()  # 创建副本避免多线程访问冲突
+
+            # ✅ 调试：计算帧哈希，追踪数据流
+            frame_hash = hash(frame.tobytes())
+            if self.frame_count % 100 == 0:
+                print(f"[CameraWorker-{self.camera_id}] 入队帧哈希: {frame_hash}, shape: {frame.shape}")
+
             queue_item = {
                 'frame': frame_copy,
                 'detections': detections,
                 'tracks': tracks,
-                'camera_id': self.camera_id
+                'task_id': self.task_id,  # 使用任务ID区分不同任务
+                'camera_id': self.camera_id,
+                'frame_hash': frame_hash  # ✅ 新增：帧哈希用于调试
             }
             # 如果队列满，则丢弃旧帧（非阻塞）
             try:
@@ -1716,35 +2113,111 @@ class CameraWorker:
 
     def _ai_stream_worker(self):
         """AI 流处理工作线程"""
-        import base64
-        import requests
-        
+        import requests  # 只需要动态导入 requests
+
+        # 调试：线程启动时记录
+        print(f"[CameraWorker-{self.camera_id}] AI流处理线程启动: task_id={self.task_id}, camera_id={self.camera_id}")
+
         while not self.ai_stream_stop_event.is_set():
             try:
                 # 从队列获取帧数据（最多等待 0.1 秒）
                 queue_item = self.ai_stream_queue.get(timeout=0.1)
-                
+
+                # 调试：每100帧打印一次队列项信息
+                if hasattr(self, '_ai_stream_process_count'):
+                    self._ai_stream_process_count += 1
+                else:
+                    self._ai_stream_process_count = 0
+
+                if self._ai_stream_process_count % 100 == 0:
+                    print(f"[CameraWorker-{self.camera_id}] 处理AI流队列项: task_id={queue_item.get('task_id')}, camera_id={queue_item.get('camera_id')}")
+
                 # 绘制检测框和跟踪框
                 drawn_frame = self._draw_boxes_on_frame(
-                    queue_item['frame'], 
-                    queue_item['detections'], 
+                    queue_item['frame'],
+                    queue_item['detections'],
                     queue_item['tracks']
                 )
-                
-                # 转换为 JPEG
-                _, jpeg_buffer = cv2.imencode('.jpg', drawn_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                
+
+                # 注意：queue_item['frame'] 来自 preprocessor._last_rgb，已经是 BGR 格式
+                # 不需要再转换颜色空间
+
+                # ✅ 初始化帧计数器（确保在使用前已初始化）
+                if not hasattr(self, '_ai_stream_frame_count'):
+                    self._ai_stream_frame_count = 0
+
+                # ✅ 调试：计算帧内容的哈希，确认数据唯一性
+                frame_hash = hash(queue_item['frame'].tobytes())
+                if self._ai_stream_frame_count % 100 == 0:
+                    print(f"[CameraWorker-{self.camera_id}] 帧哈希: {frame_hash}, shape: {queue_item['frame'].shape}")
+
+                # ========================================
+                # 新增：还原到原始分辨率（视频文件模式）
+                # ========================================
+                # 如果是视频文件且有原始分辨率信息，将画框后的图片缩放回原始尺寸
+                original_drawn_frame_size = drawn_frame.shape[:2]  # 记录原始尺寸（用于日志）
+
+                if self.source_original_width > 0 and self.source_original_height > 0:
+                    try:
+                        # 将640x640的画框图片还原到原始分辨率（如864x362）
+                        drawn_frame = cv2.resize(
+                            drawn_frame,
+                            (self.source_original_width, self.source_original_height),
+                            interpolation=cv2.INTER_LINEAR  # 线性插值，适合放大
+                        )
+
+                        # 可选：每隔一定帧数打印一次（避免日志过多）
+                        if hasattr(self, '_ai_stream_resize_count'):
+                            self._ai_stream_resize_count += 1
+                        else:
+                            self._ai_stream_resize_count = 0
+
+                        if self._ai_stream_resize_count % 100 == 0:
+                            print(f"[CameraWorker-{self.camera_id}] AI流还原: {original_drawn_frame_size[1]}x{original_drawn_frame_size[0]} → {drawn_frame.shape[1]}x{drawn_frame.shape[0]}")
+
+                    except Exception as e:
+                        print(f"[CameraWorker-{self.camera_id}] [WARN] AI流还原缩放失败: {e}")
+
+                # 转换为 JPEG（BGR 格式，cv2.imencode 默认期望 BGR）
+                # ✅ 修复：使用全局锁保护 OpenCV 操作，避免多线程竞争
+                with _opencv_lock:
+                    _, jpeg_buffer = cv2.imencode('.jpg', drawn_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    jpeg_bytes = jpeg_buffer.tobytes()  # 立即拷贝，避免后续访问冲突
+
                 # 转换为 base64
-                jpeg_base64 = base64.b64encode(jpeg_buffer.tobytes()).decode('utf-8')
-                
+                jpeg_base64 = base64.b64encode(jpeg_bytes).decode('utf-8')
+
+                # 调试日志：确认推送的帧尺寸
+                # 属性已在前面初始化，直接递增
+                self._ai_stream_frame_count += 1
+
+                if self._ai_stream_frame_count % 100 == 0:
+                    print(f"[CameraWorker-{self.camera_id}] 推送AI流: 尺寸={drawn_frame.shape[1]}x{drawn_frame.shape[0]}, JPEG大小={len(jpeg_base64)}bytes")
+
+                # ✅ 调试：保存帧到本地文件（每100帧保存一次）
+                # 移到 try 块外面，确保总是执行
+                if self._ai_stream_frame_count % 100 == 0:
+                    import os
+                    # 使用队列项中的 camera_id，确保数据正确
+                    debug_camera_id = queue_item['camera_id']
+                    debug_dir = f"output/ai_stream_debug/{debug_camera_id}"
+                    os.makedirs(debug_dir, exist_ok=True)
+                    debug_path = f"{debug_dir}/frame_{self._ai_stream_frame_count}.jpg"
+                    with open(debug_path, 'wb') as f:
+                        f.write(jpeg_bytes)  # 使用预拷贝的 bytes
+                    print(f"[CameraWorker-{self.camera_id}] 保存调试帧: {debug_path} (实际camera_id={debug_camera_id})")
+
                 # 通过 HTTP 请求发送到主进程（由主进程通过 WebSocket 广播）
                 try:
                     requests.post(
                         'http://127.0.0.1:5555/api/ai-stream/push',
                         json={
+                            'task_id': queue_item['task_id'],  # 使用任务ID区分不同任务
                             'camera_id': queue_item['camera_id'],
                             'frame': jpeg_base64,
-                            'timestamp': datetime.now().isoformat()
+                            'timestamp': datetime.now().isoformat(),
+                            'original_width': self.source_original_width,  # 新增：携带原始尺寸信息
+                            'original_height': self.source_original_height
                         },
                         timeout=0.5  # 降低超时避免阻塞worker线程
                     )
@@ -1756,6 +2229,49 @@ class CameraWorker:
                 continue
             except Exception as e:
                 print(f"[CameraWorker-{self.camera_id}] AI 流处理错误: {e}")
+    
+    def _emit_zone_event(self, track_id: int, zone_name: str, event_type, bbox: tuple, confidence: float):
+        """
+        发送 Zone 区域事件（新增方法）
+        
+        参考 Frigate 的 Zone 事件机制：
+        - 区域进入事件（zone_enter）
+        - 区域离开事件（zone_leave）
+        
+        Args:
+            track_id: 跟踪 ID
+            zone_name: 区域名称
+            event_type: 事件类型（ZoneEventType.ENTER 或 ZoneEventType.LEAVE）
+            bbox: 边界框 (x1, y1, x2, y2)
+            confidence: 置信度
+        """
+        if not self.event_output:
+            return
+        
+        # 构造事件数据
+        event_data = {
+            "event_type": f"zone_{event_type.value}",
+            "camera_id": self.camera_id,
+            "track_id": track_id,
+            "zone_name": zone_name,
+            "bbox": list(bbox),
+            "confidence": confidence,
+            "timestamp": time.time(),
+            "frame_seq": self.frame_count
+        }
+        
+        # 通过事件线程异步发送（避免阻塞）
+        try:
+            self.event_output_thread.submit_event(
+                event_type=f"zone/{zone_name}/{event_type.value}",
+                data=event_data
+            )
+
+            # 打印日志（仅调试）
+            # print(f"[CameraWorker-{self.camera_id}] Zone 事件: {zone_name} {event_type.value}, track_id={track_id}")
+
+        except Exception as e:
+            print(f"[CameraWorker-{self.camera_id}] Zone 事件发送失败: {e}")
     
     def cleanup(self):
         """清理资源"""
@@ -1803,6 +2319,16 @@ class CameraWorker:
                 except:
                     pass
         
+        # ========================================
+        # 清理检测进程池资源（如果使用）
+        # ========================================
+        if self.use_detection_pool and self.detection_pool:
+            # 注意：检测进程池由 MultiCameraTaskExecutor 统一管理，这里不停止
+            # 只清理本摄像机的引用
+            print(f"[CameraWorker-{self.camera_id}] 清理检测进程池引用")
+            self.detection_event = None
+            self.latest_detections = []
+        
         if self.decoder:
             self.decoder.stop()
             self.decoder = None
@@ -1815,18 +2341,59 @@ class CameraWorker:
                 self.motion_detector.close()
             except:
                 pass
-        
+
+        # ========================================
+        # 停止事件输出线程（防止阻塞）
+        # ========================================
+        # 说明：
+        # - 先停止事件线程，处理剩余事件
+        # - 再关闭 event_output，释放资源
+        # - 避免事件丢失和资源泄漏
+        if hasattr(self, 'event_output_thread') and self.event_output_thread:
+            try:
+                print(f"[CameraWorker-{self.camera_id}] 正在停止事件输出线程...")
+                self.event_output_thread.stop()
+
+                # 等待线程结束（最多3秒）
+                if self.event_output_thread.is_alive():
+                    self.event_output_thread.join(timeout=3.0)
+
+                print(f"[CameraWorker-{self.camera_id}] 事件输出线程已停止")
+                print(f"[CameraWorker-{self.camera_id}]   统计信息: {self.event_output_thread.get_stats()}")
+
+            except Exception as e:
+                print(f"[CameraWorker-{self.camera_id}] 事件输出线程停止失败: {e}")
+
         if self.event_output:
             try:
                 self.event_output.close()
             except:
                 pass
+        
+        # ========================================
+        # 新增：清理 Zone 和对象状态管理器
+        # ========================================
+        if self.zone_manager:
+            self.zone_manager.clear_all_objects()
+            print(f"[CameraWorker-{self.camera_id}] Zone 区域管理器已清理")
+        
+        if self.object_state_manager:
+            self.object_state_manager.clear_all_objects()
+            print(f"[CameraWorker-{self.camera_id}] 对象状态管理器已清理")
     
     def stop(self):
         """停止检测"""
         self.running = False
         print(f"[CameraWorker-{self.camera_id}] 正在停止...")
-        
+
+        # 停止解码器（优先停止，避免阻塞等待）
+        if self.decoder:
+            try:
+                self.decoder.stop()
+                print(f"[CameraWorker-{self.camera_id}] 解码器已停止")
+            except Exception as e:
+                print(f"[CameraWorker-{self.camera_id}] 停止解码器失败: {e}")
+
         # 停止 AI 流处理线程
         if self.ai_stream_thread:
             self.ai_stream_stop_event.set()
@@ -1855,8 +2422,15 @@ class MultiCameraTaskExecutor:
         self.algorithm = task_config.get('algorithm', 'yolov11')
         self.running = False
         
+        # ========================================
+        # 检测进程池配置（向后兼容）
+        # ========================================
+        # 从任务配置读取是否启用检测进程池（默认False，保持现有行为）
+        self.use_detection_pool = task_config.get('use_detection_pool', False)
+        
         # 共享组件
-        self.detector = None
+        self.detector = None  # 单线程检测器（传统模式）
+        self.detection_pool = None  # 检测进程池（新模式）
         self.tracker_class = None
         
         # 摄像机工作线程
@@ -1867,6 +2441,7 @@ class MultiCameraTaskExecutor:
         print(f"[MultiCameraExecutor-{self.task_id}] 任务名称: {self.task_name}")
         print(f"[MultiCameraExecutor-{self.task_id}] 算法: {self.algorithm}")
         print(f"[MultiCameraExecutor-{self.task_id}] 摄像机数量: {len(cameras)}")
+        print(f"[MultiCameraExecutor-{self.task_id}] 检测进程池: {'启用' if self.use_detection_pool else '禁用（传统模式）'}")
     
     def init_shared_components(self):
         """初始化共享组件（检测器）"""
@@ -1874,12 +2449,44 @@ class MultiCameraTaskExecutor:
             from src.algorithms import AlgorithmFactory
             from src.tracking.botsort import BoTSORTTracker
 
+            # ========================================
+            # 步骤1：从算法库读取默认配置
+            # ========================================
+            algorithm_config = {}
+            try:
+                import sqlite3
+                conn = sqlite3.connect('data/tasks.db')
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT model_path, model_type, labels_file, input_size
+                    FROM algorithm_configs
+                    WHERE name = ?
+                ''', (self.algorithm,))
+                row = cursor.fetchone()
+                if row:
+                    algorithm_config = {
+                        'model_path': row[0] or '',
+                        'model_type': row[1] or '',
+                        'labels_file': row[2] or '',
+                        'input_size': row[3] or '640x640'
+                    }
+                    print(f"[MultiCameraExecutor-{self.task_id}] 从算法库读取配置:")
+                    print(f"[MultiCameraExecutor-{self.task_id}]   模型路径: {algorithm_config['model_path']}")
+                    print(f"[MultiCameraExecutor-{self.task_id}]   模型类型: {algorithm_config['model_type']}")
+                    print(f"[MultiCameraExecutor-{self.task_id}]   标签文件: {algorithm_config['labels_file']}")
+                conn.close()
+            except Exception as e:
+                print(f"[MultiCameraExecutor-{self.task_id}] 警告: 无法从算法库读取配置: {e}")
+
             # 从配置块中读取检测器参数（不再从任务表单独字段读取）
             detector_config_block = self.task_config.get('detector_config', {})
 
+            # ========================================
+            # 步骤2：合并配置（优先级：任务配置 > 算法库配置 > 默认值）
+            # ========================================
             # 检测器配置
             detector_config = {
-                'model_path': self.task_config.get('model_path', 'models/yolov11n.onnx'),
+                'model_path': self.task_config.get('model_path') or algorithm_config.get('model_path', 'models/detection/yolov11n.onnx'),
                 'target_classes': self.task_config.get('target_classes', ['person', 'car']),
 
                 # 从 detector_config 配置块读取（不再从任务表单独字段读取）
@@ -1903,11 +2510,32 @@ class MultiCameraTaskExecutor:
                 'rknn_device_id': detector_config_block.get('rknn_device_id', ''),
                 'rknn_core_mask': detector_config_block.get('rknn_core_mask', 0),
 
-                # 标签文件路径（从 detector_config 配置块读取）
-                'labels_file': detector_config_block.get('labels_file', '')
+                # 标签文件路径（优先级：任务配置 > 算法库配置 > 默认值）
+                'labels_file': detector_config_block.get('labels_file') or algorithm_config.get('labels_file', '')
             }
             
             print(f"[MultiCameraExecutor-{self.task_id}] 标签文件: {detector_config['labels_file'] or '未配置（使用COCO默认类别）'}")
+
+            # ========================================
+            # 新增：从标签文件加载类别名称
+            # ========================================
+            class_names = []
+            labels_file = detector_config.get('labels_file', '')
+
+            if labels_file and os.path.exists(labels_file):
+                try:
+                    with open(labels_file, 'r', encoding='utf-8') as f:
+                        class_names = [line.strip() for line in f if line.strip()]
+                    print(f"[MultiCameraExecutor-{self.task_id}] 从标签文件加载类别: {len(class_names)} 个类别")
+                    if class_names:
+                        print(f"[MultiCameraExecutor-{self.task_id}]   前5个类别: {class_names[:5]}")
+                except Exception as e:
+                    print(f"[MultiCameraExecutor-{self.task_id}] 加载标签文件失败: {e}")
+            else:
+                print(f"[MultiCameraExecutor-{self.task_id}] 未配置标签文件，将使用默认类别映射（class_0, class_1...）")
+
+            # 将类别列表添加到检测器配置
+            detector_config['class_names'] = tuple(class_names) if class_names else ()
 
             # ========================================
             # 算法名称映射逻辑
@@ -1942,16 +2570,70 @@ class MultiCameraTaskExecutor:
             
             print(f"[MultiCameraExecutor-{self.task_id}] 算法名称映射: '{algorithm_name}' -> '{factory_algorithm}'")
 
-            # 创建共享检测器（使用映射后的算法名称）
-            self.detector = AlgorithmFactory.create(factory_algorithm, detector_config)
-            self.detector.initialize()
+            # ========================================
+            # 根据配置选择检测方式（向后兼容）
+            # ========================================
+            if self.use_detection_pool:
+                # 使用检测进程池（新模式）
+                print(f"[MultiCameraExecutor-{self.task_id}] 初始化检测进程池...")
+                
+                from src.detectors.detection_process_pool import DetectionProcessPool
+                from src.detectors.base import DetectorConfig
+                
+                # 构造 DetectorConfig 对象
+                detector_config_obj = DetectorConfig(
+                    model_path=detector_config['model_path'],
+                    model_type=factory_algorithm,  # 使用映射后的算法名称
+                    backend=detector_config['backend'],
+                    conf_threshold=detector_config['conf_threshold'],
+                    iou_threshold=detector_config['iou_threshold'],
+                    min_box_area=detector_config['min_box_area'],
+                    use_fp16=detector_config['use_fp16'],
+                    device_id=detector_config['device_id'],
+                    gpu_mem_limit=detector_config['gpu_mem_limit'],
+                    tensorrt_lib_path=detector_config['tensorrt_lib_path'],
+                    tensorrt_engine_path=detector_config['tensorrt_engine_path'],
+                    rknn_target=detector_config['rknn_target'],
+                    rknn_device_id=detector_config['rknn_device_id'],
+                    rknn_core_mask=detector_config['rknn_core_mask'],
+                    class_names=detector_config['class_names'],  # 使用从标签文件加载的完整类别列表
+                    input_width=640,  # 默认输入尺寸
+                    input_height=640
+                )
+                
+                # 创建检测进程池
+                num_detectors = self.task_config.get('num_detectors', 2)
+                queue_maxsize = self.task_config.get('detection_queue_maxsize', 100)
+                
+                self.detection_pool = DetectionProcessPool(
+                    num_detectors=num_detectors,
+                    detector_config=detector_config_obj,
+                    detection_queue_maxsize=queue_maxsize
+                )
+                
+                # 启动检测进程池
+                self.detection_pool.start()
+                
+                print(f"[MultiCameraExecutor-{self.task_id}] 检测进程池初始化成功")
+                print(f"[MultiCameraExecutor-{self.task_id}]   检测器数量: {num_detectors}")
+                print(f"[MultiCameraExecutor-{self.task_id}]   队列容量: {queue_maxsize}")
+                print(f"[MultiCameraExecutor-{self.task_id}]   后端: {detector_config['backend']}")
+                print(f"[MultiCameraExecutor-{self.task_id}]   FP16: {detector_config['use_fp16']}")
+                
+            else:
+                # 使用单线程检测器（传统模式）
+                print(f"[MultiCameraExecutor-{self.task_id}] 初始化单线程检测器...")
+                
+                # 创建共享检测器（使用映射后的算法名称）
+                self.detector = AlgorithmFactory.create(factory_algorithm, detector_config)
+                self.detector.initialize()
 
-            print(f"[MultiCameraExecutor-{self.task_id}] 共享检测器初始化成功")
-            print(f"[MultiCameraExecutor-{self.task_id}]   模型: {detector_config['model_path']}")
-            print(f"[MultiCameraExecutor-{self.task_id}]   后端: {detector_config['backend']}")
-            print(f"[MultiCameraExecutor-{self.task_id}]   FP16: {detector_config['use_fp16']}")
-            print(f"[MultiCameraExecutor-{self.task_id}]   conf_threshold: {detector_config['conf_threshold']}")
-            print(f"[MultiCameraExecutor-{self.task_id}]   iou_threshold: {detector_config['iou_threshold']}")
+                print(f"[MultiCameraExecutor-{self.task_id}] 共享检测器初始化成功")
+                print(f"[MultiCameraExecutor-{self.task_id}]   模型: {detector_config['model_path']}")
+                print(f"[MultiCameraExecutor-{self.task_id}]   后端: {detector_config['backend']}")
+                print(f"[MultiCameraExecutor-{self.task_id}]   FP16: {detector_config['use_fp16']}")
+                print(f"[MultiCameraExecutor-{self.task_id}]   conf_threshold: {detector_config['conf_threshold']}")
+                print(f"[MultiCameraExecutor-{self.task_id}]   iou_threshold: {detector_config['iou_threshold']}")
 
             # 获取跟踪器类
             self.tracker_class = BoTSORTTracker
@@ -1960,6 +2642,8 @@ class MultiCameraTaskExecutor:
 
         except Exception as e:
             print(f"[MultiCameraExecutor-{self.task_id}] 共享组件初始化失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def start(self):
@@ -2048,8 +2732,16 @@ class MultiCameraTaskExecutor:
         for camera_id, thread in self.worker_threads.items():
             thread.join(timeout=5)
         
-        # 清理共享组件
-        if self.detector:
+        # ========================================
+        # 清理检测组件（根据模式）
+        # ========================================
+        if self.use_detection_pool and self.detection_pool:
+            # 停止检测进程池
+            print(f"[MultiCameraExecutor-{self.task_id}] 正在停止检测进程池...")
+            self.detection_pool.stop()
+            print(f"[MultiCameraExecutor-{self.task_id}] 检测进程池已停止")
+        elif self.detector:
+            # 清理单线程检测器
             self.detector.close()
             self.detector = None
         
@@ -2175,10 +2867,57 @@ def get_task_scheduler() -> TaskScheduler:
 
 def main():
     """任务执行器入口（兼容单任务模式）"""
+    # ✅ 新增：配置子进程日志（与主进程使用相同的日志文件）
+    import logging
+    from logging.handlers import RotatingFileHandler
+    import yaml
+    from pathlib import Path
+
+    try:
+        # 加载系统配置
+        config_path = Path(__file__).parent.parent.parent / 'config' / 'system_config.yaml'
+        with open(config_path, 'r', encoding='utf-8') as f:
+            full_cfg = yaml.safe_load(f) or {}
+        log_cfg = full_cfg.get('logging', {})
+
+        # 日志参数
+        log_level = getattr(logging, log_cfg.get('level', 'INFO').upper(), logging.INFO)
+        log_format = log_cfg.get('format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        log_file = log_cfg.get('file', 'logs/system.log')
+        log_max_size = int(log_cfg.get('max_size', 10)) * 1024 * 1024
+        log_backup_count = int(log_cfg.get('backup_count', 5))
+
+        # 确保日志目录存在
+        log_path = Path(log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 配置根logger（与主进程相同）
+        root_logger = logging.getLogger()
+        root_logger.setLevel(log_level)
+        root_logger.handlers.clear()
+
+        # 文件handler（带轮转）
+        file_handler = RotatingFileHandler(
+            log_file, maxBytes=log_max_size, backupCount=log_backup_count, encoding='utf-8'
+        )
+        file_handler.setLevel(log_level)
+        file_handler.setFormatter(logging.Formatter(log_format))
+        root_logger.addHandler(file_handler)
+
+        # 控制台handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(log_level)
+        console_handler.setFormatter(logging.Formatter(log_format))
+        root_logger.addHandler(console_handler)
+
+        print(f"[TaskExecutor] 子进程日志配置完成: {log_file}")
+    except Exception as e:
+        print(f"[TaskExecutor] 日志配置失败: {e}")
+
     if len(sys.argv) < 2:
         print("Usage: python -m src.tasks.task_executor <task_config_json>")
         sys.exit(1)
-    
+
     # 解析任务配置
     try:
         task_config = json.loads(sys.argv[1])

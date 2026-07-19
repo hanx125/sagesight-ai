@@ -1,10 +1,51 @@
 """
-优化版预处理器 - 使用 OpenCV 加速
+预处理器 
+
+架构流程：
+    [共享内存 YUV帧]
+        ↓ frame_manager.get()
+    [帧数据]
+        ↓ motion_detector.detect()
+    [运动区域]
+        ↓ 判断是否有运动
+    ├─ 有运动：create_tensor_input() → [目标检测]
+    └─ 无运动：跳过检测（优化性能）
+
+核心功能：
+    - 复用 src/utils/object.py 的 create_tensor_input
+    - 复用 src/utils/image.py 的 YUV 处理工具
+    - 支持 NV12 格式（新增）
+    - 支持归一化（新增）
 """
 
 import numpy as np
 import cv2
 import time
+from typing import Tuple, Optional, Dict, Any
+
+# 导入 YUV 处理工具
+try:
+    # 直接从 src.utils 导入工具函数
+    import sys
+    from pathlib import Path
+    
+    # 添加项目根目录到路径（如果还没有）
+    project_root = Path(__file__).parent.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    
+    # 现在可以导入了
+    from src.utils.image import (
+        yuv_region_2_rgb,
+        yuv_region_2_bgr,
+        yuv_region_2_yuv,
+        yuv_crop_and_resize
+    )
+    YUV_TOOLS_AVAILABLE = True
+    print("[OK] 成功导入 YUV 处理工具")
+except ImportError as e:
+    YUV_TOOLS_AVAILABLE = False
+    print(f"[警告] 无法导入 YUV 处理工具，将使用备用实现: {e}")
 
 
 class OptimizedPreprocessor:
@@ -256,6 +297,193 @@ class OptimizedPreprocessor:
 
         # 调用NV12预处理（像素布局相同）
         return self.preprocess_nv12(y, uv)
+
+    def create_tensor_input(
+        self,
+        frame_data: Dict[str, Any],
+        region: Optional[Tuple[int, int, int, int]] = None,
+        frame_shape: Optional[Tuple[int, int]] = None
+    ) -> np.ndarray:
+        """
+        从帧数据创建张量输入
+
+        这是核心的预处理方法，用于目标检测前的数据准备。
+
+        架构流程：
+            [共享内存 YUV帧]
+                ↓ frame_manager.get()
+            [帧数据]
+                ↓ create_tensor_input()
+            ├─ YUV420p：使用 YUV 处理工具
+            ├─ NV12：新实现
+            └─ DRM Prime：新实现
+                ↓
+            [目标检测]
+
+        Args:
+            frame_data: 帧数据字典，包含：
+                - 'y': Y 平面 (height, width)
+                - 'u': U 平面 (height//2, width//2) [YUV420p]
+                - 'v': V 平面 (height//2, width//2) [YUV420p]
+                - 'uv': UV 交错平面 (height//2, width) [NV12]
+                - 'format': 帧格式 ('yuv420p' 或 'nv12')
+
+            region: 检测区域 (x1, y1, x2, y2)，如果指定则裁剪该区域
+            frame_shape: 完整帧的形状 (height, width)，用于区域裁剪
+
+        Returns:
+            模型输入张量 (1, 3, model_input_size, model_input_size) float32
+
+        使用示例：
+            # 方式1：处理完整帧
+            tensor = preprocessor.create_tensor_input({
+                'y': y_plane,
+                'uv': uv_plane,
+                'format': 'nv12'
+            })
+
+            # 方式2：处理运动区域（裁剪）
+            tensor = preprocessor.create_tensor_input(
+                frame_data={'y': y, 'uv': uv, 'format': 'nv12'},
+                region=(100, 100, 500, 500),
+                frame_shape=(640, 640)
+            )
+        """
+        # 获取帧格式
+        frame_format = frame_data.get('format', 'nv12')
+
+        # ========== YUV420p 格式：使用 YUV 处理工具 ==========
+        if frame_format == 'yuv420p' and YUV_TOOLS_AVAILABLE:
+            # 合并 Y/U/V 平面为完整帧（YUV420p I420 格式）
+            y = frame_data['y']
+            u = frame_data['u']
+            v = frame_data['v']
+
+            height, width = y.shape
+
+            # 创建完整的 YUV420p 帧（I420 格式：height*1.5 x width）
+            # 内存布局：Y平面（height x width）+ U平面（height//2 x width//2）+ V平面（height//2 x width//2）
+            yuv_frame = np.zeros((height + height // 2, width), dtype=np.uint8)
+            
+            # 填充 Y 平面
+            yuv_frame[0:height, :] = y
+            
+            # 填充 U 平面（连续存储在 height 位置开始）
+            u_height = height // 2
+            u_width = width // 2
+            yuv_frame[height:height + u_height, 0:u_width] = u
+            
+            # 填充 V 平面（连续存储在 height + height//4 位置开始）
+            v_height = height // 2
+            v_width = width // 2
+            yuv_frame[height + u_height:height + height // 2, 0:v_width] = v
+
+            # 使用 YUV 处理工具进行裁剪和转换
+            if region:
+                rgb_cropped = yuv_region_2_rgb(yuv_frame, region)
+            else:
+                # 完整帧转换（I420 → RGB）
+                rgb_cropped = cv2.cvtColor(yuv_frame, cv2.COLOR_YUV2RGB_I420)
+
+            # Resize 到模型输入尺寸
+            if rgb_cropped.shape[0] != self.model_input_size or rgb_cropped.shape[1] != self.model_input_size:
+                rgb_cropped = cv2.resize(rgb_cropped, (self.model_input_size, self.model_input_size))
+
+            # 归一化
+            rgb_normalized = rgb_cropped.astype(np.float32) / 255.0
+            if not self._is_default_norm:
+                rgb_normalized = (rgb_normalized - self.rgb_mean) / self.rgb_std
+
+            # HWC → CHW
+            chw = np.transpose(rgb_normalized, (2, 0, 1))
+            input_tensor = np.expand_dims(chw, axis=0)
+
+            return input_tensor
+
+        # ========== NV12 和 DRM Prime 格式：使用新实现 ==========
+        elif frame_format == 'nv12':
+            y = frame_data['y']
+            uv = frame_data['uv']
+
+            # 如果指定了区域，先裁剪
+            if region is not None and frame_shape is not None:
+                return self._create_tensor_from_region_nv12(
+                    frame_data, region, frame_shape
+                )
+            else:
+                return self.preprocess_nv12(y, uv)
+
+        elif frame_format == 'drm_prime':
+            return self.preprocess_drm_prime(frame_data)
+
+        else:
+            raise ValueError(f"不支持的帧格式: {frame_format}")
+
+    def _create_tensor_from_region_nv12(
+        self,
+        frame_data: Dict[str, Any],
+        region: Tuple[int, int, int, int],
+        frame_shape: Tuple[int, int]
+    ) -> np.ndarray:
+        """
+        从 NV12 格式的指定区域创建张量输入（内部方法）
+
+        Args:
+            frame_data: 帧数据字典
+            region: 检测区域 (x1, y1, x2, y2)
+            frame_shape: 完整帧形状 (height, width)
+
+        Returns:
+            模型输入张量 (1, 3, model_input_size, model_input_size) float32
+        """
+        x1, y1, x2, y2 = region
+        frame_height, frame_width = frame_shape
+
+        # 确保区域在帧范围内
+        x1 = max(0, min(x1, frame_width))
+        y1 = max(0, min(y1, frame_height))
+        x2 = max(0, min(x2, frame_width))
+        y2 = max(0, min(y2, frame_height))
+
+        # 检查区域有效性
+        if x2 <= x1 or y2 <= y1:
+            raise ValueError(f"无效的区域: {region}")
+
+        # 裁剪区域尺寸
+        region_height = y2 - y1
+        region_width = x2 - x1
+
+        y = frame_data['y']
+        uv = frame_data['uv']
+
+        # Y 平面裁剪
+        y_cropped = y[y1:y2, x1:x2]
+
+        # UV 平面裁剪（注意：UV 平面尺寸是 Y 平面的一半）
+        uv_x1 = x1 // 2
+        uv_x2 = x2 // 2
+        uv_y1 = y1 // 2
+        uv_y2 = y2 // 2
+        uv_cropped = uv[uv_y1:uv_y2, uv_x1:uv_x2]
+
+        # 转换为 RGB（临时使用完整尺寸的 preprocessor）
+        temp_preprocessor = OptimizedPreprocessor(
+            width=region_width,
+            height=region_height,
+            model_input_size=self.model_input_size,
+            rgb_mean=self.rgb_mean,
+            rgb_std=self.rgb_std
+        )
+        return temp_preprocessor.preprocess_nv12(y_cropped, uv_cropped)
+
+    def get_last_bgr(self) -> Optional[np.ndarray]:
+        """
+        获取最后一次预处理的 BGR 图像（用于运动检测和显示）
+
+        Returns:
+            BGR 图像 (model_input_size, model_input_size, 3) 或 None
+        """
+        return getattr(self, '_last_rgb', None)
 
 
 def benchmark():

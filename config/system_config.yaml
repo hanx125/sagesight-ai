@@ -33,51 +33,28 @@ task_manager:
   status_check_interval: 2
   restart_delay: 5
   enable_monitor_thread: true
-
-# ========================================
-# 硬件加速配置
-# ========================================
 hardware:
-  # CUDA 配置
   cuda:
-    enabled: true  # 是否启用CUDA
-    device_id: 0   # GPU设备ID
-    version: "12.6"  # CUDA版本（用于兼容性检查）
-    
-  # TensorRT 配置
+    enabled: true
+    device_id: 0
+    version: '12.6'
   tensorrt:
-    enabled: true  # 是否启用TensorRT
-    version: "10.5.0.18"  # TensorRT版本
-    # TensorRT lib目录路径（Windows需要配置）
-    # 支持多种配置方式：
-    # 1. 直接指定路径
-    # 2. 使用环境变量 TENSORRT_LIB_PATH
-    # 3. 自动检测（如果已添加到系统PATH）
-    lib_path: ""  # 空值表示自动检测或使用环境变量
-    # lib_path示例：
-    #   - "D:\\TensorRT-10.5.0.18.Windows.win10.cuda-12.6\\TensorRT-10.5.0.18\\lib"
-    #   - "C:\\Program Files\\TensorRT\\lib"
-    #   - "/usr/local/TensorRT/lib" (Linux)
-    
-    # Engine缓存目录
-    engine_cache_path: "./trt_cache"
-    
-    # FP16精度（性能提升约2.5x）
+    enabled: true
+    version: 10.5.0.18
+    lib_path: ''
+    engine_cache_path: ./trt_cache
     use_fp16: true
-    
-    # 显存限制（字节）
-    gpu_mem_limit: 6442450944  # 6GB
-
+    gpu_mem_limit: 6442450944
 storage:
   minio:
-    enabled: true
+    enabled: false  # 禁用 MinIO（避免连接超时阻塞启动）
     endpoint: 192.168.5.40:9000
     access_key: minioadmin
     secret_key: minioadmin
     secure: false
     presigned_expires: 3600
   ftp:
-    enabled: true
+    enabled: false
     host: 192.168.5.2
     port: 21
     username: admin
@@ -95,3 +72,14 @@ websocket:
   config:
     host: 0.0.0.0
     port: 8765
+video_file_upload:
+  max_file_size_mb: 100
+  allowed_formats:
+  - mp4
+  - avi
+  - mkv
+  - mov
+  - wmv
+  - flv
+  upload_dir: uploads/video_files
+  max_batch_count: 20

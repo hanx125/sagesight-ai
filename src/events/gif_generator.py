@@ -25,6 +25,12 @@ class GIFGenerator:
         """
         self.config = config or {}
         
+        # GIF 功能开关（总开关）
+        self.enabled = self.config.get('enabled', True)
+        if not self.enabled:
+            print(f"[GIFGenerator] GIF 功能已禁用")
+            return
+        
         # GIF 参数
         self.max_frames = self.config.get('max_frames', 30)  # 最大帧数
         self.fps = self.config.get('fps', 5)  # GIF 播放帧率
@@ -74,6 +80,7 @@ class GIFGenerator:
             self._cleanup_old_files()
         
         print(f"[GIFGenerator] 初始化完成")
+        print(f"[GIFGenerator]   功能状态: 已启用")
         print(f"[GIFGenerator]   最大帧数: {self.max_frames}")
         print(f"[GIFGenerator]   帧率: {self.fps} FPS")
         print(f"[GIFGenerator]   输出方式: {self.output_method}")
@@ -85,12 +92,17 @@ class GIFGenerator:
     def _init_minio_outputter(self):
         """初始化 MinIO 输出器"""
         try:
-            from .minio_outputter import MinIOOutputter
-            
-            # 获取全局存储配置（如果存在）
+            # 获取全局存储配置
             storage_config = self.config.get('storage', {})
             global_minio_config = storage_config.get('minio', {})
-            
+
+            # 检查是否启用 MinIO
+            if not global_minio_config.get('enabled', False):
+                print(f"[GIFGenerator] MinIO 已禁用，跳过初始化")
+                return
+
+            from .minio_outputter import MinIOOutputter
+
             # 获取 GIF 特定配置
             minio_bucket = self.config.get('minio_bucket', 'sagesight-gifs')
             
@@ -131,11 +143,16 @@ class GIFGenerator:
     def _init_ftp_outputter(self):
         """初始化 FTP 输出器"""
         try:
-            from .ftp_outputter import FTPOutputter
-            
-            # 获取全局存储配置（如果存在）
+            # 获取全局存储配置
             storage_config = self.config.get('storage', {})
             global_ftp_config = storage_config.get('ftp', {})
+
+            # 检查是否启用 FTP
+            if not global_ftp_config.get('enabled', False):
+                print(f"[GIFGenerator] FTP 已禁用，跳过初始化")
+                return
+
+            from .ftp_outputter import FTPOutputter
             
             # 获取 GIF 特定配置
             ftp_remote_dir = self.config.get('ftp_remote_dir', '/gifs')

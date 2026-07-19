@@ -144,10 +144,76 @@ def check_stream_online(server_host: str, http_port: int, secret: str, app: str,
         return False
 
 
+def get_stream_media_info(server_host: str, http_port: int, secret: str, app: str, stream_id: str) -> Dict[str, Any]:
+    """
+    获取ZLM流的媒体信息（包括原始尺寸）
+
+    Args:
+        server_host: ZLM服务器主机地址
+        http_port: API端口
+        secret: API密钥
+        app: 应用名（固定为"AI"）
+        stream_id: 流ID（摄像机UUID）
+
+    Returns:
+        媒体信息字典，包含：
+        - width: 视频宽度（原始尺寸）
+        - height: 视频高度（原始尺寸）
+        - codec: 视频编码格式
+        - fps: 帧率
+        - bitrate: 码率
+    """
+    params = {
+        'schema': 'rtsp',
+        'vhost': '__defaultVhost__',
+        'app': app,
+        'stream': stream_id,
+    }
+
+    try:
+        result = call_zlm_api(server_host, http_port, secret, '/index/api/getMediaInfo', params)
+
+        # 解析 ZLM 返回的媒体信息
+        # ZLM 返回格式：{code: 0, data: {tracks: [{type: 'video', codec: 'H264', width: 1920, height: 1080, ...}]}}
+        if 'data' in result and 'tracks' in result['data']:
+            for track in result['data']['tracks']:
+                if track.get('type') == 'video':
+                    return {
+                        'width': track.get('width', 0),
+                        'height': track.get('height', 0),
+                        'codec': track.get('codec', 'unknown'),
+                        'fps': track.get('fps', 25),
+                        'bitrate': track.get('bitrate', 0),
+                        'success': True
+                    }
+
+        # 如果没有找到视频轨道，返回默认值
+        logger.warning(f"未找到视频轨道信息: app={app}, stream={stream_id}")
+        return {
+            'width': 0,
+            'height': 0,
+            'codec': 'unknown',
+            'fps': 25,
+            'bitrate': 0,
+            'success': False
+        }
+
+    except Exception as e:
+        logger.error(f"获取媒体信息失败: {str(e)}")
+        return {
+            'width': 0,
+            'height': 0,
+            'codec': 'unknown',
+            'fps': 25,
+            'bitrate': 0,
+            'success': False
+        }
+
+
 def get_stream_play_urls(server_host: str, http_port: int, rtmp_port: int, rtsp_port: int, app: str, stream_id: str, secret: str = "") -> Dict[str, str]:
     """
     获取流的播放地址
-    
+
     Args:
         server_host: ZLM服务器主机地址
         http_port: API端口（HTTP端口）
@@ -156,7 +222,7 @@ def get_stream_play_urls(server_host: str, http_port: int, rtmp_port: int, rtsp_
         app: 应用名（固定为"AI"）
         stream_id: 流ID（摄像机UUID）
         secret: ZLM API密钥（用于HTTP播放鉴权）
-    
+
     Returns:
         各种协议的播放地址字典
     """
@@ -337,6 +403,27 @@ class StreamService:
             if not camera:
                 raise ValueError(f"摄像机不存在: {camera_id}")
             
+            # 检查是否是视频文件类型
+            protocol = camera.get('protocol', 'rtsp')
+            if protocol == 'file':
+                # 视频文件：不走ZLM代理，返回AI流模式标记
+                logger.info(f"视频文件类型，跳过ZLM代理: camera_id={camera_id}")
+                
+                # 解析视频文件路径
+                source = camera.get('source', '')
+                file_path = source.replace('file://', '') if source.startswith('file://') else source
+                
+                return {
+                    'success': True,
+                    'message': '视频文件，使用AI流模式',
+                    'camera_id': camera_id,
+                    'stream_type': 'ai_stream',  # 标记为AI流模式
+                    'play_mode': 'ai_stream',    # 前端使用AI流播放
+                    'file_path': file_path,
+                    'camera': camera,
+                }
+            
+            # RTSP流：走ZLM代理
             # 获取RTSP源地址
             rtsp_url = camera.get('source', '')
             if not rtsp_url:
@@ -390,6 +477,8 @@ class StreamService:
                     'camera_id': camera_id,
                     'stream_app': app,
                     'stream_id': stream_id,
+                    'stream_type': 'zlm',        # 标记为ZLM流模式
+                    'play_mode': 'zlm',          # 前端使用ZLM流播放
                     'server_id': server.get('id'),
                     'server_host': server_host,
                     'play_urls': play_urls,
@@ -437,6 +526,8 @@ class StreamService:
                 'rtsp_url': rtsp_url,
                 'stream_app': app,
                 'stream_id': stream_id,
+                'stream_type': 'zlm',        # 标记为ZLM流模式
+                'play_mode': 'zlm',          # 前端使用ZLM流播放
                 'server_id': server.get('id'),
                 'server_host': server_host,
                 'play_urls': play_urls,
@@ -468,6 +559,19 @@ class StreamService:
             if not camera:
                 raise ValueError(f"摄像机不存在: {camera_id}")
             
+            # 检查是否是视频文件类型
+            protocol = camera.get('protocol', 'rtsp')
+            if protocol == 'file':
+                # 视频文件：不需要停止ZLM流
+                logger.info(f"视频文件类型，跳过停止ZLM流: camera_id={camera_id}")
+                return {
+                    'success': True,
+                    'message': '视频文件，无需停止ZLM流',
+                    'camera_id': camera_id,
+                    'stream_type': 'ai_stream',
+                }
+            
+            # RTSP流：停止ZLM代理
             # 获取流媒体服务器配置
             server = self._get_streaming_server(server_id)
             if not server:

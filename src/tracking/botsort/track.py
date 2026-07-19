@@ -6,11 +6,13 @@
 - 外观特征（ReID embedding）
 - 轨迹历史
 - 轨迹生命周期管理
+- 分数历史和误报判定（借鉴 Frigate）
 """
 
 import numpy as np
 from collections import deque
 from typing import Optional
+from statistics import median
 from .kalman_filter_h import KalmanFilterH
 import logging
 
@@ -53,6 +55,25 @@ class Track:
         self.score = score
         self.max_age = max_age
         self.n_init = n_init
+        
+        # ========================================
+        # 新增：分数历史和误报判定（借鉴 Frigate）
+        # ========================================
+        # 分数历史（用于计算中位数，更稳定）
+        self.score_history = deque(maxlen=10)  # 保留最近10帧的分数
+        self.score_history.append(score)
+        
+        # 计算分数（中位数）
+        self.computed_score = score
+        
+        # 最高分数（记录最佳检测）
+        self.top_score = score
+        
+        # 是否为误报（基于分数阈值判定）
+        self.false_positive = False  # 默认不是误报
+        
+        # 分数阈值（用于误报判定）
+        self.score_threshold = 0.5  # 默认阈值，可由外部设置
         
         # 卡尔曼滤波
         self.kf = KalmanFilterH(bbox)
@@ -142,7 +163,23 @@ class Track:
         self.hits += 1
         self.consecutive_misses = 0
         
-        # 更新分数
+        # ========================================
+        # 新增：更新分数历史（借鉴 Frigate）
+        # ========================================
+        # 添加分数到历史
+        self.score_history.append(score)
+        
+        # 计算中位数分数（更稳定）
+        self.computed_score = median(self.score_history)
+        
+        # 更新最高分数
+        if self.computed_score > self.top_score:
+            self.top_score = self.computed_score
+        
+        # 判定误报（基于中位数分数）
+        self.false_positive = self.computed_score < self.score_threshold
+        
+        # 更新当前分数（保留原始分数用于显示）
         self.score = score
         
         # 更新卡尔曼滤波
@@ -163,8 +200,22 @@ class Track:
         return updated_bbox
     
     def mark_missed(self):
-        """标记为丢失"""
+        """标记为丢失（借鉴 Frigate）"""
         self.consecutive_misses += 1
+        
+        # ========================================
+        # 新增：更新分数历史（添加 0.0 表示丢失）
+        # ========================================
+        # 添加 0.0 到分数历史（Frigate 的做法）
+        # 这样中位数分数会更准确地反映对象的稳定性
+        self.score_history.append(0.0)
+        
+        # 重新计算中位数分数
+        if len(self.score_history) > 0:
+            self.computed_score = median(self.score_history)
+        
+        # 判定误报（基于中位数分数）
+        self.false_positive = self.computed_score < self.score_threshold
         
         # 超过最大丢失次数，标记为删除（使用配置的 max_age）
         if self.consecutive_misses > self.max_age:

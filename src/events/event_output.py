@@ -39,6 +39,15 @@ class EventOutput:
         # 是否保存到数据库
         self.save_to_db = config.get('save_to_db', False)
         
+        # ========================================
+        # 新增：缩略图管理（借鉴 Frigate）
+        # ========================================
+        # 缩略图存储：event_id -> {image, score, bbox, timestamp}
+        self.thumbnails: Dict[str, Dict] = {}
+        
+        # 最佳缩略图：event_id -> best_thumbnail_data
+        self.best_thumbnails: Dict[str, Dict] = {}
+        
         # 初始化 MQTT 输出器（给其他平台订阅）
         self.mqtt_outputter = None
         self._init_mqtt_outputter()
@@ -83,6 +92,7 @@ class EventOutput:
             print(f"[EventOutput]   本地保存目录: {self.local_output_dir}")
             print(f"[EventOutput]   本地保存天数: {self.local_retention_days}")
             print(f"[EventOutput]   自动清理: {self.auto_cleanup}")
+        print(f"[EventOutput]   缩略图管理: 已启用")
     
     def _init_mqtt_outputter(self):
         """初始化 MQTT 输出器（给其他平台订阅）"""
@@ -135,11 +145,15 @@ class EventOutput:
         storage_config = self.config.get('storage', {})
         global_minio_config = storage_config.get('minio', {})
         global_ftp_config = storage_config.get('ftp', {})
-        
+
         try:
             # MinIO 输出器
             if method in ['minio', 'both']:
-                minio_bucket = image_cfg.get('minio_bucket', 'sagesight-images')
+                # 检查是否启用 MinIO
+                if not global_minio_config.get('enabled', False):
+                    print(f"[EventOutput] MinIO 已禁用，跳过图片MinIO输出器初始化")
+                else:
+                    minio_bucket = image_cfg.get('minio_bucket', 'sagesight-images')
                 
                 # 合并配置：全局配置 + 图片特定配置
                 minio_config = {}
@@ -174,7 +188,11 @@ class EventOutput:
             
             # FTP 输出器
             if method in ['ftp', 'both']:
-                ftp_remote_dir = image_cfg.get('ftp_remote_dir', '/sagesight/images')
+                # 检查是否启用 FTP
+                if not global_ftp_config.get('enabled', False):
+                    print(f"[EventOutput] FTP 已禁用，跳过图片FTP输出器初始化")
+                else:
+                    ftp_remote_dir = image_cfg.get('ftp_remote_dir', '/sagesight/images')
                 
                 # 合并配置：全局配置 + 图片特定配置
                 ftp_config = {}
@@ -210,6 +228,120 @@ class EventOutput:
                     
         except Exception as e:
             print(f"[EventOutput] 图片输出器初始化失败: {e}")
+    
+    # ========================================
+    # 新增：缩略图管理（借鉴 Frigate）
+    # ========================================
+    def update_thumbnail(self, event_id: str, image: np.ndarray, 
+                        score: float, bbox: tuple) -> bool:
+        """
+        更新事件缩略图（自动选择最佳帧）
+        
+        参考 Frigate 的 is_better_thumbnail 逻辑：
+        - 选择最高分数的帧作为缩略图
+        - 提高事件质量
+        
+        Args:
+            event_id: 事件 ID
+            image: 图片数据（OpenCV BGR 格式）
+            score: 检测分数（computed_score）
+            bbox: 边界框 (x1, y1, x2, y2)
+            
+        Returns:
+            bool: 是否更新了最佳缩略图
+        """
+        # 初始化事件缩略图存储
+        if event_id not in self.thumbnails:
+            self.thumbnails[event_id] = {
+                'image': None,
+                'score': 0.0,
+                'bbox': None,
+                'timestamp': time.time()
+            }
+        
+        # 检查是否为更好的缩略图（分数更高）
+        current_best_score = self.thumbnails[event_id]['score']
+        
+        if score > current_best_score:
+            # 更新最佳缩略图
+            self.thumbnails[event_id] = {
+                'image': image.copy(),  # 避免引用问题
+                'score': score,
+                'bbox': bbox,
+                'timestamp': time.time()
+            }
+            
+            # 同时更新 best_thumbnails（用于快速访问）
+            self.best_thumbnails[event_id] = self.thumbnails[event_id]
+            
+            print(f"[EventOutput] 更新最佳缩略图: event_id={event_id}, score={score:.3f}")
+            return True
+        
+        return False
+    
+    def get_best_thumbnail(self, event_id: str) -> Optional[Dict]:
+        """
+        获取事件的最佳缩略图
+        
+        Args:
+            event_id: 事件 ID
+            
+        Returns:
+            Dict: 最佳缩略图数据 {image, score, bbox, timestamp}
+        """
+        return self.best_thumbnails.get(event_id)
+    
+    def clear_thumbnail(self, event_id: str):
+        """
+        清除事件缩略图（事件结束时）
+        
+        Args:
+            event_id: 事件 ID
+        """
+        if event_id in self.thumbnails:
+            del self.thumbnails[event_id]
+        
+        if event_id in self.best_thumbnails:
+            del self.best_thumbnails[event_id]
+    
+    # ========================================
+    # 新增：属性事件支持（借鉴 Frigate）
+    # ========================================
+    def emit_attribute_event(self, track_id: int, attribute_type: str,
+                            attribute_value: str, confidence: float,
+                            bbox: tuple, image: Optional[np.ndarray] = None) -> Optional[str]:
+        """
+        发送属性事件
+        
+        参考 Frigate 的属性系统：
+        - 支持多种属性类型（颜色、类型、方向等）
+        - 扩展事件类型
+        
+        Args:
+            track_id: 跟踪 ID
+            attribute_type: 属性类型（如 'color', 'type', 'direction'）
+            attribute_value: 属性值（如 'red', 'car', 'left'）
+            confidence: 属性置信度
+            bbox: 边界框 (x1, y1, x2, y2)
+            image: 可选的图片数据
+            
+        Returns:
+            事件 ID，如果未发送则返回 None
+        """
+        # 构造属性事件数据
+        data = {
+            'track_id': track_id,
+            'attribute_type': attribute_type,
+            'attribute_value': attribute_value,
+            'confidence': confidence,
+            'bbox': bbox,
+            'class_name': f'{attribute_type}_{attribute_value}',  # 用于过滤
+            'event_subtype': 'attribute'  # 标记为属性事件
+        }
+        
+        # 发送事件
+        event_type = f'attribute_{attribute_type}'
+        return self.emit(event_type, data, image)
     
     def _compress_image(self, image: np.ndarray) -> bytes:
         """
@@ -470,9 +602,9 @@ class EventOutput:
         # 保存到数据库（如果启用）
         if self.save_to_db or actual_task_id:
             self._save_to_database(event)
-        
+
         return event_id
-    
+
     def _save_to_database(self, event: Dict):
         """
         保存事件到数据库

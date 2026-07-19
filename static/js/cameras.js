@@ -33,11 +33,10 @@ document.addEventListener('DOMContentLoaded', function() {
 // ========================================
 
 function initWebSocket() {
-    if (typeof io !== 'undefined') {
-        const socket = io('/ws', {
-            transports: ['websocket', 'polling']
-        });
-        
+    // 使用全局 socket 连接（由 main.js 初始化）
+    const socket = getSocket();
+
+    if (socket) {
         socket.on('camera_created', function(data) {
             console.log('摄像机已创建，刷新列表');
             // 清除筛选条件，确保新摄像机能够显示
@@ -951,21 +950,6 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
-}
-
-function showNotification(message, type) {
-    const notification = document.createElement('div');
-    notification.className = `notification notification-${type}`;
-    notification.textContent = message;
-    
-    document.body.appendChild(notification);
-    
-    setTimeout(() => notification.classList.add('show'), 10);
-    
-    setTimeout(() => {
-        notification.classList.remove('show');
-        setTimeout(() => notification.remove(), 300);
-    }, 3000);
 }
 
 // ========================================

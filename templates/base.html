@@ -11,6 +11,9 @@
     {% block extra_head %}{% endblock %}
 </head>
 <body>
+    <!-- 通知容器 -->
+    <div class="notification-container" style="position: fixed; top: 80px; right: 20px; z-index: 999999; display: flex; flex-direction: column; gap: 10px; pointer-events: none; align-items: flex-end;"></div>
+
     <!-- 顶部导航栏 -->
     <header class="top-header">
         <div class="header-left">
@@ -157,7 +160,7 @@
         </div>
     </footer>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=20260722"></script>
     {% block extra_scripts %}{% endblock %}
 </body>
 </html>

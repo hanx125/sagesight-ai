@@ -1,11 +1,27 @@
 """
 跟踪模块
 
-包含：
-- BoT-SORT（推荐）：MOT17 排名第一，精度最高
-- ByteTrack（可选）：简单快速，只使用 IoU 匹配
+提供目标跟踪和 PTZ 自动跟踪功能。
 """
 
-from .botsort import BoTSORTTracker, Track, KalmanFilterH, ReIDExtractor
+# 目标跟踪（BoT-SORT）
+from .botsort import BoTSORTTracker
 
-__all__ = ['BoTSORTTracker', 'Track', 'KalmanFilterH', 'ReIDExtractor']
+# PTZ 自动跟踪
+from .autotrack import (
+    AutoTrackController,
+    TrackedObjectInfo,
+    PTZMetrics,
+    create_autotrack_controller,
+)
+
+__all__ = [
+    # BoT-SORT 跟踪器
+    'BoTSORTTracker',
+    
+    # PTZ 自动跟踪
+    'AutoTrackController',
+    'TrackedObjectInfo',
+    'PTZMetrics',
+    'create_autotrack_controller',
+]

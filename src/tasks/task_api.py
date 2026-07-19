@@ -130,19 +130,61 @@ def create_task():
         get_default_tracker_config,
         get_default_motion_config,
         get_default_event_config,
-        get_default_display_config
+        get_default_display_config,
+        get_default_zones_config  # 新增：Zone区域配置
     )
     from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager, DeviceChannelPool
     from src.cameras.camera_manager import get_camera_manager
 
-    # 配置优先级：前端传入 > 配置文件默认值
-    # 如果前端未传配置或传空配置，使用配置文件的默认值
-    decoder_config = data.get('decoder_config') if data.get('decoder_config') else get_default_decoder_config()
-    detector_config = data.get('detector_config') if data.get('detector_config') else get_default_detector_config()
-    tracker_config = data.get('tracker_config') if data.get('tracker_config') else get_default_tracker_config()
-    motion_config = data.get('motion_config') if data.get('motion_config') else get_default_motion_config()
-    event_config = data.get('event_config') if data.get('event_config') else get_default_event_config()
-    display_config = data.get('display_config') if data.get('display_config') else get_default_display_config()
+    # ========================================
+    # 配置合并逻辑（混合方案）
+    # ========================================
+    # 优先级：前端传入值 > 配置文件默认值
+    # 规则：
+    # 1. 先加载配置文件的完整默认值
+    # 2. 如果前端传了配置（非空字典），合并前端配置（前端值覆盖默认值）
+    # 3. 存入数据库（确保所有字段都完整）
+
+    def merge_config(default_config: dict, frontend_config: dict) -> dict:
+        """
+        合并配置（前端值覆盖默认值）
+
+        Args:
+            default_config: 配置文件默认值
+            frontend_config: 前端传入值（可能为None或空字典）
+
+        Returns:
+            合并后的完整配置
+        """
+        if not frontend_config or not isinstance(frontend_config, dict) or len(frontend_config) == 0:
+            return default_config.copy()
+
+        # 合并配置（前端值覆盖默认值）
+        merged = default_config.copy()
+        merged.update(frontend_config)
+        return merged
+
+    # 加载配置文件默认值（确保所有字段都存在）
+    default_decoder_config = get_default_decoder_config()
+    default_detector_config = get_default_detector_config()
+    default_tracker_config = get_default_tracker_config()
+    default_motion_config = get_default_motion_config()
+    default_event_config = get_default_event_config()
+    default_display_config = get_default_display_config()
+    default_zones_config = get_default_zones_config()  # 新增：Zone区域配置
+
+    # 合并前端配置（如果有）
+    decoder_config = merge_config(default_decoder_config, data.get('decoder_config'))
+    detector_config = merge_config(default_detector_config, data.get('detector_config'))
+    tracker_config = merge_config(default_tracker_config, data.get('tracker_config'))
+    motion_config = merge_config(default_motion_config, data.get('motion_config'))
+    event_config = merge_config(default_event_config, data.get('event_config'))
+    display_config = merge_config(default_display_config, data.get('display_config'))
+
+    # zones_config是列表类型，单独处理
+    zones_config = data.get('zones_config')
+    if not zones_config or not isinstance(zones_config, list) or len(zones_config) == 0:
+        zones_config = default_zones_config
 
     # target_classes：如果前端传空数组，使用默认值
     target_classes = data.get('target_classes')
@@ -164,7 +206,8 @@ def create_task():
         tracker_config=tracker_config,
         motion_config=motion_config,
         event_config=event_config,
-        display_config=display_config
+        display_config=display_config,
+        zones_config=zones_config  # 新增：Zone区域配置
     )
 
     task_manager = get_task_manager()
@@ -226,7 +269,7 @@ def update_task(task_id: int):
     """更新任务
 
     更新任务时会：
-    1. 更新任务本身的配置
+    1. 更新任务本身的配置（支持配置合并）
     2. 处理通道数据的更新（新增临时通道、更新已有通道绑定）
     3. 更新摄像机信息（如果更换了摄像机）
     """
@@ -242,8 +285,80 @@ def update_task(task_id: int):
     if not task:
         return jsonify({'error': '任务不存在'}), 404
 
+    # ========================================
+    # 配置合并逻辑（更新任务时）
+    # ========================================
+    # 规则：
+    # 1. 读取数据库中的现有配置（如果有）
+    # 2. 如果前端传了配置，合并前端配置（前端值覆盖现有值）
+    # 3. 如果前端未传配置，保持数据库中的现有配置（不修改）
+    # 4. 重要：保留现有配置中前端未包含的字段（防止配置丢失）
+
+    def merge_config_for_update(existing_config: dict, frontend_config: dict) -> dict:
+        """
+        更新时合并配置（前端值覆盖现有值，保留未提交的字段）
+
+        Args:
+            existing_config: 数据库中的现有配置
+            frontend_config: 前端传入值（可能为None或空字典）
+
+        Returns:
+            合并后的完整配置
+        """
+        if not frontend_config or not isinstance(frontend_config, dict) or len(frontend_config) == 0:
+            return existing_config
+
+        # 深拷贝现有配置，避免修改原数据
+        merged = {}
+        
+        # 1. 先复制现有配置中的所有字段（保留未提交的字段）
+        for key, value in existing_config.items():
+            if isinstance(value, dict):
+                # 字典类型：深拷贝
+                merged[key] = value.copy()
+            elif isinstance(value, list):
+                # 列表类型：复制列表
+                merged[key] = value.copy()
+            else:
+                # 其他类型：直接复制
+                merged[key] = value
+        
+        # 2. 合并前端配置（前端值覆盖现有值）
+        for key, value in frontend_config.items():
+            if isinstance(value, dict) and key in merged and isinstance(merged[key], dict):
+                # 如果都是字典，递归合并
+                merged[key].update(value)
+            else:
+                # 否则直接覆盖
+                merged[key] = value
+        
+        return merged
+
+    # 配置字段列表
+    config_fields = ['decoder_config', 'detector_config', 'tracker_config',
+                     'motion_config', 'event_config', 'display_config']
+
+    # 准备更新数据（深拷贝避免修改原始数据）
+    update_data = data.copy()
+
+    # 处理配置字段的合并
+    for config_field in config_fields:
+        if config_field in update_data:
+            # 获取数据库中的现有配置
+            existing_config = getattr(task, config_field, {})
+            # 合并前端配置
+            merged_config = merge_config_for_update(existing_config, update_data[config_field])
+            # 更新到待更新数据
+            update_data[config_field] = merged_config
+
+    # zones_config是列表类型，单独处理
+    if 'zones_config' in update_data:
+        # 如果前端传了zones_config，直接使用（不合并）
+        # 因为zones_config是完整的列表，不是字典配置
+        pass
+
     # 1. 更新任务本身的配置
-    success = task_manager.update_task(task_id, data)
+    success = task_manager.update_task(task_id, update_data)
 
     if success:
         # 2. 处理通道数据的更新
@@ -776,6 +891,145 @@ def get_status():
         'available_algorithms': len(algorithms),
         'running_tasks_detail': [t.to_dict() for t in running_tasks]
     })
+
+
+# ========================================
+# Zone配置管理 API（通道级别）
+# ========================================
+
+@task_bp.route('/tasks/<int:task_id>/channels/<int:channel_id>/zones', methods=['GET'])
+def get_channel_zones(task_id: int, channel_id: int):
+    """
+    获取通道的Zone配置
+    
+    Args:
+        task_id: 任务ID
+        channel_id: 通道ID（设备通道池ID）
+        
+    Returns:
+        Zone配置列表
+    """
+    task_manager = get_task_manager()
+    
+    # 检查任务是否存在
+    task = task_manager.get_task(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    
+    # 获取Zone配置
+    zones = task_manager.get_channel_zones(task_id, channel_id)
+    
+    return jsonify({
+        'task_id': task_id,
+        'channel_id': channel_id,
+        'zones': zones
+    })
+
+
+@task_bp.route('/tasks/<int:task_id>/channels/<int:channel_id>/zones', methods=['POST'])
+def save_channel_zones(task_id: int, channel_id: int):
+    """
+    保存通道的Zone配置
+    
+    Args:
+        task_id: 任务ID
+        channel_id: 通道ID（设备通道池ID）
+        
+    Request Body:
+        zones: Zone配置列表
+        
+    Returns:
+        保存结果
+    """
+    data = request.json
+    
+    if not data:
+        return jsonify({'error': '请求数据无效'}), 400
+    
+    zones_config = data.get('zones', [])
+    
+    if not isinstance(zones_config, list):
+        return jsonify({'error': 'zones字段必须是列表'}), 400
+    
+    task_manager = get_task_manager()
+    
+    # 检查任务是否存在
+    task = task_manager.get_task(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    
+    # 验证Zone配置格式
+    for zone in zones_config:
+        if not isinstance(zone, dict):
+            return jsonify({'error': 'Zone配置必须是字典格式'}), 400
+        
+        # 检查必需字段
+        if 'name' not in zone:
+            return jsonify({'error': 'Zone缺少必需字段: name'}), 400
+        if 'polygon' not in zone:
+            return jsonify({'error': f'Zone {zone.get("name", "")} 缺少必需字段: polygon'}), 400
+        
+        # 验证polygon格式
+        polygon = zone['polygon']
+        if not isinstance(polygon, list) or len(polygon) < 3:
+            return jsonify({'error': f'Zone {zone["name"]} 的polygon必须是至少3个点的列表'}), 400
+        
+        for point in polygon:
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                return jsonify({'error': f'Zone {zone["name"]} 的polygon点格式错误，应为[x, y]'}), 400
+    
+    # 保存Zone配置
+    success = task_manager.save_channel_zones(task_id, channel_id, zones_config)
+    
+    if success:
+        # WebSocket 通知
+        if _socketio:
+            _socketio.emit('zones_updated', {'task_id': task_id, 'channel_id': channel_id})
+        
+        return jsonify({
+            'message': 'Zone配置保存成功',
+            'task_id': task_id,
+            'channel_id': channel_id,
+            'zones_count': len(zones_config)
+        })
+    
+    return jsonify({'error': 'Zone配置保存失败'}), 500
+
+
+@task_bp.route('/tasks/<int:task_id>/channels/<int:channel_id>/zones', methods=['DELETE'])
+def delete_channel_zones(task_id: int, channel_id: int):
+    """
+    删除通道的Zone配置（重置为空）
+    
+    Args:
+        task_id: 任务ID
+        channel_id: 通道ID（设备通道池ID）
+        
+    Returns:
+        删除结果
+    """
+    task_manager = get_task_manager()
+    
+    # 检查任务是否存在
+    task = task_manager.get_task(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    
+    # 删除Zone配置
+    success = task_manager.delete_channel_zones(task_id, channel_id)
+    
+    if success:
+        # WebSocket 通知
+        if _socketio:
+            _socketio.emit('zones_deleted', {'task_id': task_id, 'channel_id': channel_id})
+        
+        return jsonify({
+            'message': 'Zone配置已删除',
+            'task_id': task_id,
+            'channel_id': channel_id
+        })
+    
+    return jsonify({'error': 'Zone配置删除失败'}), 500
 
 
 # ========================================

@@ -35,6 +35,7 @@ DETECTOR_CONFIG_PATH = os.path.join(CONFIG_DIR, 'detector_config.yaml')
 TRACKER_CONFIG_PATH = os.path.join(CONFIG_DIR, 'tracker_config.yaml')
 MOTION_CONFIG_PATH = os.path.join(CONFIG_DIR, 'motion_config.yaml')
 EVENT_CONFIG_PATH = os.path.join(CONFIG_DIR, 'event_output.yaml')
+ZONES_CONFIG_PATH = os.path.join(CONFIG_DIR, 'zones_config.yaml')  # 新增：Zone区域配置
 
 # ========================================
 # 辅助函数
@@ -56,35 +57,44 @@ def load_yaml_config(config_path: str) -> Dict:
 
 
 def get_default_decoder_config() -> Dict:
-    """获取默认解码器配置（从配置文件读取）"""
+    """
+    获取默认解码器配置（从配置文件读取）
+
+    优先级：
+    1. YAML 配置文件中的值
+    2. 硬编码的默认值
+    """
     config = load_yaml_config(DECODER_CONFIG_PATH)
     decoder_config = config.get('decoder', {})
-    frame_queue_config = config.get('frame_queue', {})
-    shared_memory_config = config.get('shared_memory', {})
 
     # 如果配置文件中没有完整配置，补充默认值
     default_config = {
-        # 解码器基础配置
+        # ========== 视频参数 ==========
         'width': decoder_config.get('width', 640),
         'height': decoder_config.get('height', 640),
-        'hwaccel': decoder_config.get('hwaccel', 'dxva2'),
-        'output_format': decoder_config.get('output_format', 'auto'),  # ✅ 添加输出格式
+        'fps': decoder_config.get('fps', 30),  # 新增：检测帧率
+
+        # ========== 硬件加速配置 ==========
+        'hwaccel_preset': decoder_config.get('hwaccel_preset', 'preset-dxva2'),  # 硬件加速预设（必须）
+
+        # ========== 输入预设配置 ==========
+        'input_preset': decoder_config.get('input_preset', 'preset-rtsp-generic'),  # 新增：输入预设
+
+        # ========== 输出配置 ==========
+        'output_format': decoder_config.get('output_format', 'auto'),
+
+        # ========== RTSP 配置 ==========
         'rtsp_transport': decoder_config.get('rtsp_transport', 'tcp'),
         'reconnect': decoder_config.get('reconnect', True),
         'reconnect_delay': decoder_config.get('reconnect_delay', 5),
-        'buffer_size': decoder_config.get('buffer_size', 1048576),
+        'buffer_size': decoder_config.get('buffer_size', 2 * 1024 * 1024),  # 2MB
 
-        # 新架构配置参数
-        'use_ring_buffer': decoder_config.get('use_ring_buffer', True),
-        'ring_buffer_block_count': decoder_config.get('ring_buffer_block_count', 5),
-        'index_queue_size': decoder_config.get('index_queue_size', 30),
+        # ========== 环形缓冲区配置（新架构）==========
+        'ring_buffer_block_count': decoder_config.get('ring_buffer_block_count', 10),
+        'index_queue_size': decoder_config.get('index_queue_size', 50),
 
-        # 帧队列配置（✅ 修正为frame_queue.size）
-        'frame_queue_size': frame_queue_config.get('size', 30),
-
-        # 共享内存配置（✅ 添加shared_memory配置）
-        'shared_memory_total_size': shared_memory_config.get('total_size'),  # null表示自动计算
-        'shared_memory_max_retries': shared_memory_config.get('max_retries', 3)
+        # ========== FFmpeg 滤镜参数（视频预处理）==========
+        'ffmpeg_filters': decoder_config.get('ffmpeg_filters', []),  # FFmpeg 滤镜参数
     }
 
     return default_config
@@ -248,7 +258,7 @@ def get_default_display_config() -> Dict:
     """获取默认显示配置（从配置文件读取）"""
     DISPLAY_CONFIG_PATH = os.path.join(CONFIG_DIR, 'display_config.yaml')
     config = load_yaml_config(DISPLAY_CONFIG_PATH)
-    
+
     # 读取所有显示相关配置
     display_config = {
         'display': config.get('display', {}),
@@ -258,8 +268,63 @@ def get_default_display_config() -> Dict:
         'motion_region': config.get('motion_region', {}),
         'debug_info': config.get('debug_info', {})
     }
-    
+
     return display_config
+
+
+def get_default_zones_config() -> List[Dict]:
+    """
+    获取默认Zone区域配置（从配置文件读取）
+
+    Returns:
+        List[Dict]: Zone配置列表，每个Zone包含：
+            - name: 区域名称
+            - polygon: 多边形顶点列表 [[x1,y1], [x2,y2], ...]
+            - required: 是否为必需区域
+            - color: BGR颜色 [B, G, R]
+            - min_area: 最小区域面积
+    """
+    config = load_yaml_config(ZONES_CONFIG_PATH)
+
+    # zones_config.yaml 的结构：
+    # zones: [list of zone configs]
+    # zone_detection: {enabled, send_enter_events, ...}
+
+    zones = config.get('zones', [])
+
+    if not zones:
+        # 如果配置文件中没有定义zones，返回空列表
+        return []
+
+    # 验证每个zone的必需字段
+    validated_zones = []
+    for zone in zones:
+        if not isinstance(zone, dict):
+            continue
+
+        # 必需字段：name, polygon
+        if 'name' not in zone or 'polygon' not in zone:
+            logger.warning(f"Zone配置缺少必需字段，跳过: {zone}")
+            continue
+
+        # polygon必须是至少3个点的列表
+        polygon = zone.get('polygon', [])
+        if not isinstance(polygon, list) or len(polygon) < 3:
+            logger.warning(f"Zone {zone['name']} 的polygon无效，跳过")
+            continue
+
+        # 构造标准化的zone配置
+        validated_zone = {
+            'name': zone['name'],
+            'polygon': polygon,
+            'required': zone.get('required', False),
+            'color': zone.get('color', [0, 255, 0]),  # 默认绿色
+            'min_area': zone.get('min_area', 0)
+        }
+
+        validated_zones.append(validated_zone)
+
+    return validated_zones
 
 
 # ========================================
@@ -327,6 +392,9 @@ class DetectionTask:
     # 显示配置（JSON）- 测试工具专用，任务配置中使用空字典
     display_config: Dict = field(default_factory=dict)
 
+    # Zone区域配置（JSON）- 任务级别默认配置
+    zones_config: List[Dict] = field(default_factory=list)
+
     # 时间戳
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -360,6 +428,7 @@ class DetectionTask:
             'motion_config': self.motion_config,
             'event_config': self.event_config,
             'display_config': self.display_config,
+            'zones_config': self.zones_config,  # 新增：Zone区域配置
             'created_at': format_datetime(self.created_at),
             'updated_at': format_datetime(self.updated_at)
         }
@@ -385,6 +454,7 @@ class DetectionTask:
             motion_config=data.get('motion_config', get_default_motion_config()),
             event_config=data.get('event_config', get_default_event_config()),
             display_config=data.get('display_config', get_default_display_config()),
+            zones_config=data.get('zones_config', []),  # 新增：Zone区域配置
             created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None,
             updated_at=datetime.fromisoformat(data['updated_at']) if data.get('updated_at') else None
         )
@@ -417,6 +487,7 @@ class TaskCameraBinding:
     camera_id: str = ""  # 改为字符串类型（UUID）
     enabled: bool = True
     status: str = "stopped"  # running, stopped, error
+    zones_config: List[Dict] = field(default_factory=list)  # ✅ 新增：Zone配置（通道级别）
     created_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
@@ -427,6 +498,7 @@ class TaskCameraBinding:
             'camera_id': self.camera_id,
             'enabled': self.enabled,
             'status': self.status,
+            'zones_config': self.zones_config,  # ✅ 新增
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
@@ -722,9 +794,9 @@ class TaskManager:
                 (task_name, enabled, status, detection_type, algorithm, model_path, model_type, target_classes,
                  motion_detection_enabled, tracking_enabled,
                  decoder_config, detector_config,
-                 tracker_config, motion_config, event_config, display_config,
+                 tracker_config, motion_config, event_config, display_config, zones_config,
                  created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 task.task_name,
                 task.enabled,
@@ -742,6 +814,7 @@ class TaskManager:
                 json.dumps(task.motion_config),
                 json.dumps(task.event_config),
                 json.dumps(task.display_config),
+                json.dumps(task.zones_config),  # 新增：zones_config字段
                 now,
                 now
             ))
@@ -806,9 +879,9 @@ class TaskManager:
             cursor = conn.cursor()
             
             # JSON 字段列表
-            json_fields = ['target_classes', 'decoder_config', 'detector_config', 
-                          'tracker_config', 'motion_config', 'event_config', 'display_config']
-            
+            json_fields = ['target_classes', 'decoder_config', 'detector_config',
+                          'tracker_config', 'motion_config', 'event_config', 'display_config', 'zones_config']  # 新增：zones_config
+
             updatable_fields = {
                 'task_name': 'task_name',
                 'enabled': 'enabled',
@@ -825,7 +898,8 @@ class TaskManager:
                 'tracker_config': 'tracker_config',
                 'motion_config': 'motion_config',
                 'event_config': 'event_config',
-                'display_config': 'display_config'
+                'display_config': 'display_config',
+                'zones_config': 'zones_config'  # 新增：zones_config字段支持更新
             }
             
             set_clause = []
@@ -930,6 +1004,7 @@ class TaskManager:
             motion_config=safe_json_loads_with_defaults(row[14] if len(row) > 14 else None, get_default_motion_config()),  # 索引调整：13 → 14
             event_config=safe_json_loads_with_defaults(row[15] if len(row) > 15 else None, get_default_event_config()),  # 索引调整：14 → 15
             display_config=safe_json_loads_with_defaults(row[16] if len(row) > 16 else None, {}),  # 索引调整：15 → 16，显示配置为空字典
+            zones_config=safe_json_loads_list(row[19] if len(row) > 19 else None, []),  # 新增：zones_config字段（索引19）
             created_at=parse_datetime(row[17] if len(row) > 17 else None),  # 索引调整：16 → 17
             updated_at=parse_datetime(row[18] if len(row) > 18 else None)  # 索引调整：17 → 18
         )
@@ -1172,6 +1247,95 @@ class TaskManager:
             'total_bindings': total_bindings,
             'total_events': total_events
         }
+    
+    # ========================================
+    # ✅ 新增：Zone配置管理（通道级别）
+    # ========================================
+    
+    def get_channel_zones(self, task_id: int, channel_id: int) -> List[Dict]:
+        """
+        获取通道的Zone配置
+        
+        Args:
+            task_id: 任务ID
+            channel_id: 通道ID（设备通道池ID）
+            
+        Returns:
+            Zone配置列表
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT zones_config 
+                FROM task_device_channel_bindings 
+                WHERE task_id = ? AND channel_id = ?
+            ''', (task_id, channel_id))
+            
+            row = cursor.fetchone()
+            
+            if row and row[0]:
+                try:
+                    zones = json.loads(row[0])
+                    return zones if isinstance(zones, list) else []
+                except (json.JSONDecodeError, TypeError):
+                    return []
+            
+            return []
+    
+    def save_channel_zones(self, task_id: int, channel_id: int, zones_config: List[Dict]) -> bool:
+        """
+        保存通道的Zone配置
+        
+        Args:
+            task_id: 任务ID
+            channel_id: 通道ID（设备通道池ID）
+            zones_config: Zone配置列表
+            
+        Returns:
+            是否保存成功
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # 检查绑定记录是否存在
+                cursor.execute('''
+                    SELECT id FROM task_device_channel_bindings 
+                    WHERE task_id = ? AND channel_id = ?
+                ''', (task_id, channel_id))
+                
+                if not cursor.fetchone():
+                    logger.error(f"绑定记录不存在: task_id={task_id}, channel_id={channel_id}")
+                    return False
+                
+                # 更新Zone配置
+                cursor.execute('''
+                    UPDATE task_device_channel_bindings 
+                    SET zones_config = ? 
+                    WHERE task_id = ? AND channel_id = ?
+                ''', (json.dumps(zones_config), task_id, channel_id))
+                
+                conn.commit()
+                logger.info(f"Zone配置已保存: task_id={task_id}, channel_id={channel_id}, zones_count={len(zones_config)}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"保存Zone配置失败: {e}")
+            return False
+    
+    def delete_channel_zones(self, task_id: int, channel_id: int) -> bool:
+        """
+        删除通道的Zone配置（重置为空）
+        
+        Args:
+            task_id: 任务ID
+            channel_id: 通道ID
+            
+        Returns:
+            是否删除成功
+        """
+        return self.save_channel_zones(task_id, channel_id, [])
 
 
 # 全局任务管理器实例

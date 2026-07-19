@@ -4,6 +4,7 @@
 提供摄像机管理的REST API接口。
 """
 
+import os
 import logging
 from flask import Blueprint, request, jsonify
 
@@ -186,6 +187,106 @@ def create_camera():
         
     except Exception as e:
         logger.error(f"创建摄像机失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@camera_bp.route('/video-file', methods=['POST'])
+def add_video_file_device():
+    """添加视频文件作为虚拟设备"""
+    try:
+        # 检查是否有文件上传
+        if 'video_file' not in request.files:
+            return jsonify({'error': '未找到视频文件'}), 400
+
+        video_file = request.files['video_file']
+        if video_file.filename == '':
+            return jsonify({'error': '未选择视频文件'}), 400
+
+        # 获取表单数据
+        device_name = request.form.get('device_name', '').strip()
+        description = request.form.get('description', '').strip()
+        directory_id = request.form.get('directory_id', '')
+
+        if not device_name:
+            return jsonify({'error': '设备名称不能为空'}), 400
+
+        # 加载视频文件上传配置
+        import yaml
+        from pathlib import Path
+        config_path = Path(__file__).parent.parent.parent / 'config' / 'system_config.yaml'
+        with open(config_path, 'r', encoding='utf-8') as f:
+            system_config = yaml.safe_load(f) or {}
+
+        upload_config = system_config.get('video_file_upload', {})
+        max_file_size_mb = upload_config.get('max_file_size_mb', 100)
+        allowed_formats = upload_config.get('allowed_formats', ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv'])
+
+        # 验证文件格式
+        file_ext = os.path.splitext(video_file.filename)[1].lower().replace('.', '')
+        if file_ext not in allowed_formats:
+            return jsonify({'error': f'不支持的文件格式: {file_ext}。支持格式: {", ".join(allowed_formats)}'}), 400
+
+        # 验证文件大小
+        video_file.seek(0, os.SEEK_END)
+        file_size = video_file.tell()
+        video_file.seek(0)
+
+        file_size_mb = file_size / (1024 * 1024)
+        if file_size_mb > max_file_size_mb:
+            return jsonify({'error': f'文件大小超出限制: {file_size_mb:.2f}MB > {max_file_size_mb}MB'}), 400
+
+        # 保存视频文件
+        import uuid
+        from datetime import datetime
+        from flask import current_app
+
+        # 创建视频文件存储目录
+        upload_folder = os.path.join(current_app.root_path, upload_config.get('upload_dir', 'uploads/video_files'))
+        os.makedirs(upload_folder, exist_ok=True)
+
+        # 生成唯一文件名
+        unique_filename = f"{uuid.uuid4()}.{file_ext}"
+        file_path = os.path.join(upload_folder, unique_filename)
+
+        # 保存文件
+        video_file.save(file_path)
+        logger.info(f"视频文件已保存: {file_path} ({file_size_mb:.2f}MB)")
+
+        # 创建虚拟摄像机对象
+        manager = get_camera_manager()
+
+        camera = Camera(
+            name=device_name,
+            source=f"file://{file_path}",  # 使用file://协议标识本地文件
+            ip="127.0.0.1",  # 本地文件，使用127.0.0.1
+            port=0,  # 本地文件不需要端口
+            protocol="file",  # 标识为文件类型
+            manufacturer="Video File",  # 制造商标识为Video File
+            model="Virtual Device",  # 型号标识为Virtual Device
+            description=description or f"视频文件设备: {video_file.filename} ({file_size_mb:.2f}MB)",
+            enabled=True,  # 默认启用
+            status="online",  # 默认在线
+            directory_id=int(directory_id) if directory_id else None
+        )
+
+        # 添加到数据库
+        camera_id = manager.add_camera(camera)
+
+        # WebSocket通知
+        _emit_camera_event('camera_added', camera_id, camera.to_dict())
+
+        logger.info(f"视频文件虚拟设备已添加: {device_name} (ID: {camera_id})")
+
+        return jsonify({
+            'message': '视频设备添加成功',
+            'camera_id': camera_id,
+            'device_name': device_name,
+            'file_path': file_path,
+            'file_size_mb': round(file_size_mb, 2)
+        }), 201
+
+    except Exception as e:
+        logger.error(f"添加视频文件设备失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -403,19 +504,23 @@ def delete_camera(camera_id):
     try:
         manager = get_camera_manager()
         camera = manager.get_camera(camera_id)
-        
+
         if not camera:
             return jsonify({'error': '摄像机不存在'}), 404
-        
-        # 先停止流，防止ZLM产生僵尸流
-        try:
-            stream_service = get_stream_service()
-            stop_result = stream_service.stop_stream(camera_id)
-            logger.info(f"[CameraAPI] 删除前停止流成功: camera_id={camera_id}")
-        except Exception as stream_err:
-            # 流停止失败不影响删除，记录日志即可
-            logger.warning(f"[CameraAPI] 删除前停止流失败（不影响删除）: camera_id={camera_id}, error={stream_err}")
-        
+
+        # 视频文件虚拟设备不需要停止流媒体服务器
+        if camera.protocol != 'file':
+            # 先停止流，防止ZLM产生僵尸流
+            try:
+                stream_service = get_stream_service()
+                stop_result = stream_service.stop_stream(camera_id)
+                logger.info(f"[CameraAPI] 删除前停止流成功: camera_id={camera_id}")
+            except Exception as stream_err:
+                # 流停止失败不影响删除，记录日志即可
+                logger.warning(f"[CameraAPI] 删除前停止流失败（不影响删除）: camera_id={camera_id}, error={stream_err}")
+        else:
+            logger.info(f"[CameraAPI] 视频文件虚拟设备，跳过停止流步骤: camera_id={camera_id}")
+
         # 删除摄像机数据库记录
         manager.delete_camera(camera_id)
         

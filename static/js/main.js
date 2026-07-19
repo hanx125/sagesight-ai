@@ -8,9 +8,20 @@
 
 let socket = null;
 
+/**
+ * 获取全局 Socket.IO 连接
+ * @returns {Object|null} Socket.IO 连接对象
+ */
+function getSocket() {
+    if (!socket) {
+        initSocketIO();
+    }
+    return socket;
+}
+
 function initSocketIO() {
     if (socket) return socket;
-    
+
     try {
         socket = io('/ws', {
             transports: ['websocket', 'polling'],
@@ -18,10 +29,16 @@ function initSocketIO() {
             reconnectionDelay: 1000,
             reconnectionAttempts: 10
         });
-        
+
         socket.on('connect', function() {
             console.log('WebSocket 已连接');
-            showNotification('已连接到服务器', 'success');
+            console.log('[DEBUG] 准备调用 showNotification');
+            try {
+                showNotification('已连接到服务器', 'success');
+                console.log('[DEBUG] showNotification 调用成功');
+            } catch (e) {
+                console.error('[DEBUG] showNotification 调用失败:', e);
+            }
         });
         
         socket.on('disconnect', function() {
@@ -74,24 +91,30 @@ function initSocketIO() {
 const notifications = [];
 
 function showNotification(message, type = 'info', duration = 3000) {
+    console.log('[showNotification] 开始:', { message, type, duration });
     const container = getNotificationContainer();
-    
+    console.log('[showNotification] 容器:', container, '位置:', container.getBoundingClientRect());
+
     const notification = document.createElement('div');
     notification.className = `notification notification-${type}`;
     notification.innerHTML = `
         <span class="notification-message">${message}</span>
         <button class="notification-close" onclick="dismissNotification(this.parentElement)">&times;</button>
     `;
-    
+
     container.appendChild(notification);
     notifications.push(notification);
-    
-    // 自动消失
+    console.log('[showNotification] 添加后容器内容:', container.innerHTML);
+    console.log('[showNotification] 通知位置:', notification.getBoundingClientRect());
+
     if (duration > 0) {
-        setTimeout(() => dismissNotification(notification), duration);
+        console.log(`[showNotification] 设置 ${duration}ms 后移除`);
+        setTimeout(() => {
+            console.log('[showNotification] 触发移除定时器');
+            dismissNotification(notification);
+        }, duration);
     }
-    
-    // 最多显示5条
+
     while (notifications.length > 5) {
         dismissNotification(notifications[0]);
     }
@@ -117,15 +140,16 @@ function getNotificationContainer() {
     if (!container) {
         container = document.createElement('div');
         container.className = 'notification-container';
-        container.style.cssText = `
-            position: fixed;
-            top: 80px;
-            right: 20px;
-            z-index: 9999;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        `;
+        container.style.position = 'fixed';
+        container.style.top = '80px';
+        container.style.right = '20px';
+        container.style.zIndex = '999999';
+        container.style.display = 'flex';
+        container.style.flexDirection = 'column';
+        container.style.gap = '10px';
+        container.style.pointerEvents = 'none';
+        container.style.alignItems = 'flex-end';
+        container.style.background = 'transparent';
         document.body.appendChild(container);
     }
     return container;
@@ -146,6 +170,9 @@ notificationStyles.textContent = `
         min-width: 280px;
         max-width: 400px;
         animation: slideIn 0.3s ease;
+        pointer-events: auto;
+        z-index: 999999 !important;
+        position: relative;
     }
     
     .notification-success {

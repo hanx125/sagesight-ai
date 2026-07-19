@@ -48,11 +48,10 @@ document.addEventListener('DOMContentLoaded', function() {
 // ========================================
 
 function initWebSocket() {
-    if (typeof io !== 'undefined') {
-        const socket = io('/ws', {
-            transports: ['websocket', 'polling']
-        });
-        
+    // 使用全局 socket 连接（由 main.js 初始化）
+    const socket = getSocket();
+
+    if (socket) {
         socket.on('task_created', function(data) {
             loadTasks();
             loadStatistics();
@@ -237,24 +236,38 @@ function onAlgorithmConfigChange() {
 // ========================================
 
 function openClassesSelectDialog() {
+    console.log('[调试] openClassesSelectDialog 被调用');
+
     const algorithmSelect = document.getElementById('algorithmConfig');
+    console.log('[调试] algorithmSelect元素:', algorithmSelect);
+    console.log('[调试] algorithmSelect.value:', algorithmSelect ? algorithmSelect.value : 'null');
+
     if (!algorithmSelect || !algorithmSelect.value) {
         showNotification('请先选择算法配置', 'error');
+        console.log('[调试] 算法配置未选择，返回');
         return;
     }
-    
+
     const algorithmId = algorithmSelect.value;
+    console.log('[调试] 算法ID:', algorithmId);
+
     const dialog = document.getElementById('classesSelectDialog');
     const container = document.getElementById('classesSelectContainer');
-    
+
+    console.log('[调试] dialog元素:', dialog);
+    console.log('[调试] container元素:', container);
+
     if (!dialog || !container) {
-        console.error('对话框元素不存在');
+        console.error('[错误] 对话框元素不存在！请检查HTML中的classesSelectDialog和classesSelectContainer元素');
+        showNotification('对话框元素不存在，请刷新页面重试', 'error');
         return;
     }
-    
+
+    console.log('[调试] 显示对话框...');
     // 显示对话框
     dialog.style.display = 'flex';
-    
+
+    console.log('[调试] 加载类别列表...');
     // 加载类别列表
     loadClassesForSelectDialog(algorithmId);
 }
@@ -1167,6 +1180,7 @@ function openCreateModal() {
     tempSelectedChannels = [];
     selectedChannels = [];
     isEditMode = false;
+    currentTaskId = null;  // ✅ 创建任务时重置当前任务ID
 
     // 设置默认值
     document.getElementById('detectionType').value = 'realtime';  // 检测类型默认实时检测
@@ -1193,6 +1207,9 @@ function openCreateModal() {
 
 async function openEditModal(taskId, event) {
     if (event) event.stopPropagation();
+
+    // ✅ 设置当前任务ID（用于通道Zone配置）
+    currentTaskId = taskId;
 
     try {
         const response = await fetch(`/api/tasks/${taskId}`);
@@ -1280,6 +1297,7 @@ function closeModal() {
     tempSelectedChannels = [];
     selectedChannels = [];
     isEditMode = false;
+    currentTaskId = null;  // ✅ 关闭模态框时重置当前任务ID
 }
 
 // ========================================
@@ -1512,8 +1530,13 @@ function renderChannelPool() {
                 </div>
                 <div class="camera-pool-url">${escapeHtml(channel.rtsp_url || '')}</div>
             </div>
-            <div class="camera-pool-remove">
-                <button onclick="removeChannelFromPool('${channel.id || channel.temp_id}')">
+            <div class="camera-pool-actions" style="display: flex; gap: 8px; align-items: center;">
+                ${!channel.temp_id ? `<button type="button" class="btn btn-sm btn-secondary" onclick="openChannelZoneConfig(${channel.id}, '${escapeHtml(channel.channel_name)}', event)" title="配置Zone区域">
+                    <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                    </svg>
+                </button>` : ''}
+                <button type="button" onclick="removeChannelFromPool('${channel.id || channel.temp_id}')" title="移除通道">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
                     </svg>
@@ -1922,25 +1945,3 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-function showNotification(message, type) {
-    // 创建通知元素
-    const notification = document.createElement('div');
-    notification.className = `notification notification-${type}`;
-    notification.textContent = message;
-    
-    // 添加到页面
-    document.body.appendChild(notification);
-    
-    // 显示
-    setTimeout(() => {
-        notification.classList.add('show');
-    }, 10);
-    
-    // 自动隐藏
-    setTimeout(() => {
-        notification.classList.remove('show');
-        setTimeout(() => {
-            notification.remove();
-        }, 300);
-    }, 3000);
-}

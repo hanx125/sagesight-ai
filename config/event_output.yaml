@@ -62,7 +62,10 @@ event_output:
   # GIF 动画配置
   # ========================================
   gif:
-    # 输出方式：local | minio | ftp | both
+    # GIF 功能开关（总开关，优先级最高）
+    enabled: false                # true=启用GIF生成，false=禁用GIF生成
+    
+    # 输出方式：local | minio | ftp | both | none
     output_method: both           # ✅ 修改为both（同时保存本地和上传MinIO）
 
     # 本地保存配置（仅当 output_method 为 local 或 both 时使用）

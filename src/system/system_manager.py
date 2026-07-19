@@ -6,13 +6,15 @@ SageSight AI - 系统管理模块
 import os
 import json
 import sqlite3
-import logging
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+# 使用统一的日志管理器
+from ..utils.log_manager import get_logger
+
+logger = get_logger(__name__)
 
 # ========================================
 # 数据模型
