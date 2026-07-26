@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 # 允许的模型文件扩展名
-ALLOWED_EXTENSIONS = {'onnx', 'engine', 'pt', 'pth', 'bin', 'xml', 'json'}
+ALLOWED_EXTENSIONS = {'onnx', 'engine', 'pt', 'pth', 'bin', 'xml', 'json', 'rknn'}
 
 
 class ModelFileInfo:

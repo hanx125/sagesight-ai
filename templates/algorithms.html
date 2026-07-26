@@ -188,7 +188,7 @@
                                     上传
                                 </button>
                             </div>
-                            <input type="file" id="modelFile" name="model_file" accept=".onnx,.pt,.pth,.engine,.plan" style="display: none;" onchange="handleModelFileSelect(this)">
+                            <input type="file" id="modelFile" name="model_file" accept=".onnx,.pt,.pth,.engine,.plan,.rknn" style="display: none;" onchange="handleModelFileSelect(this)">
                             <div id="modelFileInfo" class="model-file-info" style="display: none;">
                                 <span id="modelFileName"></span>
                                 <span id="modelFileSize"></span>
@@ -222,6 +222,7 @@
                             <label for="modelFormat">模型格式</label>
                             <select id="modelFormat" name="model_format">
                                 <option value="onnx">ONNX</option>
+                                <option value="rknn">RKNN (RK3588 NPU)</option>
                                 <option value="tensorrt">TensorRT</option>
                                 <option value="pytorch">PyTorch</option>
                             </select>
@@ -340,8 +341,8 @@
                         <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
                     </svg>
                     <p id="uploadText">点击选择模型文件或拖拽文件到此处</p>
-                    <p class="upload-hint">支持格式: .onnx, .engine, .pt, .pth, .bin, .xml, .json (最大500MB)</p>
-                    <input type="file" id="modelFileUpload" name="model_file" accept=".onnx,.engine,.pt,.pth,.bin,.xml,.json" style="display: none;" onchange="handleFileSelect(this)">
+                    <p class="upload-hint">支持格式: .onnx, .engine, .pt, .pth, .bin, .xml, .json, .rknn (最大500MB)</p>
+                    <input type="file" id="modelFileUpload" name="model_file" accept=".onnx,.engine,.pt,.pth,.bin,.xml,.json,.rknn" style="display: none;" onchange="handleFileSelect(this)">
                 </div>
                 <div id="selectedFile" class="selected-file-info" style="display: none;">
                     <svg viewBox="0 0 24 24" fill="currentColor">
