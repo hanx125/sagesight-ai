@@ -6,12 +6,22 @@ RKNN Executor - RK3588/RKNN推理引擎包装类
 
 # RKNN API 导入（仅在RK3588平台上可用）
 RKNN_AVAILABLE = False
+RKNN_BACKEND = None  # 'rknn' 或 'rknnlite'
 try:
-    from rknn.api import RKNN
+    # 尝试新版 RKNNLite API（rknn-toolkit-lite2）
+    from rknnlite.api import RKNNLite
     RKNN_AVAILABLE = True
-    print("[RKNNExecutor] RKNN API 已加载")
+    RKNN_BACKEND = 'rknnlite'
+    print("[RKNNExecutor] RKNNLite API 已加载（rknn-toolkit-lite2）")
 except ImportError:
-    print("[RKNNExecutor] RKNN API 未安装（仅RK3588平台可用）")
+    try:
+        # 尝试旧版 RKNN API（rknn-toolkit2）
+        from rknn.api import RKNN
+        RKNN_AVAILABLE = True
+        RKNN_BACKEND = 'rknn'
+        print("[RKNNExecutor] RKNN API 已加载（rknn-toolkit2）")
+    except ImportError:
+        print("[RKNNExecutor] RKNN/RKNNLite API 未安装（仅RK3588平台可用）")
 
 
 class RKNNExecutor:
@@ -31,39 +41,55 @@ class RKNNExecutor:
     ```
     """
     
-    def __init__(self, model_path: str, target: str = None, device_id: str = None):
+    def __init__(self, model_path: str, target: str = None, device_id: str = None, core_mask: int = 0):
         """
         初始化RKNN推理引擎
-        
+
         Args:
             model_path: RKNN模型文件路径（.rknn格式）
             target: 目标平台（'rk3588', 'rk3566', 'rk3568', 'rv1103', 'rv1106'）
             device_id: 设备ID（多设备时使用）
+            core_mask: NPU核心掩码（RK3588双核：0=自动, 1=单核, 2=双核, 3=双核负载均衡）
         """
         if not RKNN_AVAILABLE:
-            raise ImportError("RKNN API 未安装，请在RK3588平台上安装 rknn-toolkit2")
-        
-        self.rknn = RKNN()
+            raise ImportError("RKNN API 未安装，请在RK3588平台上安装 rknn-toolkit2 或 rknn-toolkit-lite2")
+
+        # 根据后端类型创建实例
+        if RKNN_BACKEND == 'rknnlite':
+            # 新版 RKNNLite API
+            self.rknn = RKNNLite(verbose=False)
+            self._backend = 'rknnlite'
+        else:
+            # 旧版 RKNN API
+            self.rknn = RKNN()
+            self._backend = 'rknn'
+
         self.model_path = model_path
         self.target = target
         self.device_id = device_id
-        
+        self.core_mask = core_mask
+
         # 加载RKNN模型
-        print(f"[RKNNExecutor] 加载模型: {model_path}")
+        print(f"[RKNNExecutor] 加载模型: {model_path} (后端: {self._backend})")
         ret = self.rknn.load_rknn(model_path)
         if ret != 0:
             raise RuntimeError(f"加载RKNN模型失败: {model_path}, 错误码: {ret}")
-        
+
         # 初始化runtime环境
-        print('[RKNNExecutor] 初始化runtime环境')
-        if target is None:
-            ret = self.rknn.init_runtime()
+        print(f'[RKNNExecutor] 初始化runtime环境 (core_mask={core_mask})')
+        if self._backend == 'rknnlite':
+            # 新版 RKNNLite API: init_runtime(core_mask=...)
+            ret = self.rknn.init_runtime(core_mask=core_mask)
         else:
-            ret = self.rknn.init_runtime(target=target, device_id=device_id)
-        
+            # 旧版 RKNN API: init_runtime(target=..., device_id=...)
+            if target is None:
+                ret = self.rknn.init_runtime()
+            else:
+                ret = self.rknn.init_runtime(target=target, device_id=device_id)
+
         if ret != 0:
-            raise RuntimeError(f"初始化runtime环境失败, target={target}, 错误码: {ret}")
-        
+            raise RuntimeError(f"初始化runtime环境失败, target={target}, core_mask={core_mask}, 错误码: {ret}")
+
         print('[RKNNExecutor] Runtime环境初始化完成')
     
     def run(self, inputs):
@@ -97,6 +123,26 @@ class RKNNExecutor:
             self.rknn = None
             print('[RKNNExecutor] RKNN引擎已释放')
     
+def is_rknn_available() -> bool:
+    """
+    检查RKNN API是否可用
+
+    Returns:
+        bool: RKNN API是否可用
+    """
+    return RKNN_AVAILABLE
+
+
+def get_rknn_backend() -> str:
+    """
+    获取RKNN后端类型
+
+    Returns:
+        str: 'rknnlite' 或 'rknn' 或 None
+    """
+    return RKNN_BACKEND
+
+
     def __del__(self):
         """
         析构函数，自动释放资源
