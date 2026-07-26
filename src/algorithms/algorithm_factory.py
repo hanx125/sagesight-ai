@@ -117,23 +117,6 @@ class AlgorithmFactory:
 # 注册内置算法
 # ========================================
 
-def _register_builtin_algorithms():
-    """注册内置算法"""
-    try:
-        # 导入 YOLO 检测器
-        from src.detectors.yolo_detector import YOLODetector
-        
-        # 注册 YOLO 算法
-        AlgorithmFactory.register('yolov11', YOLODetector)
-        AlgorithmFactory.register('yolov8', YOLODetector)
-        AlgorithmFactory.register('yolo', YOLODetector)
-        
-        print("[AlgorithmFactory] 内置算法已注册: yolov11, yolov8, yolo")
-        
-    except ImportError as e:
-        print(f"[AlgorithmFactory] 加载内置算法失败: {e}")
-        print("[AlgorithmFactory] 请确保 src.detectors.yolo_detector 模块存在")
-
-
-# 自动注册内置算法
-_register_builtin_algorithms()
+# 注：检测器现在通过全局检测池（GlobalDetectionPoolManager）管理
+# 不再需要通过算法工厂注册 YOLO 检测器
+# 算法配置信息存储在 algorithm_configs 表中，通过 AlgorithmManager 管理

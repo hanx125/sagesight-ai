@@ -23,11 +23,15 @@ display:
   # - RTSP流：推荐使用 ZLM 原始流 + WebSocket 检测数据叠加（ai_stream_enabled: false）
   # - 视频文件：必须启用 AI 视频流（ai_stream_enabled: true），因为视频文件不走 ZLM
   # 推荐值：true（视频文件），false（RTSP流）
+  # ✅ 已启用：配合优化的帧间隔防止内存溢出
   ai_stream_enabled: true
 
   # AI 视频流帧间隔（每 N 帧发送一次，降低带宽）
   # （当 ai_stream_enabled=true 时生效）
-  ai_stream_interval: 1
+  # ✅ 修复：从1改为10，降低到3fps（避免浏览器卡死）
+  # 原来：每帧都发送（30fps）→ 两个任务60fps → 浏览器主线程阻塞
+  # 现在：每10帧发送一次（3fps）→ 两个任务6fps → 流畅播放
+  ai_stream_interval: 10
 
   # 显示开关
   show_detection_boxes: true      # 是否显示检测框

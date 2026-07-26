@@ -80,7 +80,7 @@ class Track:
         
         # 外观特征
         self.embedding = embedding.copy() if embedding is not None else None
-        self.embedding_history = deque(maxlen=100)  # 外观特征历史
+        self.embedding_history = deque(maxlen=30)  # 外观特征历史（从100降到30，减少内存占用）
         
         if embedding is not None:
             self.embedding_history.append(embedding.copy())

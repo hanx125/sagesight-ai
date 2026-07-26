@@ -164,19 +164,37 @@ class BoTSORTTracker:
             track.mark_missed()
         
         # === 第二阶段：低分检测 + 丢失轨迹 ===
+        # ✅ 关键修复：保存组合列表长度，避免并发修改导致的索引错误
+        combined_tracks = [self.tracked_tracks[i] for i in unmatched_tracks1] + self.lost_tracks
+        combined_len = len(combined_tracks)
+        unmatched_tracks1_len = len(unmatched_tracks1)  # 保存长度，避免重复计算
+
         matches2, unmatched_tracks2, unmatched_dets2 = self._match_stage2(
-            [self.tracked_tracks[i] for i in unmatched_tracks1] + self.lost_tracks,
+            combined_tracks,
             low_score_dets
         )
-        
+
         # 更新匹配成功的轨迹
         for track_idx, det_idx in matches2:
+            # ✅ 关键修复：检查索引是否在有效范围内（严格小于 combined_len）
+            if track_idx >= combined_len:
+                logger.warning(f"[BotSort] 第二阶段匹配索引超出组合列表长度: track_idx={track_idx}, combined_len={combined_len}, unmatched_tracks1_len={unmatched_tracks1_len}, lost_tracks_len={len(self.lost_tracks)}")
+                continue
+
             # 找到对应的轨迹
-            if track_idx < len(unmatched_tracks1):
+            if track_idx < unmatched_tracks1_len:
+                # 前半部分：来自 tracked_tracks 的未匹配轨迹
                 track = self.tracked_tracks[unmatched_tracks1[track_idx]]
             else:
-                track = self.lost_tracks[track_idx - len(unmatched_tracks1)]
-            
+                # 后半部分：来自 lost_tracks
+                lost_idx = track_idx - unmatched_tracks1_len
+                if lost_idx < len(self.lost_tracks):
+                    track = self.lost_tracks[lost_idx]
+                else:
+                    # 索引越界，跳过（可能是并发修改）
+                    logger.warning(f"[BotSort] lost_tracks 索引越界: track_idx={track_idx}, lost_idx={lost_idx}, unmatched_tracks1_len={unmatched_tracks1_len}, lost_tracks_len={len(self.lost_tracks)}")
+                    continue
+
             det = low_score_dets[det_idx]
             
             # 转换边界框格式
@@ -200,9 +218,26 @@ class BoTSORTTracker:
             # 未匹配的高分检测
             remaining_dets = high_score_dets[unmatched_dets1]
             remaining_embeddings = [embeddings[i] for i in unmatched_dets1 if i < len(embeddings)]
-            
-            # 未匹配的丢失轨迹
-            remaining_tracks = [self.lost_tracks[i] for i in unmatched_tracks2]
+
+            # 未匹配的丢失轨迹（正确解析组合列表索引）
+            # ✅ 关键修复：使用 combined_tracks 和 combined_len，避免并发修改
+            remaining_tracks = []
+            for idx in unmatched_tracks2:
+                # 检查索引是否在有效范围内
+                if idx >= combined_len:
+                    logger.warning(f"[BotSort] 第三阶段索引超出组合列表长度: idx={idx}, combined_len={combined_len}")
+                    continue
+
+                if idx < len(unmatched_tracks1):
+                    # 来自 tracked_tracks 的未匹配轨迹（仍在 tracked_tracks 中）
+                    remaining_tracks.append(self.tracked_tracks[unmatched_tracks1[idx]])
+                else:
+                    # 来自 lost_tracks
+                    lost_idx = idx - len(unmatched_tracks1)
+                    if lost_idx < len(self.lost_tracks):
+                        remaining_tracks.append(self.lost_tracks[lost_idx])
+                    else:
+                        logger.warning(f"[BotSort] 第三阶段 lost_tracks 索引越界: idx={idx}, lost_idx={lost_idx}, lost_tracks_len={len(self.lost_tracks)}")
             
             # ReID 重识别
             matches3, unmatched_dets3 = self._match_stage3(
@@ -251,10 +286,54 @@ class BoTSORTTracker:
         
         # 清理超时轨迹（从活跃轨迹中移除）
         self.tracked_tracks = [t for t in self.tracked_tracks if t.state != Track.DELETED]
-        
+
         # 清理超时轨迹（从丢失轨迹中移除）
-        self.lost_tracks = [t for t in self.lost_tracks if t.consecutive_misses <= self.max_age]
-        
+        # ✅ 修复：清理 DELETED 状态的轨迹，避免累积过多轨迹
+        prev_lost_count = len(self.lost_tracks)
+        self.lost_tracks = [t for t in self.lost_tracks if t.state != Track.DELETED]
+        cleaned_count = prev_lost_count - len(self.lost_tracks)
+
+        if cleaned_count > 0:
+            logger.info(f"[BotSort] 清理了 {cleaned_count} 个过期 lost_tracks，剩余 {len(self.lost_tracks)} 个")
+
+        # ✅ 修复：如果 lost_tracks 仍然过多，按超时时间清理（不是截断）
+        # 原因：截断可能删除刚丢失的轨迹，导致无法ReID匹配
+        MAX_LOST_TRACKS = 30  # 最大丢失轨迹数量（降低到30，因为max_age=30帧）
+
+        # ✅ 添加状态监控：每100帧输出一次lost_tracks状态
+        if self.frame_count % 100 == 0 and len(self.lost_tracks) > 0:
+            logger.info(
+                f"[BotSort] 当前状态: tracked_tracks={len(self.tracked_tracks)}, "
+                f"lost_tracks={len(self.lost_tracks)}, "
+                f"max_consecutive_misses={max([t.consecutive_misses for t in self.lost_tracks]) if self.lost_tracks else 0}"
+            )
+
+        if len(self.lost_tracks) > MAX_LOST_TRACKS:
+            # 按consecutive_misses降序排序（超时最长的在前面）
+            self.lost_tracks.sort(key=lambda t: t.consecutive_misses, reverse=True)
+
+            # 计算需要清理的数量
+            remove_count = len(self.lost_tracks) - MAX_LOST_TRACKS
+            removed_tracks = self.lost_tracks[:remove_count]
+
+            # 只清理超时较长的轨迹（consecutive_misses > max_age的80%）
+            # 例如：max_age=30时，清理丢失>24帧的轨迹
+            threshold = int(self.max_age * 0.8)
+            actually_removed = [t for t in removed_tracks if t.consecutive_misses > threshold]
+
+            if actually_removed:
+                self.lost_tracks = [t for t in self.lost_tracks if t not in actually_removed]
+                logger.info(
+                    f"[BotSort] lost_tracks 数量过多 ({prev_lost_count})，清理了 {len(actually_removed)} 个超时轨迹 "
+                    f"(consecutive_misses > {threshold}帧)，剩余 {len(self.lost_tracks)} 个"
+                )
+            else:
+                # 所有轨迹超时都不够长，降级为DEBUG日志（避免刷屏）
+                logger.debug(
+                    f"[BotSort] lost_tracks 数量过多 ({len(self.lost_tracks)})，"
+                    f"但所有轨迹丢失时间 < {threshold}帧，暂不清理（等待自然超时）"
+                )
+
         # 收集结果（过滤异常 bbox）
         results = []
         for track in self.tracked_tracks:

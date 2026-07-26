@@ -11,8 +11,6 @@
 - 高并发事件输出
 - 事件生命周期管理
 
-参考：
-- Frigate EventMaintainer
 """
 
 import threading

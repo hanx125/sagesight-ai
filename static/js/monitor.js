@@ -35,6 +35,14 @@ let frameSynchronizer = {
     bufferSize: 30  // 缓冲队列大小
 };
 
+// ✅ 新增：AI播放器（延迟播放缓存帧）
+let aiPlayers = {};  // {camera_id: AIPlayer实例}
+
+// ✅ 关键新增：全局消息限流（防止浏览器卡死）
+let _globalMessageCounter = 0;
+let _globalMessageLimit = 10;  // ✅ 修复：从20改为10，更激进的限流
+let _globalMessageResetTime = Date.now();
+
 // 统计信息
 let aiStats = {
     totalFrames: 0,
@@ -86,8 +94,102 @@ function initWebSocket() {
         
         // ✅ 改造：接收检测数据（JSON格式），不再是base64图片
         socket.on('detection_frame', function(data) {
-            const {camera_id, frame_id, detections, tracks, trajectories} = data;
+            // ✅ 调试：输出接收到的检测数据
+            console.log('[WebSocket] 收到detection_frame事件:', {
+                camera_id: data.camera_id,
+                frame_id: data.frame_id,
+                frame_seq: data.frame_seq,
+                timestamp: data.timestamp,
+                detections_count: data.detections ? data.detections.length : 0,
+                tracks_count: data.tracks ? data.tracks.length : 0
+            });
 
+            // ✅ 性能监控：WebSocket统计
+            if (window.PerfMonitor) {
+                PerfMonitor.monitorWebSocket('detection_frame', data);
+            }
+
+            // ✅ 全局消息限流：超过限制则丢弃
+            const now = Date.now();
+            if (now - _globalMessageResetTime > 1000) {
+                // 每秒重置计数器
+                _globalMessageCounter = 0;
+                _globalMessageResetTime = now;
+            }
+
+            _globalMessageCounter++;
+            if (_globalMessageCounter > _globalMessageLimit) {
+                // 超过限制，丢弃这条消息
+                aiStats.droppedFrames++;
+                return;
+            }
+
+            const {camera_id, frame_id, frame_seq, timestamp, detections, tracks, trajectories} = data;
+
+            // ✅ 新增：AI播放器处理检测数据（延迟播放）
+            if (aiPlayers[camera_id]) {
+                const aiPlayer = aiPlayers[camera_id];
+
+                // ✅ 绝对对齐：记录时间戳→帧序号映射
+                if (timestamp !== undefined && frame_seq !== undefined) {
+                    // 后端时间戳是视频PTS（毫秒）
+                    const timestampSec = timestamp / 1000;
+
+                    // 检查前端视频播放时间
+                    const video = aiPlayer.videoElement;
+                    if (video) {
+                        const currentTime = video.currentTime;
+                        const diff = Math.abs(currentTime - timestampSec);
+
+                        // ✅ 记录初始偏移（用于绝对对齐）
+                        if (!window.timestampOffset) {
+                            window.timestampOffset = timestampSec - currentTime;
+                            console.log(`[绝对对齐] 记录初始偏移: ${window.timestampOffset.toFixed(2)}s (${(window.timestampOffset*1000).toFixed(0)}ms)`);
+                        }
+
+                        // 计算校正后的时间戳
+                        const adjustedTimestamp = timestampSec - window.timestampOffset;
+                        const adjustedDiff = Math.abs(currentTime - adjustedTimestamp);
+
+                        // 输出对齐信息（仅在有检测目标时）
+                        if (detections && detections.length > 0) {
+                            console.log(`[绝对对齐] frame_seq=${frame_seq}, 原始diff=${(diff*1000).toFixed(0)}ms, 校正后diff=${(adjustedDiff*1000).toFixed(0)}ms ${adjustedDiff < 0.5 ? '✓' : '✗'}`);
+                        }
+
+                        // 建立 currentTime → frame_seq 映射
+                        if (!window.timeToFrameSeq) window.timeToFrameSeq = {};
+                        const timeKey = currentTime.toFixed(2);
+                        window.timeToFrameSeq[timeKey] = frame_seq;
+                    }
+                }
+
+                // ✅ 关键：第一次接收检测数据时，同步帧序号
+                if (!aiPlayer.isFrameSeqSynchronized && frame_seq !== undefined) {
+                    aiPlayer.frameSeqOffset = frame_seq;
+                    aiPlayer.isFrameSeqSynchronized = true;
+                    console.log(`[AIPlayer-${camera_id}] 第一次同步帧序号: offset=${frame_seq}`);
+                }
+
+                console.log(`[AIPlayer-${camera_id}] 添加检测数据到缓存: frame_seq=${frame_seq}, timestamp=${timestamp}`);
+
+                // ✅ 修复：添加检测数据到AIPlayer缓存（包含frame_seq）
+                aiPlayer.addDetectionData({
+                    frame_id: frame_id,
+                    frame_seq: frame_seq,  // ✅ 关键：传递frame_seq
+                    timestamp: timestamp,
+                    detections: detections || [],
+                    tracks: tracks || [],
+                    trajectories: trajectories || {}
+                });
+
+                // 更新统计
+                aiStats.totalFrames++;
+                return;  // ✅ 返回，不使用旧的缓冲逻辑
+            } else {
+                console.warn(`[AIPlayer] 未找到camera_id=${camera_id}的AI播放器`);
+            }
+
+            // ✅ 备用方案：旧的缓冲逻辑（保留兼容性）
             // 添加到检测数据缓冲队列
             if (!detectionBuffer[camera_id]) {
                 detectionBuffer[camera_id] = [];
@@ -122,12 +224,38 @@ function initWebSocket() {
 
         // ✅ 新增：接收AI视频流帧（用于视频文件播放）
         socket.on('ai_stream_frame', function(data) {
-            const {task_id, camera_id, frame, timestamp} = data;
+            // ✅ 检查是否订阅了AI流（避免接收不需要的流）
+            const {camera_id} = data;
+            if (!aiStreamSubscriptions[camera_id] || aiStreamSubscriptions[camera_id].screenIndexes.size === 0) {
+                // 没有订阅，丢弃消息（避免浪费内存）
+                return;
+            }
 
-            // 调试：打印接收到的消息
-            if (Math.random() < 0.01) {  // 只打印1%的消息，避免日志过多
-                console.log(`[AI流] 收到消息: task_id=${task_id}, camera_id=${camera_id}`);
-                console.log(`[AI流] 当前订阅:`, Object.keys(aiStreamSubscriptions));
+            // ✅ 性能监控：WebSocket统计
+            if (window.PerfMonitor) {
+                PerfMonitor.monitorWebSocket('ai_stream_frame', data);
+            }
+
+            // ✅ 全局消息限流：超过限制则丢弃
+            const now = Date.now();
+            if (now - _globalMessageResetTime > 1000) {
+                // 每秒重置计数器
+                _globalMessageCounter = 0;
+                _globalMessageResetTime = now;
+            }
+
+            _globalMessageCounter++;
+            if (_globalMessageCounter > _globalMessageLimit) {
+                // 超过限制，丢弃这条消息
+                aiStats.droppedFrames++;
+                return;
+            }
+
+            const {task_id, frame, timestamp} = data;
+
+            // 调试：打印接收到的消息（降低频率）
+            if (_globalMessageCounter === 1) {
+                console.log(`[AI流] 收到消息: task_id=${task_id}, camera_id=${camera_id}, 计数=${_globalMessageCounter}/${_globalMessageLimit}`);
             }
 
             // 渲染AI视频帧到Canvas（用于视频文件类型）
@@ -827,6 +955,23 @@ function playWithJessibuca(containerId, camera) {
 }
 
 function stopStream(containerId) {
+    // ✅ 新增：停止AI播放器
+    // 从containerId中提取screenIndex（例如：'screenContainer0' -> 0）
+    const screenIndexMatch = containerId.match(/(\d+)$/);
+    if (screenIndexMatch) {
+        const screenIndex = parseInt(screenIndexMatch[1]);
+        if (screens[screenIndex] && screens[screenIndex].camera_id) {
+            const cameraId = screens[screenIndex].camera_id;
+
+            // 停止AI播放器
+            if (aiPlayers[cameraId]) {
+                aiPlayers[cameraId].stop();
+                console.log(`[AIPlayer-${cameraId}] 已停止`);
+                delete aiPlayers[cameraId];
+            }
+        }
+    }
+
     // 关闭 WebRTC 播放器
     const webrtcPlayer = webrtcPlayers[containerId];
     if (webrtcPlayer) {
@@ -906,7 +1051,7 @@ function playWithAIStream(screenIndex, camera) {
 /**
  * ✅ 新增：为AI模式播放WebRTC流（复用ZLMRTCClient逻辑）
  */
-function playWebRTCForAI(screenIndex, camera) {
+async function playWebRTCForAI(screenIndex, camera) {
     const videoElement = document.getElementById(`webrtcVideoAI${screenIndex}`);
 
     // 检查 ZLMRTCClient 是否已加载
@@ -930,6 +1075,52 @@ function playWebRTCForAI(screenIndex, camera) {
 
     console.log('AI模式 WebRTC播放地址:', rtcUrl);
 
+    // ✅ 关键修复1：通知后端开始推送检测数据，并获取当前frame_seq
+    let currentFrameSeq = 0;
+    try {
+        const response = await fetch(`/api/ai-stream/start/${camera.id}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                screen_index: screenIndex
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        currentFrameSeq = data.frame_seq || 0;
+
+        console.log(`[AI模式] 后端通知成功，当前frame_seq=${currentFrameSeq}`);
+
+    } catch (error) {
+        console.error('[AI模式] 通知后端失败:', error);
+    }
+
+    // ✅ 改造：创建AI播放器（使用后端返回的frame_seq）
+    if (!aiPlayers[camera.id]) {
+        aiPlayers[camera.id] = new AIPlayer(camera.id, {
+            cacheDuration: 20,       // 缓存20秒
+            cacheFps: 25,            // 与后端解码帧率一致（25fps）
+            cacheWidth: 640,         // 与检测分辨率一致
+            cacheHeight: 640,        // 与检测分辨率一致
+            playbackDelay: 3000,     // ✅ 调整：延迟3秒播放（进一步减少延迟）
+            playbackFps: 25,         // 播放帧率与捕获帧率一致（25fps）
+            initialFrameSeq: currentFrameSeq  // 初始帧序号
+        });
+    }
+
+    const aiPlayer = aiPlayers[camera.id];
+    const canvas = aiStreamCanvas[screenIndex];
+
+    // ✅ 关键：隐藏video元素（实时流），显示Canvas（缓存帧）
+    videoElement.style.display = 'none';  // 隐藏实时流
+    canvas.style.display = 'block';       // 显示缓存帧
+
     try {
         const containerId = `screenContainer${screenIndex}`;
 
@@ -939,14 +1130,14 @@ function playWebRTCForAI(screenIndex, camera) {
             webrtcPlayers[containerId] = null;
         }
 
-        // 创建WebRTC播放器
+        // 创建WebRTC播放器（后台捕获实时流）
         const player = new window.ZLMRTCClient.Endpoint({
             element: videoElement,
             debug: false,
             zlmsdpUrl: rtcUrl,
             simulecast: false,
             useCamera: false,
-            audioEnable: true,
+            audioEnable: true,  // ✅ 保留音频（实时流音频）
             videoEnable: true,
             recvOnly: true,
             usedatachannel: false
@@ -956,14 +1147,37 @@ function playWebRTCForAI(screenIndex, camera) {
 
         // 播放成功回调
         player.on(window.ZLMRTCClient.Events.WEBRTC_ON_REMOTE_STREAMS, (e) => {
-            console.log('AI模式 WebRTC播放成功', e.streams);
+            console.log('AI模式 WebRTC播放成功（后台捕获实时流）', e.streams);
 
-            // 调整Canvas尺寸匹配视频
-            const canvas = aiStreamCanvas[screenIndex];
+            // ✅ 调试：输出视频元素信息
+            console.log('视频元素信息:', {
+                videoWidth: videoElement.videoWidth,
+                videoHeight: videoElement.videoHeight,
+                readyState: videoElement.readyState
+            });
+
+            // ✅ 关键：启动AI播放器
             if (canvas && videoElement.videoWidth > 0) {
-                canvas.width = videoElement.videoWidth;
-                canvas.height = videoElement.videoHeight;
-                console.log(`Canvas尺寸已调整: ${canvas.width}x${canvas.height}`);
+                canvas.width = 640;
+                canvas.height = 640;
+                console.log(`Canvas画布尺寸: ${canvas.width}x${canvas.height}（显示缓存帧）`);
+
+                // 启动AI播放器（后台捕获实时流 + 延迟播放）
+                aiPlayer.start(videoElement, canvas);
+                console.log(`[AIPlayer-${camera.id}] 已启动（延迟3秒播放）`);
+
+            } else {
+                console.warn('视频元素尺寸为0，延迟启动AI播放器');
+
+                // 监听loadedmetadata事件
+                videoElement.addEventListener('loadedmetadata', () => {
+                    canvas.width = 640;
+                    canvas.height = 640;
+                    console.log(`Canvas画布尺寸（延迟）: ${canvas.width}x${canvas.height}`);
+
+                    aiPlayer.start(videoElement, canvas);
+                    console.log(`[AIPlayer-${camera.id}] 已启动（延迟）`);
+                });
             }
         });
 
@@ -1137,76 +1351,65 @@ function unsubscribeAIStream(cameraId, screenIndex) {
 
 /**
  * 渲染AI视频帧到Canvas
+ *
+ * ✅ 修复：添加帧率限制，防止浏览器卡死
  */
 function renderAIStreamFrame(cameraId, frameBase64) {
-    const subscription = aiStreamSubscriptions[cameraId];
-    if (!subscription || subscription.screenIndexes.size === 0) {
-        // 调试：没有订阅此摄像机
-        if (Math.random() < 0.01) {
-            console.log(`[AI流] 跳过渲染：camera_id=${cameraId} 未订阅或无屏幕`);
-        }
-        return;
-    }
-
-    const img = subscription.image;
-
-    img.onload = function() {
-        // 渲染到所有订阅的画面
-        subscription.screenIndexes.forEach(screenIndex => {
-            const canvas = aiStreamCanvas[screenIndex];
-            if (!canvas) return;
-
+    // 查找使用该摄像机的画面
+    let rendered = false;
+    
+    screens.forEach((screen, index) => {
+        if (screen && screen.camera_id === cameraId && aiStreamMode[index]) {
+            const canvas = aiStreamCanvas[index];
+            if (!canvas) {
+                console.warn(`[AI流] 找不到Canvas: screen_index=${index}`);
+                return;
+            }
+            
             const ctx = canvas.getContext('2d');
-
-            // 设置Canvas内部像素尺寸（原始分辨率）
-            if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-                canvas.width = img.naturalWidth;
-                canvas.height = img.naturalHeight;
-
-                // 计算Canvas的CSS显示尺寸，保持宽高比
-                const container = canvas.parentElement;
-                if (container) {
-                    const containerWidth = container.clientWidth;
-                    const containerHeight = container.clientHeight;
-                    const imgAspect = img.naturalWidth / img.naturalHeight;
-                    const containerAspect = containerWidth / containerHeight;
-
-                    let displayWidth, displayHeight;
-
-                    if (imgAspect > containerAspect) {
-                        // 图片更宽，以宽度为基准
-                        displayWidth = containerWidth;
-                        displayHeight = containerWidth / imgAspect;
-                    } else {
-                        // 图片更高，以高度为基准
-                        displayHeight = containerHeight;
-                        displayWidth = containerHeight * imgAspect;
-                    }
-
-                    // 设置Canvas的CSS样式，居中显示
-                    canvas.style.width = `${displayWidth}px`;
-                    canvas.style.height = `${displayHeight}px`;
-                    canvas.style.position = 'absolute';
-                    canvas.style.left = `${(containerWidth - displayWidth) / 2}px`;
-                    canvas.style.top = `${(containerHeight - displayHeight) / 2}px`;
-
-                    console.log(`Canvas尺寸调整: 原始${img.naturalWidth}x${img.naturalHeight}, 显示${displayWidth.toFixed(0)}x${displayHeight.toFixed(0)}`);
+            if (!ctx) {
+                console.warn(`[AI流] 找不到Canvas上下文: screen_index=${index}`);
+                return;
+            }
+            
+            // 创建Image对象并渲染
+            const img = new Image();
+            img.onload = function() {
+                // 调整Canvas尺寸匹配图片
+                if (canvas.width !== img.width || canvas.height !== img.height) {
+                    canvas.width = img.width;
+                    canvas.height = img.height;
                 }
-            }
-
-            // 清空并绘制
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(img, 0, 0);
-
-            // 更新状态提示
-            const statusEl = document.getElementById(`aiStreamStatus${screenIndex}`);
-            if (statusEl) {
-                statusEl.textContent = `AI流 - ${new Date().toLocaleTimeString()}`;
-            }
-        });
-    };
-
-    img.src = `data:image/jpeg;base64,${frameBase64}`;
+                
+                // 清空Canvas并绘制新帧
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0);
+                rendered = true;
+            };
+            img.onerror = function() {
+                console.error(`[AI流] 图片加载失败: camera_id=${cameraId}`);
+            };
+            img.src = 'data:image/jpeg;base64,' + frameBase64;
+        }
+    });
+    
+    // 单画面弹窗渲染
+    if (currentSingleCamera && currentSingleCamera.id === cameraId && singleScreenAIMode) {
+        const canvas = document.getElementById('aiCanvasSingle');
+        if (canvas) {
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            img.onload = function() {
+                if (canvas.width !== img.width || canvas.height !== img.height) {
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                }
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0);
+            };
+            img.src = 'data:image/jpeg;base64,' + frameBase64;
+        }
+    }
 }
 
 // ========================================
@@ -1231,35 +1434,83 @@ function _getAIImage(key) {
  * - ZLM原始流播放器（底层）
  * - Canvas叠加层（透明，绘制检测框）
  * - WebSocket检测数据（JSON，坐标已映射到原始分辨率）
+ *
+ * ✅ 新增：性能监控 + 主线程保护
  */
 function _flushDetections() {
+    // ✅ 性能监控：记录函数开始时间
+    const startTime = performance.now();
+
     _rafScheduled = false;
 
-    // 遍历所有摄像机
-    for (const cameraId in detectionBuffer) {
-        const buffer = detectionBuffer[cameraId];
-        if (buffer.length === 0) continue;
+    // ✅ 主线程保护：如果上次渲染还未完成，跳过
+    if (_flushDetections.running) {
+        console.warn('[性能警告] _flushDetections 正在运行，跳过本次调用');
+        return;
+    }
 
-        // 帧对齐：找到最新的检测帧
-        const latestFrame = buffer[buffer.length - 1];
+    _flushDetections.running = true;
 
-        // 多画面渲染
-        screens.forEach((screen, index) => {
-            if (screen && screen.camera_id === cameraId && aiStreamMode[index]) {
-                renderDetectionsOnCanvas(index, latestFrame);
+    try {
+        // 遍历所有摄像机
+        for (const cameraId in detectionBuffer) {
+            const buffer = detectionBuffer[cameraId];
+            if (buffer.length === 0) continue;
+
+            // 帧对齐：找到最新的检测帧
+            const latestFrame = buffer[buffer.length - 1];
+
+            // ✅ 优化：限制检测框数量（避免绘制过多）
+            const maxDetections = 20;
+            const limitedDetections = latestFrame.detections.slice(0, maxDetections);
+            const limitedTracks = latestFrame.tracks.slice(0, maxDetections);
+
+            // 多画面渲染
+            screens.forEach((screen, index) => {
+                if (screen && screen.camera_id === cameraId && aiStreamMode[index]) {
+                    renderDetectionsOnCanvas(index, {
+                        ...latestFrame,
+                        detections: limitedDetections,
+                        tracks: limitedTracks
+                    });
+                }
+            });
+
+            // 单画面弹窗渲染
+            if (currentSingleCamera && currentSingleCamera.id === cameraId && singleScreenAIMode) {
+                renderDetectionsOnCanvas('single', {
+                    ...latestFrame,
+                    detections: limitedDetections,
+                    tracks: limitedTracks
+                });
             }
-        });
 
-        // 单画面弹窗渲染
-        if (currentSingleCamera && currentSingleCamera.id === cameraId && singleScreenAIMode) {
-            renderDetectionsOnCanvas('single', latestFrame);
+            // ✅ 优化：限制缓冲区大小（避免内存堆积）
+            if (buffer.length > 10) {
+                detectionBuffer[cameraId] = buffer.slice(-10);
+            }
+
+            // 清理过期的检测帧
+            const now = Date.now();
+            detectionBuffer[cameraId] = buffer.filter(
+                frame => now - frame.timestamp < frameSynchronizer.maxBufferMs
+            );
+        }
+    } finally {
+        _flushDetections.running = false;
+
+        // ✅ 性能监控：记录函数执行时间
+        const endTime = performance.now();
+        const duration = endTime - startTime;
+
+        if (duration > 16.67) {  // 超过一帧时间（60fps）
+            console.warn(`[性能警告] _flushDetections 执行时间过长: ${duration.toFixed(2)}ms`);
         }
 
-        // 清理过期的检测帧
-        const now = Date.now();
-        detectionBuffer[cameraId] = buffer.filter(
-            frame => now - frame.timestamp < frameSynchronizer.maxBufferMs
-        );
+        // 记录到性能监控
+        if (window.PerfMonitor) {
+            PerfMonitor.monitorCanvasRender(duration);
+        }
     }
 }
 

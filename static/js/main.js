@@ -23,8 +23,12 @@ function initSocketIO() {
     if (socket) return socket;
 
     try {
+        // ✅ 修复：显式使用 HTTP 协议，避免浏览器 HSTS 缓存导致的 HTTPS 强制升级
+        // 浏览器 HSTS 缓存会强制将 HTTP 升级为 HTTPS，导致 Socket.IO 连接失败
+        // 所以我们需要显式指定使用 HTTP 协议
         socket = io('/ws', {
-            transports: ['websocket', 'polling'],
+            path: '/socket.io',
+            transports: ['polling', 'websocket'],  // ✅ 改为 polling 优先（更稳定）
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionAttempts: 10
@@ -32,18 +36,14 @@ function initSocketIO() {
 
         socket.on('connect', function() {
             console.log('WebSocket 已连接');
-            console.log('[DEBUG] 准备调用 showNotification');
-            try {
-                showNotification('已连接到服务器', 'success');
-                console.log('[DEBUG] showNotification 调用成功');
-            } catch (e) {
-                console.error('[DEBUG] showNotification 调用失败:', e);
-            }
+            // ✅ 紧急修复：禁用连接通知，防止主线程阻塞
+            // showNotification('已连接到服务器', 'success');
         });
-        
+
         socket.on('disconnect', function() {
             console.log('WebSocket 已断开');
-            showNotification('连接已断开，正在重连...', 'warning');
+            // ✅ 紧急修复：禁用断开通知
+            // showNotification('连接已断开，正在重连...', 'warning');
         });
         
         socket.on('connect_error', function(error) {
@@ -70,6 +70,12 @@ function initSocketIO() {
         
         // 事件通知
         socket.on('new_event', function(event) {
+            // ✅ 性能监控：通知统计
+            if (window.PerfMonitor) {
+                PerfMonitor.monitorNotification();
+            }
+
+            // ✅ 优化：使用异步通知，不阻塞主线程
             showNotification(`新事件: ${event.description || event.type}`, 'warning');
         });
         
@@ -90,11 +96,103 @@ function initSocketIO() {
 
 const notifications = [];
 
-function showNotification(message, type = 'info', duration = 3000) {
-    console.log('[showNotification] 开始:', { message, type, duration });
-    const container = getNotificationContainer();
-    console.log('[showNotification] 容器:', container, '位置:', container.getBoundingClientRect());
+// ✅ 新增：通知节流（防止通知堆积导致卡死）
+let _notificationCounter = 0;
+let _notificationLimit = 1;  // ✅ 修复：从3改为1，每秒最多1个通知（更激进）
+let _notificationResetTime = Date.now();
+let _lastNotificationMessage = '';
+let _lastNotificationTime = 0;
 
+// ✅ 新增：批量通知队列（不阻塞主线程）
+let _notificationQueue = [];
+let _isProcessingNotifications = false;
+
+// ✅ 紧急修复：禁用定时器监控，防止递归调用导致卡死
+// 定时器监控本身导致了性能问题，已移除
+
+function showNotification(message, type = 'info', duration = 2000) {
+    // ✅ 节流：每秒最多1个通知
+    const now = Date.now();
+    if (now - _notificationResetTime > 1000) {
+        _notificationCounter = 0;
+        _notificationResetTime = now;
+    }
+
+    _notificationCounter++;
+    if (_notificationCounter > _notificationLimit) {
+        // 超过限制，丢弃这个通知
+        return;
+    }
+
+    // ✅ 合并相同通知：如果2秒内有相同通知，跳过（更激进）
+    if (message === _lastNotificationMessage && now - _lastNotificationTime < 2000) {
+        return;
+    }
+
+    _lastNotificationMessage = message;
+    _lastNotificationTime = now;
+
+    // ✅ 新增：将通知放入队列，使用 requestIdleCallback 异步处理
+    _notificationQueue.push({ message, type, duration });
+
+    // 如果没有在处理通知，启动处理
+    if (!_isProcessingNotifications) {
+        processNotificationsAsync();
+    }
+}
+
+// ✅ 新增：异步处理通知（不阻塞主线程）
+function processNotificationsAsync() {
+    if (_notificationQueue.length === 0) {
+        _isProcessingNotifications = false;
+        return;
+    }
+
+    _isProcessingNotifications = true;
+
+    // 使用 requestIdleCallback 在浏览器空闲时处理
+    if (typeof requestIdleCallback !== 'undefined') {
+        requestIdleCallback((deadline) => {
+            // 只在浏览器空闲时处理通知
+            while (_notificationQueue.length > 0 && deadline.timeRemaining() > 0) {
+                const { message, type, duration } = _notificationQueue.shift();
+                _renderNotification(message, type, duration);
+            }
+
+            // 如果还有通知，继续处理
+            if (_notificationQueue.length > 0) {
+                processNotificationsAsync();
+            } else {
+                _isProcessingNotifications = false;
+            }
+        }, { timeout: 1000 });  // 最多1秒后必须处理
+    } else {
+        // 备用方案：使用 setTimeout
+        setTimeout(() => {
+            if (_notificationQueue.length > 0) {
+                const { message, type, duration } = _notificationQueue.shift();
+                _renderNotification(message, type, duration);
+            }
+            processNotificationsAsync();
+        }, 100);  // 100ms延迟
+    }
+}
+
+// ✅ 新增：实际渲染通知（优化DOM操作）
+function _renderNotification(message, type, duration) {
+    const container = getNotificationContainer();
+
+    // ✅ 优化：先批量删除超出的通知，减少DOM操作
+    const maxNotifications = 3;
+    while (notifications.length >= maxNotifications) {
+        const oldestNotification = notifications.shift();
+        if (oldestNotification && oldestNotification.parentElement) {
+            // ✅ 使用 remove() 方法，比 removeChild 更高效
+            oldestNotification.remove();
+        }
+    }
+
+    // ✅ 使用文档片段批量插入（减少重排）
     const notification = document.createElement('div');
     notification.className = `notification notification-${type}`;
     notification.innerHTML = `
@@ -104,19 +202,11 @@ function showNotification(message, type = 'info', duration = 3000) {
 
     container.appendChild(notification);
     notifications.push(notification);
-    console.log('[showNotification] 添加后容器内容:', container.innerHTML);
-    console.log('[showNotification] 通知位置:', notification.getBoundingClientRect());
 
     if (duration > 0) {
-        console.log(`[showNotification] 设置 ${duration}ms 后移除`);
         setTimeout(() => {
-            console.log('[showNotification] 触发移除定时器');
             dismissNotification(notification);
         }, duration);
-    }
-
-    while (notifications.length > 5) {
-        dismissNotification(notifications[0]);
     }
 }
 

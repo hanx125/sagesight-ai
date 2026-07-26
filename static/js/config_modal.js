@@ -67,10 +67,10 @@ function loadConfigToForm(task) {
     
     // ========== 输入预设配置 ==========
     document.getElementById('decoderInputPreset').value = decoderConfig.input_preset || 'preset-rtsp-generic';  // 新增：输入预设
-    
+
     // ========== 输出配置 ==========
-    document.getElementById('decoderOutputFormat').value = decoderConfig.output_format || 'auto';
-    
+    // ✅ 已删除output_format配置，固定使用I420格式
+
     // ========== RTSP 配置 ==========
     document.getElementById('decoderRtspTransport').value = decoderConfig.rtsp_transport || 'tcp';
     document.getElementById('decoderReconnect').value = decoderConfig.reconnect ? 'true' : 'false';
@@ -89,6 +89,8 @@ function loadConfigToForm(task) {
 
     // 检测器配置（完整配置）
     const detectorConfig = task.detector_config || {};
+    document.getElementById('useDetectionPool').value = detectorConfig.use_detection_pool ? 'true' : 'false';  // ✅ 修复：从detector_config读取
+    document.getElementById('useGpuPreprocess').value = detectorConfig.use_gpu_preprocess ? 'true' : 'false';  // ✅ 新增：GPU预处理开关
     document.getElementById('detectorBackend').value = detectorConfig.backend || 'onnx_tensorrt';
     document.getElementById('detectorUseFp16').value = detectorConfig.use_fp16 ? 'true' : 'false';
     document.getElementById('detectorConfThreshold').value = detectorConfig.conf_threshold || 0.25;
@@ -183,7 +185,7 @@ function loadConfigToForm(task) {
     document.getElementById('displayEnabled').value = displayObj.enabled !== false ? 'true' : 'false';
     document.getElementById('displayTargetFps').value = displayObj.target_fps || 15;
     document.getElementById('displayAIStreamEnabled').value = displayObj.ai_stream_enabled !== false ? 'true' : 'false';
-    document.getElementById('displayAIStreamInterval').value = displayObj.ai_stream_interval || 2;
+    document.getElementById('displayAIStreamInterval').value = displayObj.ai_stream_interval || 10;  // ✅ 修复：默认值改为10
     document.getElementById('displayTrajectoryHistory').value = displayObj.trajectory_history_length || 30;
 
     document.getElementById('displayBoxColor').value = (detectionBoxObj.color || [0, 255, 0]).join(',');
@@ -223,6 +225,15 @@ async function saveConfig() {
     }
 
     try {
+        // ✅ 修复：获取任务详情（用于读取现有配置）
+        const taskResponse = await fetch(`/api/tasks/${currentConfigTaskId}`);
+        const task = await taskResponse.json();
+        
+        if (!taskResponse.ok) {
+            showNotification(task.error || '获取任务配置失败', 'error');
+            return;
+        }
+        
         // 解析 FFmpeg 滤镜参数（字符串转数组）
         const ffmpegFiltersStr = document.getElementById('decoderFfmpegFilters').value.trim();
         const ffmpegFilters = ffmpegFiltersStr ? ffmpegFiltersStr.split(/\s+/) : [];
@@ -243,7 +254,7 @@ async function saveConfig() {
                 input_preset: document.getElementById('decoderInputPreset').value || 'preset-rtsp-generic',  // 新增：输入预设
 
                 // ========== 输出配置 ==========
-                output_format: document.getElementById('decoderOutputFormat').value || 'auto',
+                // ✅ 已删除output_format配置，固定使用I420格式
 
                 // ========== RTSP 配置 ==========
                 rtsp_transport: document.getElementById('decoderRtspTransport').value || 'tcp',
@@ -261,6 +272,8 @@ async function saveConfig() {
 
             // 检测器配置（完整配置）
             detector_config: {
+                use_detection_pool: document.getElementById('useDetectionPool').value === 'true',
+                use_gpu_preprocess: document.getElementById('useGpuPreprocess').value === 'true',  // ✅ 新增：GPU预处理开关
                 backend: document.getElementById('detectorBackend').value || 'onnx_tensorrt',
                 use_fp16: document.getElementById('detectorUseFp16').value === 'true',
                 conf_threshold: parseFloat(document.getElementById('detectorConfThreshold').value) || 0.25,
@@ -338,10 +351,10 @@ async function saveConfig() {
                 enabled: document.getElementById('eventEnabled').value === 'true',
                 // 注意：storage、mqtt、websocket属于系统配置，从system_config.yaml读取，不在event_config中保存
 
-                metadata: {},  // 固定（空）
+                metadata: task.event_config?.metadata || {},  // 保留现有值
 
                 // 图片压缩配置
-                compression: {
+                compression: task.event_config?.compression || {
                     enabled: true,
                     quality: 80,
                     max_width: 640,
@@ -351,13 +364,13 @@ async function saveConfig() {
                 // 图片输出配置
                 image_output: {
                     method: document.getElementById('eventImageMethod').value || 'both',
-                    minio_bucket: 'sagesight-images',
-                    ftp_remote_dir: '/sagesight/images',
+                    minio_bucket: task.event_config?.image_output?.minio_bucket || 'sagesight-images',
+                    ftp_remote_dir: task.event_config?.image_output?.ftp_remote_dir || '/sagesight/images',
                     local_backup: document.getElementById('eventLocalBackup').value === 'true',
                     output_dir: document.getElementById('eventImageOutputDir').value || 'output/images',
-                    local_retention_days: 7,
-                    auto_cleanup: true,
-                    cleanup_interval_hours: 24,
+                    local_retention_days: task.event_config?.image_output?.local_retention_days || 7,
+                    auto_cleanup: task.event_config?.image_output?.auto_cleanup !== false,
+                    cleanup_interval_hours: task.event_config?.image_output?.cleanup_interval_hours || 24,
                     draw_bbox: document.getElementById('eventImageDrawBbox').value === 'true'
                 },
 
@@ -366,39 +379,39 @@ async function saveConfig() {
                     enabled: document.getElementById('eventGifEnabled').value === 'true',
                     output_method: document.getElementById('eventGifOutputMethod').value || 'both',
                     output_dir: document.getElementById('eventGifOutputDir').value || 'output/gifs',
-                    local_retention_days: 7,
-                    auto_cleanup: true,
-                    cleanup_interval_hours: 24,
-                    max_frames: 30,
-                    fps: 5,
-                    max_width: 320,
-                    max_height: 240,
-                    draw_trajectory: true,
-                    trajectory_color: [0, 255, 0],
+                    local_retention_days: task.event_config?.gif?.local_retention_days || 7,
+                    auto_cleanup: task.event_config?.gif?.auto_cleanup !== false,
+                    cleanup_interval_hours: task.event_config?.gif?.cleanup_interval_hours || 24,
+                    max_frames: task.event_config?.gif?.max_frames || 30,
+                    fps: task.event_config?.gif?.fps || 5,
+                    max_width: task.event_config?.gif?.max_width || 320,
+                    max_height: task.event_config?.gif?.max_height || 240,
+                    draw_trajectory: task.event_config?.gif?.draw_trajectory !== false,
+                    trajectory_color: task.event_config?.gif?.trajectory_color || [0, 255, 0],
                     crop_mode: document.getElementById('eventGifCropMode').value || 'full',
                     pre_seconds: parseFloat(document.getElementById('eventGifPreSeconds').value) || 5.0,
                     post_seconds: parseFloat(document.getElementById('eventGifPostSeconds').value) || 5.0,
-                    cache_fps: 10,
-                    cache_retention: 20.0,
+                    cache_fps: task.event_config?.gif?.cache_fps || 10,
+                    cache_retention: task.event_config?.gif?.cache_retention || 20.0,
                     draw_bbox: document.getElementById('eventGifDrawBbox').value === 'true',
-                    minio_bucket: 'sagesight-gifs',
-                    ftp_remote_dir: '/gifs'
+                    minio_bucket: task.event_config?.gif?.minio_bucket || 'sagesight-gifs',
+                    ftp_remote_dir: task.event_config?.gif?.ftp_remote_dir || '/gifs'
                 },
 
-                trajectory: {},  // 固定（空）
+                trajectory: task.event_config?.trajectory || {},  // 保留现有值
                 // 关键帧采集配置
                 capture: {
-                    strategy: 'periodic',
-                    interval: 5,
-                    change_threshold: 50,
-                    save_full_on_start: true,
-                    save_full_on_end: true,
+                    strategy: task.event_config?.capture?.strategy || 'periodic',
+                    interval: task.event_config?.capture?.interval || 5,
+                    change_threshold: task.event_config?.capture?.change_threshold || 50,
+                    save_full_on_start: task.event_config?.capture?.save_full_on_start !== false,
+                    save_full_on_end: task.event_config?.capture?.save_full_on_end !== false,
                     crop_margin_ratio: parseFloat(document.getElementById('eventCropMarginRatio').value) || 1.0
                 },
 
-                // 过滤配置
+                // 过滤配置（✅ 修复：使用任务表的target_classes字段）
                 filter: {
-                    target_classes: ['person', 'car'],  // 固定
+                    target_classes: task.target_classes || ['person', 'car'],
                     min_confidence: parseFloat(document.getElementById('eventMinConfidence').value) || 0.5
                 }
             },
@@ -415,7 +428,7 @@ async function saveConfig() {
                     show_motion_regions: document.getElementById('displayShowMotionRegions').value === 'true',
                     trajectory_history_length: parseInt(document.getElementById('displayTrajectoryHistory').value) || 30,
                     ai_stream_enabled: document.getElementById('displayAIStreamEnabled').value === 'true',
-                    ai_stream_interval: parseInt(document.getElementById('displayAIStreamInterval').value) || 2
+                    ai_stream_interval: parseInt(document.getElementById('displayAIStreamInterval').value) || 10
                 },
                 detection_box: {
                     color: document.getElementById('displayBoxColor').value.split(',').map(Number),
@@ -435,7 +448,7 @@ async function saveConfig() {
                     point_size: parseInt(document.getElementById('displayTrajectoryPointSize').value) || 2,
                     point_color: document.getElementById('displayTrajectoryPointColor').value.split(',').map(Number)
                 },
-                motion_region: {
+                motion_region: task.display_config?.motion_region || {
                     color: [255, 255, 0],
                     thickness: 1,
                     fill_color: [255, 255, 0],

@@ -739,9 +739,9 @@ function toggleEchoCancellation(enabled) {
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', () => {
     console.log('ONVIF语音对讲模块已加载');
-    
-    // 如果当前已选择摄像机，检测能力
-    if (currentSingleCamera) {
+
+    // ✅ 修复：检查变量是否已定义
+    if (typeof currentSingleCamera !== 'undefined' && currentSingleCamera) {
         checkAudioTalkCapabilities();
     }
 });
@@ -751,24 +751,25 @@ document.addEventListener('DOMContentLoaded', () => {
  */
 function initAudioTalk() {
     console.log('初始化ONVIF语音对讲功能...');
-    
+
     // 检测语音对讲能力
-    if (currentSingleCamera) {
+    // ✅ 修复：检查变量是否已定义
+    if (typeof currentSingleCamera !== 'undefined' && currentSingleCamera) {
         checkAudioTalkCapabilities();
     }
-    
+
     // 初始化UI状态
     updateAudioTalkStatus('inactive');
     updateAudioTalkInfo('点击"开始对讲"建立连接');
-    
+
     // 初始化按钮状态
     const startBtn = document.getElementById('audioTalkStartBtn');
     const stopBtn = document.getElementById('audioTalkStopBtn');
-    
+
     if (startBtn) {
         startBtn.disabled = false;
     }
-    
+
     if (stopBtn) {
         stopBtn.disabled = true;
     }

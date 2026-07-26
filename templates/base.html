@@ -160,6 +160,14 @@
         </div>
     </footer>
 
+    <!-- ✅ 新增：主线程保护机制 -->
+    <script src="{{ url_for('static', filename='js/main_thread_protector.js') }}?v=20260722"></script>
+    <!-- ✅ 新增：定时器管理器（必须最先加载） -->
+    <script src="{{ url_for('static', filename='js/timer_manager.js') }}?v=20260722"></script>
+    <!-- ✅ 新增：性能诊断工具 -->
+    <script src="{{ url_for('static', filename='js/performance_monitor.js') }}?v=20260722"></script>
+    <!-- ✅ 新增：实时诊断工具 -->
+    <script src="{{ url_for('static', filename='js/diagnostic.js') }}?v=20260722"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}?v=20260722"></script>
     {% block extra_scripts %}{% endblock %}
 </body>

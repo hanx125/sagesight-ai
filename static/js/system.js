@@ -925,9 +925,12 @@ switchTab = function(tabId) {
     // 切换到监控页时加载数据
     if (tabId === 'monitor') {
         loadMonitorData();
-        // 启动自动刷新
-        if (monitorInterval) clearInterval(monitorInterval);
-        monitorInterval = setInterval(loadMonitorData, 5000);
+        // ✅ 修复：使用 TimerManager 启动系统监控
+        if (window.TimerManager) {
+            TimerManager.startSystemMonitor();
+        }
+        // 旧的定时器已移除
+        // monitorInterval = setInterval(loadMonitorData, 5000);
     } else {
         // 离开监控页停止刷新
         if (monitorInterval) {

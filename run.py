@@ -1,5 +1,4 @@
-"""
-SageSight AI 检测系统 - 统一主程序
+"""SageSight AI 检测系统 - 统一主程序
 
 集成Web管理平台和多任务检测进程管理。
 提供任务管理、事件查看、可视化监控和检测进程管理功能。
@@ -7,6 +6,13 @@ SageSight AI 检测系统 - 统一主程序
 
 import os
 import sys
+
+# ✅ 设置多进程启动方法为 'spawn'（Windows 默认，确保子进程正确继承）
+import multiprocessing
+try:
+    multiprocessing.set_start_method('spawn', force=True)
+except RuntimeError:
+    pass  # 已经设置过，忽略
 
 # 过滤 Eventlet 废弃警告（必须在导入 eventlet 之前设置）
 os.environ['PYTHONWARNINGS'] = 'ignore::DeprecationWarning'
@@ -40,6 +46,7 @@ from src.cameras.stream_api import register_stream_blueprint
 from src.cameras.directory_api import register_directory_blueprint
 from src.cameras.ptz_api import register_ptz_api
 from src.cameras.audio_talk_api import init_audio_talk_api
+from src.utils.process import Process
 
 # 配置日志（从system_config.yaml加载，支持文件输出和轮转）
 import yaml
@@ -186,11 +193,13 @@ class TaskProcessManager:
             return False
 
         try:
-            # 使用 multiprocessing 启动 task_executor（使用模块级别的函数）
-            process = multiprocessing.Process(
+            # 使用 Process 类启动 task_executor（自动配置日志队列）
+            # 注意：设置为非守护进程（daemon=False），因为任务可能需要创建子进程
+            # 例如：检测进程池（DetectionProcessPool）需要创建 Manager 子进程
+            process = Process(
                 target=_run_executor_process,
                 args=(task_config,),
-                daemon=True,
+                daemon=False,  # 非守护进程，允许创建子进程
                 name=f"Task-{task_name}"
             )
 
@@ -221,7 +230,40 @@ class TaskProcessManager:
         process = self.task_processes[task_id]
 
         try:
-            # 发送终止信号
+            # ✅ 关键修复：杀死进程树（包括所有子进程）
+            # 因为任务进程会创建子进程（检测进程池、CameraWorker等）
+            import psutil
+            import os
+
+            try:
+                # 获取进程对象
+                proc = psutil.Process(process.pid)
+
+                # 获取所有子进程（递归）
+                children = proc.children(recursive=True)
+                logger.info(f"[TaskProcessManager] 任务 {task_id} 有 {len(children)} 个子进程")
+
+                # 先终止子进程（避免僵尸进程）
+                for child in children:
+                    try:
+                        child.terminate()
+                    except:
+                        pass
+
+                # 等待子进程退出
+                gone, alive = psutil.wait_procs(children, timeout=3)
+
+                # 强制杀死仍然存活的子进程
+                for child in alive:
+                    try:
+                        child.kill()
+                    except:
+                        pass
+
+            except Exception as e:
+                logger.warning(f"[TaskProcessManager] 清理子进程失败: {e}")
+
+            # 发送终止信号给主进程
             process.terminate()
 
             # 等待进程退出（最多 5 秒）
@@ -229,8 +271,13 @@ class TaskProcessManager:
 
             # 如果进程仍然存活，强制终止
             if process.is_alive():
+                logger.warning(f"[TaskProcessManager] 任务 {task_id} 未响应终止信号，强制杀死")
                 process.kill()
-                process.join()
+                process.join(timeout=2)
+
+                # ✅ 如果仍然存活，记录警告
+                if process.is_alive():
+                    logger.error(f"[TaskProcessManager] 任务 {task_id} 无法被杀死（僵尸进程）")
 
             del self.task_processes[task_id]
             logger.info(f"[TaskProcessManager] 任务 ID={task_id} 已停止")
@@ -245,9 +292,37 @@ class TaskProcessManager:
         """停止所有任务"""
         logger.info("[TaskProcessManager] 正在停止所有任务...")
 
-        for task_id in list(self.task_processes.keys()):
-            self.stop_task(task_id)
+        task_ids = list(self.task_processes.keys())
+        logger.info(f"[TaskProcessManager] 需要停止 {len(task_ids)} 个任务")
 
+        for task_id in task_ids:
+            try:
+                self.stop_task(task_id)
+            except Exception as e:
+                logger.error(f"[TaskProcessManager] 停止任务 {task_id} 失败: {e}")
+
+        # ✅ 强制清理所有残留的 Python 子进程（通过进程名匹配）
+        try:
+            import psutil
+            current_pid = os.getpid()
+            parent = psutil.Process(current_pid)
+
+            # 查找所有子进程
+            children = parent.children(recursive=True)
+            logger.info(f"[TaskProcessManager] 发现 {len(children)} 个子进程")
+
+            for child in children:
+                try:
+                    if child.name() == 'python.exe':
+                        logger.warning(f"[TaskProcessManager] 强制终止子进程 PID={child.pid}")
+                        child.kill()
+                except Exception as e:
+                    logger.error(f"[TaskProcessManager] 终止子进程 PID={child.pid} 失败: {e}")
+
+        except Exception as e:
+            logger.error(f"[TaskProcessManager] 清理子进程失败: {e}")
+
+        self.task_processes.clear()
         logger.info("[TaskProcessManager] 所有任务已停止")
 
     def check_processes(self) -> List[int]:
@@ -368,7 +443,7 @@ def get_process_manager():
 # ========================================
 
 # 不需要认证的路径前缀
-PUBLIC_PATHS = ('/login', '/api/auth/', '/api/ai-stream/', '/api/events/push', '/static/', '/output/')
+PUBLIC_PATHS = ('/login', '/api/auth/', '/api/ai-stream/', '/api/events/push', '/api/detection-metadata/', '/static/', '/output/')
 
 @app.before_request
 def check_auth():
@@ -509,7 +584,25 @@ def get_stream_status(task_id):
 
 
 # ========================================
-# AI 视频流 API
+# WebSocket 架构说明
+# ========================================
+# 系统使用 Flask-SocketIO 作为唯一的 WebSocket 通信方案（端口 5555，namespace: '/ws'）
+#
+# 两种推送模式：
+#
+# 1. RTSP摄像机模式（前端画框）：
+#    - CameraWorker → HTTP POST /api/detection-metadata/push
+#    - 主进程 → socketio.emit('detection_frame', {...}, namespace='/ws')
+#    - 前端接收事件，在播放画面上叠加绘制检测框
+#    - 优点：减少带宽占用，前端可灵活控制绘制样式
+#
+# 2. 视频文件模式（后端画框）：
+#    - CameraWorker → HTTP POST /api/ai-stream/push
+#    - 主进程 → socketio.emit('ai_stream_frame', {...}, namespace='/ws')
+#    - 前端接收事件，直接显示带检测框的MJPEG流
+#    - 优点：简化前端实现，确保绘制效果一致性
+#
+# 注意：独立的 WebSocketOutputter 已废弃（system_config.yaml:71: enabled: false）
 # ========================================
 
 # AI 视频帧缓存（最近帧）
@@ -576,11 +669,29 @@ def enable_ai_stream(camera_id):
         # AI 流配置已在 display_config.yaml 中启用（ai_stream_enabled: true）
         # 任务进程启动时会自动读取该配置
         # 此 API 仅用于前端状态同步，实际无需额外操作
-        
+
         return jsonify({'success': True, 'message': 'AI 视频流已启用'})
-        
+
     except Exception as e:
         logger.error(f"启用 AI 视频流失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ai-stream/start/<camera_id>', methods=['POST'])
+def start_ai_stream(camera_id):
+    """
+    ✅ 新增：前端启动AI播放时通知后端，并返回当前frame_seq
+    用于前后端帧序号同步
+    """
+    try:
+        logger.info(f"[AI模式] 前端启动AI播放: camera_id={camera_id}")
+
+        # ✅ 简化方案：返回0，让前端等待后端推送检测数据后自动同步
+        # 前端会根据接收到的第一帧检测数据的frame_seq进行同步
+        return jsonify({'success': True, 'frame_seq': 0})
+
+    except Exception as e:
+        logger.error(f"启动AI视频流失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -595,6 +706,55 @@ def disable_ai_stream(camera_id):
 
     except Exception as e:
         logger.error(f"禁用 AI 视频流失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ========================================
+# 检测框元数据推送（用于RTSP摄像机前端画框）
+# ========================================
+
+@app.route('/api/detection-metadata/push', methods=['POST'])
+def push_detection_metadata():
+    """接收任务进程推送的检测框坐标元数据，并通过 WebSocket 广播给前端"""
+    try:
+        data = request.get_json()
+        task_id = data.get('task_id')
+        camera_id = data.get('camera_id')
+        frame_id = data.get('frame_id')
+        frame_seq = data.get('frame_seq', frame_id)  # ✅ 新增：帧序号（默认与frame_id一致）
+        detections = data.get('detections', [])
+        tracks = data.get('tracks', [])
+        trajectories = data.get('trajectories', {})
+        timestamp = data.get('timestamp')  # ✅ 毫秒时间戳
+
+        if not camera_id:
+            return jsonify({'error': '缺少 camera_id 参数'}), 400
+
+        # ✅ 调试：输出接收到的数据（降级为DEBUG，避免刷屏）
+        app.logger.debug(
+            f"[API] 接收检测数据: camera_id={camera_id}, frame_id={frame_id}, "
+            f"timestamp={timestamp}, detections={len(detections)}, tracks={len(tracks)}"
+        )
+
+        # 通过 WebSocket 广播给订阅的客户端（前端画框）
+        socketio.emit('detection_frame', {
+            'task_id': task_id,
+            'camera_id': camera_id,
+            'frame_id': frame_id,
+            'frame_seq': frame_seq,  # ✅ 新增：帧序号
+            'timestamp': timestamp,  # ✅ 毫秒时间戳
+            'detections': detections,
+            'tracks': tracks,
+            'trajectories': trajectories
+        }, namespace='/ws')
+
+        # ✅ 调试：输出推送状态（降级为DEBUG，避免刷屏）
+        app.logger.debug(f"[API] WebSocket推送成功: camera_id={camera_id}")
+
+        return jsonify({'success': True})
+
+    except Exception as e:
+        logger.error(f"推送检测框元数据失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -709,21 +869,22 @@ def task_monitor_thread():
                         logger.info(f"[TaskMonitor] 任务 {task.task_name} 已停止（状态={task.status}），不自动重启")
             
             # ========================================
-            # 检查数据库中的任务状态变化
+            # 检查数据库中的任务状态变化（只停止不需要的任务）
             # ========================================
+            # ✅ 修复：移除启动任务的逻辑，完全由 API 控制
+            # 监控线程只负责：
+            # 1. 检测异常退出的任务并重启（上面的逻辑）
+            # 2. 停止不需要的任务（下面的逻辑）
+            # 不再负责启动新任务（避免与 API 冲突）
+
             tasks = tm.get_all_tasks(enabled_only=True)
             running_ids = pm.get_running_tasks()
-            
-            # 启动新任务（只启动状态为 'running' 且没有进程的任务）
-            for task in tasks:
-                if task.status == 'running' and task.id not in running_ids:
-                    # ✓ 启动任务前再次检查状态，避免重复启动
-                    current_task = tm.get_task(task.id)
-                    if current_task.status == 'running':
-                        logger.info(f"[TaskMonitor] 启动任务: {task.task_name}")
-                        task_config = task.to_dict()
-                        pm.start_task(task_config)
-            
+
+            # ✅ 移除：启动新任务的逻辑（已由 API 负责）
+            # for task in tasks:
+            #     if task.status == 'running' and task.id not in running_ids:
+            #         ...
+
             # 停止不需要的任务
             for task_id in running_ids:
                 task = tm.get_task(task_id)
@@ -759,7 +920,12 @@ if __name__ == '__main__':
     logger.info("="*60)
     logger.info(f"启动时间: {datetime.now().isoformat()}")
     logger.info("="*60)
-    
+
+    # 启动日志监听器（处理子进程的日志队列）
+    from src.utils.log_manager import log_listener
+    log_listener.start()
+    logger.info("[Main] 日志监听器已启动")
+
     # 初始化进程管理器
     pm = get_process_manager()
     
@@ -774,15 +940,15 @@ if __name__ == '__main__':
     def cleanup_handler():
         """清理处理函数（atexit注册）"""
         logger.info("\n[Cleanup] 正在清理系统资源...")
-        
+
         pm.running = False
-        
+
         # 停止所有任务进程
         try:
             pm.stop_all_tasks()
         except Exception as e:
             logger.error(f"[Cleanup] 停止任务进程失败: {e}")
-        
+
         # 更新数据库状态
         try:
             running_ids = pm.get_running_tasks()
@@ -790,7 +956,36 @@ if __name__ == '__main__':
                 tm.update_task(task_id, {'status': 'stopped'})
         except Exception as e:
             logger.error(f"[Cleanup] 更新任务状态失败: {e}")
-        
+
+        # 停止日志监听器
+        try:
+            log_listener.stop()
+            logger.info("[Cleanup] 日志监听器已停止")
+        except Exception as e:
+            logger.error(f"[Cleanup] 停止日志监听器失败: {e}")
+
+        # ✅ 强制杀死所有残留的子进程（最后手段）
+        try:
+            import psutil
+            import signal
+            import os
+
+            current_pid = os.getpid()
+            parent = psutil.Process(current_pid)
+            children = parent.children(recursive=True)
+
+            if children:
+                logger.warning(f"[Cleanup] 发现 {len(children)} 个残留子进程，强制清理")
+                for child in children:
+                    try:
+                        if child.name() == 'python.exe':
+                            logger.warning(f"[Cleanup] 强制终止子进程 PID={child.pid}")
+                            child.kill()
+                    except Exception as e:
+                        logger.error(f"[Cleanup] 终止子进程 PID={child.pid} 失败: {e}")
+        except Exception as e:
+            logger.error(f"[Cleanup] 清理残留子进程失败: {e}")
+
         logger.info("[Cleanup] 系统清理完成")
     
     # 注册清理函数（atexit会在Python退出时调用，比finally更可靠）

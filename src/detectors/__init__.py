@@ -108,26 +108,4 @@ def __getattr__(name):
     if name == 'RKNNDetector':
         from .backends.rknn import RKNNDetector
         return RKNNDetector
-    
     raise AttributeError(f"module {__name__} has no attribute {name}")
-
-
-# 兼容旧版本：保留 YOLODetector 作为别名
-def YOLODetector(*args, **kwargs):
-    """
-    YOLODetector 别名（兼容旧版本）
-    
-    注意：推荐使用 create_detector() 或 create_detector_from_config()
-    """
-    from .factory import create_detector_from_config
-    
-    if len(args) > 0 and not isinstance(args[0], (dict, DetectorConfig)):
-        # 旧版本调用方式：YOLODetector(config)
-        config = args[0]
-    elif 'config' in kwargs:
-        config = kwargs['config']
-    else:
-        # 新版本调用方式：create_detector_from_config(config)
-        config = DetectorConfig(**kwargs)
-    
-    return create_detector_from_config(config)

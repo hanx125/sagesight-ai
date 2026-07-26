@@ -17,8 +17,9 @@ task_bp = Blueprint('tasks', __name__, url_prefix='/api')
 # 日志器
 logger = logging.getLogger(__name__)
 
-# 任务管理器（延迟初始化）
+# 任务管理器和进程管理器（延迟初始化）
 _task_manager = None
+_process_manager = None
 _socketio = None
 
 
@@ -28,7 +29,37 @@ def get_task_manager():
     if _task_manager is None:
         from src.tasks.task_manager import TaskManager
         _task_manager = TaskManager()
+
     return _task_manager
+
+
+def get_process_manager():
+    """获取进程管理器实例（从 run.py 全局变量获取）"""
+    global _process_manager
+    if _process_manager is None:
+        # ✅ 方法1：尝试从 run.py 获取全局 pm（如果已初始化）
+        try:
+            import run
+            if hasattr(run, 'pm') and run.pm is not None:
+                _process_manager = run.pm
+            elif hasattr(run, 'process_manager') and run.process_manager is not None:
+                # ✅ 兼容旧版本
+                _process_manager = run.process_manager
+            elif hasattr(run, 'get_process_manager'):
+                # ✅ 方法2：调用 run.py 的 get_process_manager() 函数
+                _process_manager = run.get_process_manager()
+            else:
+                # ✅ 方法3：创建临时实例（兜底）
+                logger.warning("[get_process_manager] run.pm 未初始化，创建临时实例")
+                from run import TaskProcessManager
+                _process_manager = TaskProcessManager()
+        except Exception as e:
+            logger.error(f"[get_process_manager] 获取进程管理器失败: {e}")
+            # ✅ 方法4：创建一个新的实例（最后手段）
+            from run import TaskProcessManager
+            _process_manager = TaskProcessManager()
+
+    return _process_manager
 
 
 def set_socketio(socketio_instance):
@@ -534,11 +565,19 @@ def delete_task(task_id: int):
 def start_task(task_id: int):
     """启动任务"""
     task_manager = get_task_manager()
-    
+    process_manager = get_process_manager()
+
     # 获取任务和关联的设备通道
     task = task_manager.get_task(task_id)
     if not task:
         return jsonify({'error': '任务不存在'}), 404
+
+    # ✅ 修复：立即启动进程（避免状态不一致）
+    task_config = task.to_dict()
+    success = process_manager.start_task(task_config)
+
+    if not success:
+        return jsonify({'error': '任务启动失败'}), 500
 
     # 更新任务状态
     task_manager.update_task(task_id, {'status': 'running', 'enabled': True})
@@ -547,14 +586,14 @@ def start_task(task_id: int):
     from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager
     channel_pool_manager = get_device_channel_pool_manager()
     channels = channel_pool_manager.get_task_device_channels(task_id)
-    
+
     for channel in channels:
         # 更新绑定状态为running
         with sqlite3.connect(channel_pool_manager.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                UPDATE task_device_channel_bindings 
-                SET status = 'running' 
+                UPDATE task_device_channel_bindings
+                SET status = 'running'
                 WHERE task_id = ? AND channel_id = ?
             ''', (task_id, channel.id))
             conn.commit()
@@ -570,11 +609,15 @@ def start_task(task_id: int):
 def stop_task(task_id: int):
     """停止任务"""
     task_manager = get_task_manager()
-    
+    process_manager = get_process_manager()
+
     # 获取任务和关联的设备通道
     task = task_manager.get_task(task_id)
     if not task:
         return jsonify({'error': '任务不存在'}), 404
+
+    # ✅ 修复：立即停止进程（避免僵尸进程）
+    process_manager.stop_task(task_id)
 
     # 更新任务状态
     task_manager.update_task(task_id, {'status': 'stopped'})
@@ -583,14 +626,14 @@ def stop_task(task_id: int):
     from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager
     channel_pool_manager = get_device_channel_pool_manager()
     channels = channel_pool_manager.get_task_device_channels(task_id)
-    
+
     for channel in channels:
         # 更新绑定状态为stopped
         with sqlite3.connect(channel_pool_manager.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                UPDATE task_device_channel_bindings 
-                SET status = 'stopped' 
+                UPDATE task_device_channel_bindings
+                SET status = 'stopped'
                 WHERE task_id = ? AND channel_id = ?
             ''', (task_id, channel.id))
             conn.commit()

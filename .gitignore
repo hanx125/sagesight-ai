@@ -160,3 +160,39 @@ config/*.backup
 
 # FTP临时文件
 .ftp/
+
+# 临时分析脚本（用于调试和性能分析）
+analyze_*.py
+check_*.py
+diagnose_*.py
+monitor_*.py
+debug_*.py
+fix_*.py
+verify_*.py
+show_*.py
+complete_*.py
+quick_*.py
+final_*.py
+emergency_*.py
+build_*.py
+download_*.py
+create_*.py
+
+# 数据库文件
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# 上传的视频文件（不提交到仓库）
+uploads/video_files/*.mp4
+uploads/video_files/*.avi
+uploads/video_files/*.mkv
+
+# 共享内存清理脚本
+scripts/cleanup_shared_memory.py
+
+# 第三方参考项目
+frigate/
+
+# 临时分析输出
+process_analysis.txt

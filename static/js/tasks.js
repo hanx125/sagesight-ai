@@ -848,9 +848,9 @@ function renderTaskCard(task) {
     const targetClasses = task.target_classes || [];
     const targetClassesText = targetClasses.length > 0 ? targetClasses.join(', ') : '无';
     
-    // 跟踪和运动检测状态
-    const trackingEnabled = task.tracking_enabled !== false;
-    const motionDetectionEnabled = task.motion_detection_enabled !== false;
+    // 跟踪和运动检测状态（修复：正确解析数据库中的整数 0/1）
+    const trackingEnabled = task.tracking_enabled === true || task.tracking_enabled === 1;
+    const motionDetectionEnabled = task.motion_detection_enabled === true || task.motion_detection_enabled === 1;
     
     return `
         <div class="task-card">
@@ -953,9 +953,9 @@ function renderTaskTableRow(task) {
     const targetClasses = task.target_classes || [];
     const targetClassesText = targetClasses.length > 0 ? targetClasses.join(', ') : '无';
     
-    // 跟踪和运动检测状态
-    const trackingEnabled = task.tracking_enabled !== false;
-    const motionDetectionEnabled = task.motion_detection_enabled !== false;
+    // 跟踪和运动检测状态（修复：正确解析数据库中的整数 0/1）
+    const trackingEnabled = task.tracking_enabled === true || task.tracking_enabled === 1;
+    const motionDetectionEnabled = task.motion_detection_enabled === true || task.motion_detection_enabled === 1;
     
     return `
         <div class="task-table-row">
@@ -1271,6 +1271,7 @@ async function openEditModal(taskId, event) {
         const detectorConfig = task.detector_config || {};
         const detectorBackend = document.getElementById('detectorBackend');
         const detectorUseFp16 = document.getElementById('detectorUseFp16');
+        const useGpuPreprocess = document.getElementById('useGpuPreprocess');
         const detectorTensorrtLibPath = document.getElementById('detectorTensorrtLibPath');
         const detectorTensorrtEnginePath = document.getElementById('detectorTensorrtEnginePath');
         const detectorRknnTarget = document.getElementById('detectorRknnTarget');
@@ -1278,6 +1279,7 @@ async function openEditModal(taskId, event) {
 
         if (detectorBackend) detectorBackend.value = detectorConfig.backend || 'onnx_cuda';
         if (detectorUseFp16) detectorUseFp16.value = detectorConfig.use_fp16 ? 'true' : 'false';
+        if (useGpuPreprocess) useGpuPreprocess.value = detectorConfig.use_gpu_preprocess ? 'true' : 'false';
         if (detectorTensorrtLibPath) detectorTensorrtLibPath.value = detectorConfig.tensorrt_lib_path || '';
         if (detectorTensorrtEnginePath) detectorTensorrtEnginePath.value = detectorConfig.tensorrt_engine_path || '';
         if (detectorRknnTarget) detectorRknnTarget.value = detectorConfig.rknn_target || 'rk3588';
@@ -1663,6 +1665,7 @@ async function saveTask() {
         detector_config: {
             backend: document.getElementById('detectorBackend')?.value || 'onnx_cuda',
             use_fp16: document.getElementById('detectorUseFp16')?.value === 'true',
+            use_gpu_preprocess: document.getElementById('useGpuPreprocess')?.value === 'true',
             tensorrt_lib_path: document.getElementById('detectorTensorrtLibPath')?.value || '',
             tensorrt_engine_path: document.getElementById('detectorTensorrtEnginePath')?.value || '',
             rknn_target: document.getElementById('detectorRknnTarget')?.value || 'rk3588',

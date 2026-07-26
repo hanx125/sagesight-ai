@@ -77,9 +77,9 @@ class LogManager:
         return cls._instance
     
     def _get_default_format(self) -> str:
-        """获取默认日志格式"""
+        """获取默认日志格式（与 run.py 保持一致）"""
         return (
-            '%(asctime)s - %(processName)s - %(name)s - %(levelname)s - %(message)s'
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
     
     def start(self):
@@ -91,8 +91,9 @@ class LogManager:
         formatter = logging.Formatter(self.format_string)
         
         # 创建文件处理器（轮转）
+        # ✅ 修改：统一使用 system.log（与 run.py 保持一致）
         file_handler = logging.handlers.RotatingFileHandler(
-            self.log_dir / "sagesight.log",
+            self.log_dir / "system.log",
             maxBytes=self.max_bytes,
             backupCount=self.backup_count,
             encoding='utf-8'

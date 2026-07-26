@@ -739,7 +739,14 @@
         const channelName = event.channel_name || event.camera_id || '-';
 
         // 图片路径：优先使用本地路径
-        const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url;
+        const rawImageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url;
+
+        // ✅ 修复：将相对路径转换为完整的 HTTP URL（避免 HTTPS 协议错误）
+        let imageUrl = rawImageUrl;
+        if (rawImageUrl && !rawImageUrl.startsWith('http')) {
+            // 相对路径（如 output/images/xxx.jpg）转换为完整 URL
+            imageUrl = `http://${window.location.hostname}:${window.location.port}/${rawImageUrl.replace(/\\/g, '/')}`;
+        }
 
         // 图片区域：有图片显示图片，无图片显示占位符
         let imageSection = '';
@@ -894,9 +901,23 @@
             document.getElementById('eventDetailEndTime').textContent = event.end_time ? new Date(event.end_time).toLocaleString() : '-';
             document.getElementById('eventDetailTime').textContent = event.created_at ? new Date(event.created_at).toLocaleString() : '-';
 
-            // 显示事件图片
-            const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url;
-            const gifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url;
+            // 获取图片和 GIF URL
+            const rawImageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url;
+            const rawGifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url;
+
+            // ✅ 修复：将相对路径转换为完整的 HTTP URL
+            let imageUrl = rawImageUrl;
+            let gifUrl = rawGifUrl;
+
+            if (rawImageUrl && !rawImageUrl.startsWith('http')) {
+                imageUrl = `http://${window.location.hostname}:${window.location.port}/${rawImageUrl.replace(/\\/g, '/')}`;
+            }
+
+            if (rawGifUrl && !rawGifUrl.startsWith('http')) {
+                gifUrl = `http://${window.location.hostname}:${window.location.port}/${rawGifUrl.replace(/\\/g, '/')}`;
+            }
+
+            // 更新图片/GIF显示
             const imgEl = document.getElementById('eventDetailImage');
             const gifEl = document.getElementById('eventDetailGif');
             const noImgEl = document.getElementById('eventDetailNoImage');

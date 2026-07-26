@@ -642,6 +642,8 @@
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/ZLMRTCClient.js') }}"></script>
 <script src="{{ url_for('static', filename='js/jessibuca/jessibuca.js') }}"></script>
+<script src="{{ url_for('static', filename='js/frame_cache.js') }}?v=20260725"></script>
+<script src="{{ url_for('static', filename='js/ai_player.js') }}?v=20260725"></script>
 <script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260704"></script>
 <script src="{{ url_for('static', filename='js/ptz_joystick.js') }}"></script>
 <script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}"></script>
@@ -776,12 +778,25 @@ function showMonitorEventDetail(event) {
     window._currentMonitorEvent = event;
 
     // 设置图片
-    const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
+    const rawImageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
     const eventImage = document.getElementById('monitorEventImage');
 
+    // ✅ 修复：将相对路径转换为完整的 HTTP URL（避免 HTTPS 协议错误）
+    let imageUrl = rawImageUrl;
+    if (rawImageUrl && !rawImageUrl.startsWith('http')) {
+        // 相对路径（如 output/images/xxx.jpg）转换为完整 URL
+        imageUrl = `http://${window.location.hostname}:${window.location.port}/${rawImageUrl.replace(/\\/g, '/')}`;
+    }
+
     // 设置GIF
-    const gifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
+    const rawGifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
     const eventGif = document.getElementById('monitorEventGif');
+
+    // ✅ 修复：将相对路径转换为完整的 HTTP URL
+    let gifUrl = rawGifUrl;
+    if (rawGifUrl && !rawGifUrl.startsWith('http')) {
+        gifUrl = `http://${window.location.hostname}:${window.location.port}/${rawGifUrl.replace(/\\/g, '/')}`;
+    }
 
     // 默认显示图片
     if (imageUrl) {

@@ -173,7 +173,17 @@ PRESETS_HW_ACCEL_SCALE = {
     # ✅ 添加 `:force_divisible_by=2` 避免 stride 对齐问题
     FFMPEG_HWACCEL_DXVA2: "-r {0} -vf fps={0},scale={1}:{2}:force_divisible_by=2",
     # NVIDIA CUDA 缩放
-    FFMPEG_HWACCEL_NVIDIA: "-r {0} -vf fps={0},scale_cuda=w={1}:h={2},hwdownload,format=nv12,eq=gamma=1.4:gamma_weight=0.5",
+    # ✅ 正确的GPU缩放配置（解码器已输出到GPU显存）
+    # 参数说明：
+    #   - scale_cuda: GPU硬件缩放（数据已在GPU显存中）
+    #   - interp_algo=lanczos: 高质量插值算法（可选）
+    #   - hwdownload: 从GPU显存下载到系统内存
+    #   - format=nv12: 明确指定输出格式为NV12
+    # 注意：
+    #   1. 解码器使用 -hwaccel_output_format cuda，数据已在GPU
+    #   2. 不需要hwupload_cuda（会导致错误）
+    #   3. format=nv12 必须在 hwdownload 之后，不能在 scale_cuda 参数中
+    FFMPEG_HWACCEL_NVIDIA: "-r {0} -vf fps={0},scale_cuda=w={1}:h={2}:interp_algo=lanczos,hwdownload,format=nv12",
     "preset-jetson-h264": "-r {0}",  # scaled in decoder
     "preset-jetson-h265": "-r {0}",  # scaled in decoder
     # Intel QSV 缩放

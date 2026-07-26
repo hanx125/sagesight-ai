@@ -3,7 +3,7 @@
 
 负责管理事件的生成、过滤和输出，支持双通道架构：
 - MQTT：完整事件数据给其他平台订阅
-- WebSocket：实时绘制数据给前端
+- 数据库：事件持久化存储
 """
 
 import json
@@ -17,49 +17,45 @@ import numpy as np
 
 
 class EventOutput:
-    """事件输出管理器 - 支持双通道输出"""
-    
+    """事件输出管理器"""
+
     def __init__(self, config: Dict):
         """
         初始化事件输出器
-        
+
         Args:
             config: 事件输出配置字典
         """
         self.config = config
         self.enabled = config.get('enabled', False)
-        
+
         # 摄像头标识
         self.camera_id = config.get('camera_id', 'default')
-        
+
         # 任务关联（可选）
         self.task_id = config.get('task_id')
         self.algorithm = config.get('algorithm', 'yolov11')
-        
+
         # 是否保存到数据库
         self.save_to_db = config.get('save_to_db', False)
-        
+
         # ========================================
         # 新增：缩略图管理（借鉴 Frigate）
         # ========================================
         # 缩略图存储：event_id -> {image, score, bbox, timestamp}
         self.thumbnails: Dict[str, Dict] = {}
-        
+
         # 最佳缩略图：event_id -> best_thumbnail_data
         self.best_thumbnails: Dict[str, Dict] = {}
-        
+
         # 初始化 MQTT 输出器（给其他平台订阅）
         self.mqtt_outputter = None
         self._init_mqtt_outputter()
-        
-        # 初始化 WebSocket 输出器（给前端实时绘制）
-        self.websocket_outputter = None
-        self._init_websocket_outputter()
-        
+
         # 初始化图片输出器
         self.image_outputters = []
         self._init_image_outputters()
-        
+
         # 图片本地保存配置
         image_cfg = config.get('image_output', {})
         self.local_backup_enabled = image_cfg.get('local_backup', False)  # 是否本地备份
@@ -67,26 +63,31 @@ class EventOutput:
         self.local_retention_days = image_cfg.get('local_retention_days', 7)  # 本地保存天数
         self.auto_cleanup = image_cfg.get('auto_cleanup', True)  # 是否自动清理
         self.cleanup_interval_hours = image_cfg.get('cleanup_interval_hours', 24)  # 清理间隔
-        
+
+        # ✅ 新增：读取服务器配置（用于生成完整的 HTTP URL）
+        system_cfg = config.get('system_config', {})
+        web_server_cfg = system_cfg.get('web_server', {})
+        self.server_host = web_server_cfg.get('host', 'localhost')
+        self.server_port = web_server_cfg.get('port', 5555)
+
         # 上次清理时间
         self.last_cleanup_time = 0
-        
+
         # 创建本地保存目录（强制创建，无论配置如何）
         os.makedirs(self.local_output_dir, exist_ok=True)
-        
+
         # 启动时清理一次（如果启用自动清理）
         if self.auto_cleanup:
             self._cleanup_old_images()
-        
+
         # 图片压缩配置
         self.compression_cfg = config.get('compression', {})
-        
+
         # 过滤配置
         self.filter_cfg = config.get('filter', {})
-        
-        print(f"[EventOutput] 初始化完成 - 双通道架构")
+
+        print(f"[EventOutput] 初始化完成")
         print(f"[EventOutput]   MQTT 输出器: {self.mqtt_outputter.__class__.__name__ if self.mqtt_outputter else 'None'}")
-        print(f"[EventOutput]   WebSocket 输出器: {self.websocket_outputter.__class__.__name__ if self.websocket_outputter else 'None'}")
         print(f"[EventOutput]   图片输出器数量: {len(self.image_outputters)}")
         if self.local_backup_enabled or self.auto_cleanup:
             print(f"[EventOutput]   本地保存目录: {self.local_output_dir}")
@@ -113,29 +114,7 @@ class EventOutput:
             
         except Exception as e:
             print(f"[EventOutput] MQTT 输出器初始化失败: {e}")
-    
-    def _init_websocket_outputter(self):
-        """初始化 WebSocket 输出器（给前端实时绘制）"""
-        websocket_cfg = self.config.get('websocket', {})
-        
-        if not websocket_cfg.get('enabled', False):
-            return
-        
-        try:
-            from .websocket_outputter import WebSocketOutputter
-            
-            websocket_config = websocket_cfg.get('config', {})
-            self.websocket_outputter = WebSocketOutputter(websocket_config)
-            
-            # 启动 WebSocket 服务器
-            self.websocket_outputter.start()
-            
-            print(f"[EventOutput] WebSocket 输出器已初始化（给前端实时绘制）")
-            print(f"[EventOutput]   地址: ws://{websocket_config.get('host', 'localhost')}:{websocket_config.get('port', 8765)}")
-            
-        except Exception as e:
-            print(f"[EventOutput] WebSocket 输出器初始化失败: {e}")
-    
+
     def _init_image_outputters(self):
         """初始化图片输出器"""
         image_cfg = self.config.get('image_output', {})
@@ -232,24 +211,37 @@ class EventOutput:
     # ========================================
     # 新增：缩略图管理（借鉴 Frigate）
     # ========================================
-    def update_thumbnail(self, event_id: str, image: np.ndarray, 
+    def update_thumbnail(self, event_id: str, image: np.ndarray,
                         score: float, bbox: tuple) -> bool:
         """
         更新事件缩略图（自动选择最佳帧）
-        
+
         参考 Frigate 的 is_better_thumbnail 逻辑：
         - 选择最高分数的帧作为缩略图
         - 提高事件质量
-        
+
         Args:
             event_id: 事件 ID
             image: 图片数据（OpenCV BGR 格式）
             score: 检测分数（computed_score）
             bbox: 边界框 (x1, y1, x2, y2)
-            
+
         Returns:
             bool: 是否更新了最佳缩略图
         """
+        # ✅ 新增：定期清理旧的缩略图（避免内存泄漏）
+        if len(self.thumbnails) > 100:
+            try:
+                # 删除最旧的50个缩略图
+                old_keys = sorted(self.thumbnails.keys(),
+                                 key=lambda k: self.thumbnails[k]['timestamp'])[:50]
+                for key in old_keys:
+                    self.clear_thumbnail(key)
+
+                print(f"[EventOutput] 清理了 {len(old_keys)} 个旧缩略图")
+            except Exception as e:
+                print(f"[EventOutput] 清理缩略图失败: {e}")
+
         # 初始化事件缩略图存储
         if event_id not in self.thumbnails:
             self.thumbnails[event_id] = {
@@ -258,10 +250,10 @@ class EventOutput:
                 'bbox': None,
                 'timestamp': time.time()
             }
-        
+
         # 检查是否为更好的缩略图（分数更高）
         current_best_score = self.thumbnails[event_id]['score']
-        
+
         if score > current_best_score:
             # 更新最佳缩略图
             self.thumbnails[event_id] = {
@@ -270,13 +262,13 @@ class EventOutput:
                 'bbox': bbox,
                 'timestamp': time.time()
             }
-            
+
             # 同时更新 best_thumbnails（用于快速访问）
             self.best_thumbnails[event_id] = self.thumbnails[event_id]
-            
+
             print(f"[EventOutput] 更新最佳缩略图: event_id={event_id}, score={score:.3f}")
             return True
-        
+
         return False
     
     def get_best_thumbnail(self, event_id: str) -> Optional[Dict]:
@@ -547,8 +539,12 @@ class EventOutput:
                 # ✅ 强制先保存到本地（无论配置如何，符合项目约束）
                 local_image_path = self._save_image_local(event_id, compressed_image)
                 if local_image_path:
-                    image_urls['local'] = local_image_path
+                    # ✅ 修复：生成完整的 HTTP URL（避免浏览器 HTTPS 强制升级）
+                    # 将本地路径转换为 URL（如 output/images/xxx.jpg -> http://localhost:5555/output/images/xxx.jpg）
+                    local_image_url = f"http://{self.server_host}:{self.server_port}/{local_image_path}"
+                    image_urls['local'] = local_image_url
                     print(f"[EventOutput]   图片本地保存成功: {local_image_path}")
+                    print(f"[EventOutput]   图片 URL: {local_image_url}")
                 
                 # 2. 再根据配置上传到远程服务器（MinIO/FTP）
                 if self.image_outputters:
@@ -570,7 +566,9 @@ class EventOutput:
                     compressed_image = self._compress_image(image)
                     local_image_path = self._save_image_local(event_id, compressed_image)
                     if local_image_path:
-                        image_urls['local'] = local_image_path
+                        # ✅ 修复：生成完整的 HTTP URL
+                        local_image_url = f"http://{self.server_host}:{self.server_port}/{local_image_path}"
+                        image_urls['local'] = local_image_url
                 except Exception as e2:
                     print(f"[EventOutput] 本地保存失败: {e2}")
         else:
@@ -739,67 +737,7 @@ class EventOutput:
             algorithm=algorithm,
             metadata=extra_metadata
         )
-    
-    def send_realtime_data(self, realtime_data: Dict):
-        """
-        发送实时数据到 WebSocket（给前端实时绘制）
-        
-        Args:
-            realtime_data: 实时数据字典（检测框、跟踪框、轨迹点等）
-        """
-        if not self.websocket_outputter:
-            return
-        
-        try:
-            self.websocket_outputter.send_realtime_data(realtime_data)
-        except Exception as e:
-            print(f"[EventOutput] WebSocket 发送失败: {e}")
-    
-    def send_detection_frame(self, frame_id: int, detections: list, 
-                            tracks: list, trajectories: dict = None):
-        """
-        发送检测帧数据到 WebSocket
-        
-        Args:
-            frame_id: 帧 ID
-            detections: 检测结果列表
-            tracks: 跟踪结果列表
-            trajectories: 轨迹数据字典
-        """
-        if not self.websocket_outputter:
-            return
-        
-        try:
-            self.websocket_outputter.send_detection_frame(
-                camera_id=self.camera_id,
-                frame_id=frame_id,
-                detections=detections,
-                tracks=tracks,
-                trajectories=trajectories
-            )
-        except Exception as e:
-            print(f"[EventOutput] WebSocket 发送检测帧失败: {e}")
-    
-    def send_trajectory_update(self, track_id: int, trajectory_points: list):
-        """
-        发送轨迹更新到 WebSocket
-        
-        Args:
-            track_id: 跟踪 ID
-            trajectory_points: 轨迹点列表
-        """
-        if not self.websocket_outputter:
-            return
-        
-        try:
-            self.websocket_outputter.send_trajectory_update(
-                camera_id=self.camera_id,
-                track_id=track_id,
-                trajectory_points=trajectory_points
-            )
-        except Exception as e:
-            print(f"[EventOutput] WebSocket 发送轨迹更新失败: {e}")
-    
+
     def close(self):
         """关闭所有输出器"""
         # 关闭 MQTT 输出器

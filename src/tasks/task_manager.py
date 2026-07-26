@@ -81,7 +81,7 @@ def get_default_decoder_config() -> Dict:
         'input_preset': decoder_config.get('input_preset', 'preset-rtsp-generic'),  # 新增：输入预设
 
         # ========== 输出配置 ==========
-        'output_format': decoder_config.get('output_format', 'auto'),
+        # output_format已删除，固定使用I420格式以优化性能
 
         # ========== RTSP 配置 ==========
         'rtsp_transport': decoder_config.get('rtsp_transport', 'tcp'),
@@ -957,7 +957,20 @@ class TaskManager:
     
     def _row_to_task(self, row: tuple) -> DetectionTask:
         """将数据库行转换为 DetectionTask 对象"""
-        # 安全解析 JSON 字段
+        # 安全解析 JSON 字段（不补充默认值，完全使用数据库配置）
+        def safe_json_loads(value, default):
+            """解析JSON并返回（不补充默认值）"""
+            if not value:
+                return default
+            try:
+                loaded = json.loads(value)
+                if isinstance(loaded, (dict, list)):
+                    return loaded
+                return default
+            except (json.JSONDecodeError, TypeError):
+                return default
+
+        # 安全解析JSON并补充默认值（用于需要向后兼容的配置）
         def safe_json_loads_with_defaults(value, default):
             """解析JSON并补充默认值（用于字典类型）"""
             if not value:
@@ -1003,7 +1016,7 @@ class TaskManager:
             tracker_config=safe_json_loads_with_defaults(row[13] if len(row) > 13 else None, get_default_tracker_config()),  # 索引调整：12 → 13
             motion_config=safe_json_loads_with_defaults(row[14] if len(row) > 14 else None, get_default_motion_config()),  # 索引调整：13 → 14
             event_config=safe_json_loads_with_defaults(row[15] if len(row) > 15 else None, get_default_event_config()),  # 索引调整：14 → 15
-            display_config=safe_json_loads_with_defaults(row[16] if len(row) > 16 else None, {}),  # 索引调整：15 → 16，显示配置为空字典
+            display_config=safe_json_loads(row[16] if len(row) > 16 else None, get_default_display_config()),  # ✅ 完全使用数据库配置
             zones_config=safe_json_loads_list(row[19] if len(row) > 19 else None, []),  # 新增：zones_config字段（索引19）
             created_at=parse_datetime(row[17] if len(row) > 17 else None),  # 索引调整：16 → 17
             updated_at=parse_datetime(row[18] if len(row) > 18 else None)  # 索引调整：17 → 18

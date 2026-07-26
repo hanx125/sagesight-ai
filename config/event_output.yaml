@@ -136,4 +136,4 @@ event_output:
     # 只发送特定类别的事件（空列表表示全部）
     target_classes: ['person', 'car']
     # 只发送置信度高于此值的事件
-    min_confidence: 0.5
+    min_confidence: 0.3

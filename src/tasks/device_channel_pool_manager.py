@@ -351,7 +351,9 @@ class DeviceChannelPoolManager:
             rows = cursor.fetchall()
             channels = [self._row_to_channel(row) for row in rows]
             
-            logger.info(f"[DeviceChannelPoolManager] 获取任务设备通道: task_id={task_id}, 共{len(channels)}个通道")
+            # ✅ 日志已注释（避免频繁输出）
+            # logger.info(f"[DeviceChannelPoolManager] 获取任务设备通道: task_id={task_id}, 共{len(channels)}个通道")
+            
             return channels
     
     def get_device_channel_tasks(self, channel_id: int) -> List[int]:

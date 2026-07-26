@@ -36,6 +36,7 @@ class DetectionTask:
     timestamp_ns: int            # 时间戳（纳秒）
     frame_shape: tuple           # 帧形状（height, width）
     output_event_name: str       # 输出事件名称（用于通知完成）
+    task_id: str = ""            # 任务ID（用于全局检测池模式）
     detection_config: Dict[str, Any] = None  # 检测配置（可选，用于动态调整）
 
 
@@ -107,6 +108,9 @@ class DetectionQueue:
                 self.stats_total_submitted.value += 1
             with self.stats_current_size.get_lock():
                 self.stats_current_size.value += 1
+
+            # ✅ 新增：打印提交成功日志
+            print(f"[DetectionQueue] 任务提交成功: camera={task.camera_id} frame={task.frame_seq}")
 
             return True
 
