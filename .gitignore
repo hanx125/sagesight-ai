@@ -182,6 +182,10 @@ create_*.py
 data/*.db
 data/*.db-shm
 data/*.db-wal
+data/*.db.bak
+
+# AI 流状态标记文件（运行时生成）
+data/ai_stream_flags/
 
 # 上传的视频文件（不提交到仓库）
 uploads/video_files/*.mp4

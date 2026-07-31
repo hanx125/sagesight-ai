@@ -1271,19 +1271,177 @@ async function openEditModal(taskId, event) {
         const detectorConfig = task.detector_config || {};
         const detectorBackend = document.getElementById('detectorBackend');
         const detectorUseFp16 = document.getElementById('detectorUseFp16');
-        const useGpuPreprocess = document.getElementById('useGpuPreprocess');
         const detectorTensorrtLibPath = document.getElementById('detectorTensorrtLibPath');
         const detectorTensorrtEnginePath = document.getElementById('detectorTensorrtEnginePath');
+        const detectorTensorrtCachePath = document.getElementById('detectorTensorrtCachePath');
+        const detectorConfThreshold = document.getElementById('detectorConfThreshold');
+        const detectorIouThreshold = document.getElementById('detectorIouThreshold');
+        const detectorMinBoxArea = document.getElementById('detectorMinBoxArea');
+        const detectorDeviceId = document.getElementById('detectorDeviceId');
+        const detectorGpuMemLimit = document.getElementById('detectorGpuMemLimit');
         const detectorRknnTarget = document.getElementById('detectorRknnTarget');
+        const detectorRknnCoreMask = document.getElementById('detectorRknnCoreMask');
         const detectorRknnDeviceId = document.getElementById('detectorRknnDeviceId');
 
         if (detectorBackend) detectorBackend.value = detectorConfig.backend || 'onnx_cuda';
         if (detectorUseFp16) detectorUseFp16.value = detectorConfig.use_fp16 ? 'true' : 'false';
-        if (useGpuPreprocess) useGpuPreprocess.value = detectorConfig.use_gpu_preprocess ? 'true' : 'false';
         if (detectorTensorrtLibPath) detectorTensorrtLibPath.value = detectorConfig.tensorrt_lib_path || '';
         if (detectorTensorrtEnginePath) detectorTensorrtEnginePath.value = detectorConfig.tensorrt_engine_path || '';
+        if (detectorTensorrtCachePath) detectorTensorrtCachePath.value = detectorConfig.tensorrt_engine_cache_path || './trt_cache';
+        if (detectorConfThreshold) detectorConfThreshold.value = detectorConfig.conf_threshold ?? 0.25;
+        if (detectorIouThreshold) detectorIouThreshold.value = detectorConfig.iou_threshold ?? 0.35;
+        if (detectorMinBoxArea) detectorMinBoxArea.value = detectorConfig.min_box_area ?? 50;
+        if (detectorDeviceId) detectorDeviceId.value = detectorConfig.device_id ?? 0;
+        if (detectorGpuMemLimit) detectorGpuMemLimit.value = detectorConfig.gpu_mem_limit ?? 6144;
         if (detectorRknnTarget) detectorRknnTarget.value = detectorConfig.rknn_target || 'rk3588';
+        if (detectorRknnCoreMask) detectorRknnCoreMask.value = detectorConfig.rknn_core_mask ?? 0;
         if (detectorRknnDeviceId) detectorRknnDeviceId.value = detectorConfig.rknn_device_id || '';
+
+        // ✅ 加载解码器配置
+        const decoderConfig = task.decoder_config || {};
+        const decoderWidth = document.getElementById('decoderWidth');
+        const decoderHeight = document.getElementById('decoderHeight');
+        const decoderFps = document.getElementById('decoderFps');
+        const decoderHwaccelPreset = document.getElementById('decoderHwaccelPreset');
+        const decoderInputPreset = document.getElementById('decoderInputPreset');
+        const decoderRtspTransport = document.getElementById('decoderRtspTransport');
+        const decoderReconnect = document.getElementById('decoderReconnect');
+        const decoderReconnectDelay = document.getElementById('decoderReconnectDelay');
+        const decoderBufferSize = document.getElementById('decoderBufferSize');
+        const decoderRingBufferBlockCount = document.getElementById('decoderRingBufferBlockCount');
+        const decoderIndexQueueSize = document.getElementById('decoderIndexQueueSize');
+        const decoderFfmpegFilters = document.getElementById('decoderFfmpegFilters');
+
+        if (decoderWidth) decoderWidth.value = decoderConfig.width ?? 640;
+        if (decoderHeight) decoderHeight.value = decoderConfig.height ?? 640;
+        if (decoderFps) decoderFps.value = decoderConfig.fps ?? 30;
+        if (decoderHwaccelPreset) decoderHwaccelPreset.value = decoderConfig.hwaccel_preset || 'preset-dxva2';
+        if (decoderInputPreset) decoderInputPreset.value = decoderConfig.input_preset || 'preset-rtsp-generic';
+        if (decoderRtspTransport) decoderRtspTransport.value = decoderConfig.rtsp_transport || 'tcp';
+        if (decoderReconnect) decoderReconnect.value = decoderConfig.reconnect !== false ? 'true' : 'false';
+        if (decoderReconnectDelay) decoderReconnectDelay.value = decoderConfig.reconnect_delay ?? 5;
+        if (decoderBufferSize) decoderBufferSize.value = decoderConfig.buffer_size ?? 2097152;
+        if (decoderRingBufferBlockCount) decoderRingBufferBlockCount.value = decoderConfig.ring_buffer_block_count ?? 10;
+        if (decoderIndexQueueSize) decoderIndexQueueSize.value = decoderConfig.index_queue_size ?? 50;
+        if (decoderFfmpegFilters) decoderFfmpegFilters.value = decoderConfig.ffmpeg_filters || '';
+
+        // ✅ 加载事件配置
+        const eventConfig = task.event_config || {};
+        const eventEnabled = document.getElementById('eventEnabled');
+        const eventLocalEnabled = document.getElementById('eventLocalEnabled');
+        const eventMinioEnabled = document.getElementById('eventMinioEnabled');
+        const eventFtpEnabled = document.getElementById('eventFtpEnabled');
+        const eventGifEnabled = document.getElementById('eventGifEnabled');
+        const eventGifLocalEnabled = document.getElementById('eventGifLocalEnabled');
+        const eventGifMinioEnabled = document.getElementById('eventGifMinioEnabled');
+        const eventGifFtpEnabled = document.getElementById('eventGifFtpEnabled');
+        const eventImageDrawBbox = document.getElementById('eventImageDrawBbox');
+        const eventGifDrawBbox = document.getElementById('eventGifDrawBbox');
+        const eventMinConfidence = document.getElementById('eventMinConfidence');
+        const eventImageOutputDir = document.getElementById('eventImageOutputDir');
+        const eventGifOutputDir = document.getElementById('eventGifOutputDir');
+        const eventGifCropMode = document.getElementById('eventGifCropMode');
+        const eventCropMarginRatio = document.getElementById('eventCropMarginRatio');
+        const eventGifPreSeconds = document.getElementById('eventGifPreSeconds');
+        const eventGifPostSeconds = document.getElementById('eventGifPostSeconds');
+
+        const imageOutputCfg = eventConfig.image_output || {};
+        const gifCfg = eventConfig.gif || {};
+        const filterCfg = eventConfig.filter || {};
+
+        if (eventEnabled) eventEnabled.value = eventConfig.enabled !== false ? 'true' : 'false';
+        if (eventLocalEnabled) eventLocalEnabled.value = imageOutputCfg.local_enabled !== false ? 'true' : 'false';
+        if (eventMinioEnabled) eventMinioEnabled.value = imageOutputCfg.minio_enabled === true ? 'true' : 'false';
+        if (eventFtpEnabled) eventFtpEnabled.value = imageOutputCfg.ftp_enabled === true ? 'true' : 'false';
+        if (eventGifEnabled) eventGifEnabled.value = gifCfg.enabled === true ? 'true' : 'false';
+        if (eventGifLocalEnabled) eventGifLocalEnabled.value = gifCfg.local_enabled !== false ? 'true' : 'false';
+        if (eventGifMinioEnabled) eventGifMinioEnabled.value = gifCfg.minio_enabled === true ? 'true' : 'false';
+        if (eventGifFtpEnabled) eventGifFtpEnabled.value = gifCfg.ftp_enabled === true ? 'true' : 'false';
+        if (eventImageDrawBbox) eventImageDrawBbox.value = imageOutputCfg.draw_bbox !== false ? 'true' : 'false';
+        if (eventGifDrawBbox) eventGifDrawBbox.value = gifCfg.draw_bbox !== false ? 'true' : 'false';
+        if (eventMinConfidence) eventMinConfidence.value = filterCfg.min_confidence ?? 0.5;
+        if (eventImageOutputDir) eventImageOutputDir.value = imageOutputCfg.output_dir || 'output/images';
+        if (eventGifOutputDir) eventGifOutputDir.value = gifCfg.output_dir || 'output/gifs';
+        if (eventGifCropMode) eventGifCropMode.value = gifCfg.crop_mode || 'full';
+        if (eventCropMarginRatio) eventCropMarginRatio.value = gifCfg.crop_margin_ratio ?? 1.0;
+        if (eventGifPreSeconds) eventGifPreSeconds.value = gifCfg.pre_seconds ?? 5.0;
+        if (eventGifPostSeconds) eventGifPostSeconds.value = gifCfg.post_seconds ?? 5.0;
+
+        // ✅ 加载跟踪器配置
+        const trackerConfig = task.tracker_config || {};
+        const trackerNInit = document.getElementById('trackerNInit');
+        const trackerMaxAge = document.getElementById('trackerMaxAge');
+        if (trackerNInit) trackerNInit.value = trackerConfig.n_init ?? 3;
+        if (trackerMaxAge) trackerMaxAge.value = trackerConfig.max_age ?? 30;
+
+        // ✅ 加载运动检测配置
+        const motionConfig = task.motion_config || {};
+        const motionHeight = document.getElementById('motionHeight');
+        const motionThreshold = document.getElementById('motionThreshold');
+        const motionContourArea = document.getElementById('motionContourArea');
+        const motionBlurRadius = document.getElementById('motionBlurRadius');
+        const motionFrameAlpha = document.getElementById('motionFrameAlpha');
+        const motionLightningThreshold = document.getElementById('motionLightningThreshold');
+        const motionImproveContrast = document.getElementById('motionImproveContrast');
+        const motionContrastFrameHistory = document.getElementById('motionContrastFrameHistory');
+
+        if (motionHeight) motionHeight.value = motionConfig.motion_height ?? 180;
+        if (motionThreshold) motionThreshold.value = motionConfig.threshold ?? 25;
+        if (motionContourArea) motionContourArea.value = motionConfig.contour_area ?? 200;
+        if (motionBlurRadius) motionBlurRadius.value = motionConfig.blur_radius ?? 1;
+        if (motionFrameAlpha) motionFrameAlpha.value = motionConfig.frame_alpha ?? 0.01;
+        if (motionLightningThreshold) motionLightningThreshold.value = motionConfig.lightning_threshold ?? 0.8;
+        if (motionImproveContrast) motionImproveContrast.value = motionConfig.improve_contrast === true ? 'true' : 'false';
+        if (motionContrastFrameHistory) motionContrastFrameHistory.value = motionConfig.contrast_frame_history ?? 50;
+
+        // ✅ 加载显示配置
+        const displayConfig = task.display_config || {};
+        const displayCfg = displayConfig.display || {};
+        const detectionBoxCfg = displayConfig.detection_box || {};
+        const trackBoxCfg = displayConfig.track_box || {};
+        const trajectoryCfg = displayConfig.trajectory || {};
+
+        const displayTargetFps = document.getElementById('displayTargetFps');
+        const displayAIStreamInterval = document.getElementById('displayAIStreamInterval');
+        const displayShowBoxes = document.getElementById('displayShowBoxes');
+        const displayShowTracks = document.getElementById('displayShowTracks');
+        const displayShowTrajectories = document.getElementById('displayShowTrajectories');
+        const displayShowMotionRegions = document.getElementById('displayShowMotionRegions');
+        const displayShowZones = document.getElementById('displayShowZones');
+        const displayTrajectoryHistory = document.getElementById('displayTrajectoryHistory');
+        const displayBoxColor = document.getElementById('displayBoxColor');
+        const displayBoxThickness = document.getElementById('displayBoxThickness');
+        const displayBoxFontScale = document.getElementById('displayBoxFontScale');
+        const displayBoxLabelColor = document.getElementById('displayBoxLabelColor');
+        const displayTrackColor = document.getElementById('displayTrackColor');
+        const displayTrackThickness = document.getElementById('displayTrackThickness');
+        const displayTrackFontScale = document.getElementById('displayTrackFontScale');
+        const displayTrackLabelColor = document.getElementById('displayTrackLabelColor');
+        const displayTrajectoryColor = document.getElementById('displayTrajectoryColor');
+        const displayTrajectoryThickness = document.getElementById('displayTrajectoryThickness');
+        const displayTrajectoryPointSize = document.getElementById('displayTrajectoryPointSize');
+        const displayTrajectoryPointColor = document.getElementById('displayTrajectoryPointColor');
+
+        if (displayTargetFps) displayTargetFps.value = displayCfg.target_fps ?? 25;
+        if (displayAIStreamInterval) displayAIStreamInterval.value = displayCfg.ai_stream_interval ?? 3;
+        if (displayShowBoxes) displayShowBoxes.value = displayCfg.show_detection_boxes !== false ? 'true' : 'false';
+        if (displayShowTracks) displayShowTracks.value = displayCfg.show_track_boxes !== false ? 'true' : 'false';
+        if (displayShowTrajectories) displayShowTrajectories.value = displayCfg.show_trajectories !== false ? 'true' : 'false';
+        if (displayShowMotionRegions) displayShowMotionRegions.value = displayCfg.show_motion_regions !== false ? 'true' : 'false';
+        if (displayShowZones) displayShowZones.value = displayCfg.show_zones !== false ? 'true' : 'false';
+        if (displayTrajectoryHistory) displayTrajectoryHistory.value = displayCfg.trajectory_history_length ?? 30;
+        if (displayBoxColor) displayBoxColor.value = colorToText(detectionBoxCfg.color, '0,255,0');
+        if (displayBoxThickness) displayBoxThickness.value = detectionBoxCfg.thickness ?? 2;
+        if (displayBoxFontScale) displayBoxFontScale.value = detectionBoxCfg.font_scale ?? 0.5;
+        if (displayBoxLabelColor) displayBoxLabelColor.value = colorToText(detectionBoxCfg.label_color, '0,255,0');
+        if (displayTrackColor) displayTrackColor.value = colorToText(trackBoxCfg.color, '255,0,0');
+        if (displayTrackThickness) displayTrackThickness.value = trackBoxCfg.thickness ?? 2;
+        if (displayTrackFontScale) displayTrackFontScale.value = trackBoxCfg.font_scale ?? 0.5;
+        if (displayTrackLabelColor) displayTrackLabelColor.value = colorToText(trackBoxCfg.label_color, '255,0,0');
+        if (displayTrajectoryColor) displayTrajectoryColor.value = colorToText(trajectoryCfg.color, '0,255,255');
+        if (displayTrajectoryThickness) displayTrajectoryThickness.value = trajectoryCfg.thickness ?? 1;
+        if (displayTrajectoryPointSize) displayTrajectoryPointSize.value = trajectoryCfg.point_size ?? 2;
+        if (displayTrajectoryPointColor) displayTrajectoryPointColor.value = colorToText(trajectoryCfg.point_color, '0,0,255');
 
         document.getElementById('taskModal').classList.add('show');
 
@@ -1623,6 +1781,24 @@ function filterChannelList() {
 // 保存任务
 // ========================================
 
+// ✅ 辅助函数：将颜色文本输入（如 "0,255,0"）转换为数组 [0, 255, 0]
+function parseColorInput(value, defaultColor) {
+    if (!value || typeof value !== 'string') return defaultColor;
+    const parts = value.trim().split(/[,\s]+/).map(s => parseInt(s.trim()));
+    if (parts.length === 3 && parts.every(n => !isNaN(n) && n >= 0 && n <= 255)) {
+        return parts;
+    }
+    return defaultColor;
+}
+
+// ✅ 辅助函数：将颜色数组 [0, 255, 0] 转换为文本 "0,255,0"（用于表单填充）
+function colorToText(colorArr, defaultText) {
+    if (Array.isArray(colorArr) && colorArr.length === 3) {
+        return colorArr.join(',');
+    }
+    return defaultText;
+}
+
 async function saveTask() {
     const taskId = document.getElementById('taskId').value;
     const isEdit = taskId !== '';
@@ -1665,11 +1841,112 @@ async function saveTask() {
         detector_config: {
             backend: document.getElementById('detectorBackend')?.value || 'onnx_cuda',
             use_fp16: document.getElementById('detectorUseFp16')?.value === 'true',
-            use_gpu_preprocess: document.getElementById('useGpuPreprocess')?.value === 'true',
             tensorrt_lib_path: document.getElementById('detectorTensorrtLibPath')?.value || '',
             tensorrt_engine_path: document.getElementById('detectorTensorrtEnginePath')?.value || '',
+            tensorrt_engine_cache_path: document.getElementById('detectorTensorrtCachePath')?.value || './trt_cache',
+            conf_threshold: parseFloat(document.getElementById('detectorConfThreshold')?.value) || 0.25,
+            iou_threshold: parseFloat(document.getElementById('detectorIouThreshold')?.value) || 0.35,
+            min_box_area: parseInt(document.getElementById('detectorMinBoxArea')?.value) || 50,
+            device_id: parseInt(document.getElementById('detectorDeviceId')?.value) || 0,
+            gpu_mem_limit: parseInt(document.getElementById('detectorGpuMemLimit')?.value) || 6144,
             rknn_target: document.getElementById('detectorRknnTarget')?.value || 'rk3588',
+            rknn_core_mask: parseInt(document.getElementById('detectorRknnCoreMask')?.value) || 0,
             rknn_device_id: document.getElementById('detectorRknnDeviceId')?.value || ''
+        },
+
+        // 解码器配置（新增 - 之前遗漏）
+        decoder_config: {
+            width: parseInt(document.getElementById('decoderWidth')?.value) || 640,
+            height: parseInt(document.getElementById('decoderHeight')?.value) || 640,
+            fps: parseInt(document.getElementById('decoderFps')?.value) || 30,
+            hwaccel_preset: document.getElementById('decoderHwaccelPreset')?.value || 'preset-dxva2',
+            input_preset: document.getElementById('decoderInputPreset')?.value || 'preset-rtsp-generic',
+            rtsp_transport: document.getElementById('decoderRtspTransport')?.value || 'tcp',
+            reconnect: document.getElementById('decoderReconnect')?.value === 'true',
+            reconnect_delay: parseInt(document.getElementById('decoderReconnectDelay')?.value) || 5,
+            buffer_size: parseInt(document.getElementById('decoderBufferSize')?.value) || 2097152,
+            ring_buffer_block_count: parseInt(document.getElementById('decoderRingBufferBlockCount')?.value) || 10,
+            index_queue_size: parseInt(document.getElementById('decoderIndexQueueSize')?.value) || 50,
+            ffmpeg_filters: document.getElementById('decoderFfmpegFilters')?.value || ''
+        },
+
+        // 事件配置（新增）
+        event_config: {
+            enabled: document.getElementById('eventEnabled')?.value === 'true',
+            image_output: {
+                local_enabled: document.getElementById('eventLocalEnabled')?.value === 'true',
+                minio_enabled: document.getElementById('eventMinioEnabled')?.value === 'true',
+                ftp_enabled: document.getElementById('eventFtpEnabled')?.value === 'true',
+                output_dir: document.getElementById('eventImageOutputDir')?.value || 'output/images',
+                draw_bbox: document.getElementById('eventImageDrawBbox')?.value === 'true'
+            },
+            gif: {
+                enabled: document.getElementById('eventGifEnabled')?.value === 'true',
+                draw_bbox: document.getElementById('eventGifDrawBbox')?.value === 'true',
+                local_enabled: document.getElementById('eventGifLocalEnabled')?.value === 'true',
+                minio_enabled: document.getElementById('eventGifMinioEnabled')?.value === 'true',
+                ftp_enabled: document.getElementById('eventGifFtpEnabled')?.value === 'true',
+                output_dir: document.getElementById('eventGifOutputDir')?.value || 'output/gifs',
+                crop_mode: document.getElementById('eventGifCropMode')?.value || 'full',
+                crop_margin_ratio: parseFloat(document.getElementById('eventCropMarginRatio')?.value) || 1.0,
+                pre_seconds: parseFloat(document.getElementById('eventGifPreSeconds')?.value) || 5.0,
+                post_seconds: parseFloat(document.getElementById('eventGifPostSeconds')?.value) || 5.0
+            },
+            filter: {
+                min_confidence: parseFloat(document.getElementById('eventMinConfidence')?.value) || 0.5
+            }
+        },
+
+        // 跟踪器配置（Norfair）
+        tracker_config: {
+            tracker_type: 'norfair',
+            debug_print_interval: 0,
+            n_init: parseInt(document.getElementById('trackerNInit')?.value) || 3,
+            max_age: parseInt(document.getElementById('trackerMaxAge')?.value) || 30,
+        },
+
+        // 运动检测配置（帧差法）
+        motion_config: {
+            motion_height: parseInt(document.getElementById('motionHeight')?.value) || 180,
+            threshold: parseInt(document.getElementById('motionThreshold')?.value) || 25,
+            contour_area: parseInt(document.getElementById('motionContourArea')?.value) || 200,
+            blur_radius: parseInt(document.getElementById('motionBlurRadius')?.value) || 1,
+            frame_alpha: parseFloat(document.getElementById('motionFrameAlpha')?.value) || 0.01,
+            lightning_threshold: parseFloat(document.getElementById('motionLightningThreshold')?.value) || 0.8,
+            improve_contrast: document.getElementById('motionImproveContrast')?.value === 'true',
+            contrast_frame_history: parseInt(document.getElementById('motionContrastFrameHistory')?.value) || 50,
+        },
+
+        // 显示配置（新增 - 之前遗漏）
+        display_config: {
+            display: {
+                target_fps: parseInt(document.getElementById('displayTargetFps')?.value) || 25,
+                ai_stream_interval: parseInt(document.getElementById('displayAIStreamInterval')?.value) || 3,
+                show_detection_boxes: document.getElementById('displayShowBoxes')?.value === 'true',
+                show_track_boxes: document.getElementById('displayShowTracks')?.value === 'true',
+                show_trajectories: document.getElementById('displayShowTrajectories')?.value === 'true',
+                show_motion_regions: document.getElementById('displayShowMotionRegions')?.value === 'true',
+                show_zones: document.getElementById('displayShowZones')?.value === 'true',
+                trajectory_history_length: parseInt(document.getElementById('displayTrajectoryHistory')?.value) || 30
+            },
+            detection_box: {
+                color: parseColorInput(document.getElementById('displayBoxColor')?.value, [0, 255, 0]),
+                thickness: parseInt(document.getElementById('displayBoxThickness')?.value) || 2,
+                font_scale: parseFloat(document.getElementById('displayBoxFontScale')?.value) || 0.5,
+                label_color: parseColorInput(document.getElementById('displayBoxLabelColor')?.value, [0, 255, 0])
+            },
+            track_box: {
+                color: parseColorInput(document.getElementById('displayTrackColor')?.value, [255, 0, 0]),
+                thickness: parseInt(document.getElementById('displayTrackThickness')?.value) || 2,
+                font_scale: parseFloat(document.getElementById('displayTrackFontScale')?.value) || 0.5,
+                label_color: parseColorInput(document.getElementById('displayTrackLabelColor')?.value, [255, 0, 0])
+            },
+            trajectory: {
+                color: parseColorInput(document.getElementById('displayTrajectoryColor')?.value, [0, 255, 255]),
+                thickness: parseInt(document.getElementById('displayTrajectoryThickness')?.value) || 1,
+                point_size: parseInt(document.getElementById('displayTrajectoryPointSize')?.value) || 2,
+                point_color: parseColorInput(document.getElementById('displayTrajectoryPointColor')?.value, [0, 0, 255])
+            }
         }
     };
 

@@ -5,7 +5,7 @@
 支持多摄像机多任务架构。
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 from datetime import datetime
 from typing import Dict, List
 import sqlite3
@@ -161,8 +161,7 @@ def create_task():
         get_default_tracker_config,
         get_default_motion_config,
         get_default_event_config,
-        get_default_display_config,
-        get_default_zones_config  # 新增：Zone区域配置
+        get_default_display_config
     )
     from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager, DeviceChannelPool
     from src.cameras.camera_manager import get_camera_manager
@@ -176,6 +175,18 @@ def create_task():
     # 2. 如果前端传了配置（非空字典），合并前端配置（前端值覆盖默认值）
     # 3. 存入数据库（确保所有字段都完整）
 
+    def deep_merge(default: dict, override: dict) -> dict:
+        """深度合并两个字典"""
+        result = default.copy()
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                # 递归合并嵌套字典
+                result[key] = deep_merge(result[key], value)
+            else:
+                # 直接覆盖
+                result[key] = value
+        return result
+    
     def merge_config(default_config: dict, frontend_config: dict) -> dict:
         """
         合并配置（前端值覆盖默认值）
@@ -190,10 +201,8 @@ def create_task():
         if not frontend_config or not isinstance(frontend_config, dict) or len(frontend_config) == 0:
             return default_config.copy()
 
-        # 合并配置（前端值覆盖默认值）
-        merged = default_config.copy()
-        merged.update(frontend_config)
-        return merged
+        # 使用深度合并（前端值覆盖默认值）
+        return deep_merge(default_config, frontend_config)
 
     # 加载配置文件默认值（确保所有字段都存在）
     default_decoder_config = get_default_decoder_config()
@@ -202,7 +211,6 @@ def create_task():
     default_motion_config = get_default_motion_config()
     default_event_config = get_default_event_config()
     default_display_config = get_default_display_config()
-    default_zones_config = get_default_zones_config()  # 新增：Zone区域配置
 
     # 合并前端配置（如果有）
     decoder_config = merge_config(default_decoder_config, data.get('decoder_config'))
@@ -211,11 +219,6 @@ def create_task():
     motion_config = merge_config(default_motion_config, data.get('motion_config'))
     event_config = merge_config(default_event_config, data.get('event_config'))
     display_config = merge_config(default_display_config, data.get('display_config'))
-
-    # zones_config是列表类型，单独处理
-    zones_config = data.get('zones_config')
-    if not zones_config or not isinstance(zones_config, list) or len(zones_config) == 0:
-        zones_config = default_zones_config
 
     # target_classes：如果前端传空数组，使用默认值
     target_classes = data.get('target_classes')
@@ -237,8 +240,7 @@ def create_task():
         tracker_config=tracker_config,
         motion_config=motion_config,
         event_config=event_config,
-        display_config=display_config,
-        zones_config=zones_config  # 新增：Zone区域配置
+        display_config=display_config
     )
 
     task_manager = get_task_manager()
@@ -381,12 +383,6 @@ def update_task(task_id: int):
             merged_config = merge_config_for_update(existing_config, update_data[config_field])
             # 更新到待更新数据
             update_data[config_field] = merged_config
-
-    # zones_config是列表类型，单独处理
-    if 'zones_config' in update_data:
-        # 如果前端传了zones_config，直接使用（不合并）
-        # 因为zones_config是完整的列表，不是字典配置
-        pass
 
     # 1. 更新任务本身的配置
     success = task_manager.update_task(task_id, update_data)
@@ -937,142 +933,265 @@ def get_status():
 
 
 # ========================================
-# Zone配置管理 API（通道级别）
+# Zone配置管理 API（通道级别，存储于 device_channel_pool.zones_config）
 # ========================================
+# 说明：Zone 配置为通道级数据，与任务无关。
+#   - 推荐路由：/api/channels/<channel_id>/zones
+#   - 兼容路由：/api/tasks/<task_id>/channels/<channel_id>/zones（task_id 仅做 URL 兼容，内部忽略）
 
-@task_bp.route('/tasks/<int:task_id>/channels/<int:channel_id>/zones', methods=['GET'])
-def get_channel_zones(task_id: int, channel_id: int):
-    """
-    获取通道的Zone配置
-    
-    Args:
-        task_id: 任务ID
-        channel_id: 通道ID（设备通道池ID）
-        
-    Returns:
-        Zone配置列表
-    """
+def _validate_zones_config(zones_config):
+    """校验 zones_config 格式，返回 (ok, error_message)"""
+    if not isinstance(zones_config, list):
+        return False, 'zones字段必须是列表'
+
+    for zone in zones_config:
+        if not isinstance(zone, dict):
+            return False, 'Zone配置必须是字典格式'
+
+        # 检查必需字段
+        if 'name' not in zone:
+            return False, 'Zone缺少必需字段: name'
+        if 'polygon' not in zone:
+            return False, f'Zone {zone.get("name", "")} 缺少必需字段: polygon'
+
+        # 验证polygon格式
+        polygon = zone['polygon']
+        if not isinstance(polygon, list) or len(polygon) < 3:
+            return False, f'Zone {zone["name"]} 的polygon必须是至少3个点的列表'
+
+        for point in polygon:
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                return False, f'Zone {zone["name"]} 的polygon点格式错误，应为[x, y]'
+
+    return True, None
+
+
+# ---------- 推荐路由：通道级 ----------
+
+@task_bp.route('/channels/<int:channel_id>/zones', methods=['GET'])
+def get_channel_zones_by_channel(channel_id: int):
+    """获取通道的Zone配置（通道级）"""
     task_manager = get_task_manager()
-    
-    # 检查任务是否存在
-    task = task_manager.get_task(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
-    
-    # 获取Zone配置
-    zones = task_manager.get_channel_zones(task_id, channel_id)
-    
+    zones = task_manager.get_channel_zones(channel_id)
     return jsonify({
-        'task_id': task_id,
         'channel_id': channel_id,
         'zones': zones
     })
 
 
-@task_bp.route('/tasks/<int:task_id>/channels/<int:channel_id>/zones', methods=['POST'])
-def save_channel_zones(task_id: int, channel_id: int):
-    """
-    保存通道的Zone配置
-    
-    Args:
-        task_id: 任务ID
-        channel_id: 通道ID（设备通道池ID）
-        
-    Request Body:
-        zones: Zone配置列表
-        
-    Returns:
-        保存结果
-    """
+@task_bp.route('/channels/<int:channel_id>/zones', methods=['POST'])
+def save_channel_zones_by_channel(channel_id: int):
+    """保存通道的Zone配置（通道级）"""
     data = request.json
-    
     if not data:
         return jsonify({'error': '请求数据无效'}), 400
-    
+
     zones_config = data.get('zones', [])
-    
-    if not isinstance(zones_config, list):
-        return jsonify({'error': 'zones字段必须是列表'}), 400
-    
+    ok, err = _validate_zones_config(zones_config)
+    if not ok:
+        return jsonify({'error': err}), 400
+
     task_manager = get_task_manager()
-    
-    # 检查任务是否存在
-    task = task_manager.get_task(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
-    
-    # 验证Zone配置格式
-    for zone in zones_config:
-        if not isinstance(zone, dict):
-            return jsonify({'error': 'Zone配置必须是字典格式'}), 400
-        
-        # 检查必需字段
-        if 'name' not in zone:
-            return jsonify({'error': 'Zone缺少必需字段: name'}), 400
-        if 'polygon' not in zone:
-            return jsonify({'error': f'Zone {zone.get("name", "")} 缺少必需字段: polygon'}), 400
-        
-        # 验证polygon格式
-        polygon = zone['polygon']
-        if not isinstance(polygon, list) or len(polygon) < 3:
-            return jsonify({'error': f'Zone {zone["name"]} 的polygon必须是至少3个点的列表'}), 400
-        
-        for point in polygon:
-            if not isinstance(point, (list, tuple)) or len(point) != 2:
-                return jsonify({'error': f'Zone {zone["name"]} 的polygon点格式错误，应为[x, y]'}), 400
-    
-    # 保存Zone配置
-    success = task_manager.save_channel_zones(task_id, channel_id, zones_config)
-    
+    success = task_manager.save_channel_zones(channel_id, zones_config)
+
     if success:
-        # WebSocket 通知
         if _socketio:
-            _socketio.emit('zones_updated', {'task_id': task_id, 'channel_id': channel_id})
-        
+            _socketio.emit('zones_updated', {'channel_id': channel_id})
         return jsonify({
             'message': 'Zone配置保存成功',
-            'task_id': task_id,
             'channel_id': channel_id,
             'zones_count': len(zones_config)
         })
-    
+
     return jsonify({'error': 'Zone配置保存失败'}), 500
+
+
+@task_bp.route('/channels/<int:channel_id>/zones', methods=['DELETE'])
+def delete_channel_zones_by_channel(channel_id: int):
+    """删除通道的Zone配置（通道级，重置为空）"""
+    task_manager = get_task_manager()
+    success = task_manager.delete_channel_zones(channel_id)
+
+    if success:
+        if _socketio:
+            _socketio.emit('zones_deleted', {'channel_id': channel_id})
+        return jsonify({
+            'message': 'Zone配置已删除',
+            'channel_id': channel_id
+        })
+
+    return jsonify({'error': 'Zone配置删除失败'}), 500
+
+
+# ---------- 兼容路由：保留 task_id 占位（内部忽略，转发到通道级方法） ----------
+
+@task_bp.route('/tasks/<int:task_id>/channels/<int:channel_id>/zones', methods=['GET'])
+def get_channel_zones(task_id: int, channel_id: int):
+    """获取通道的Zone配置（兼容路由，task_id 忽略）"""
+    return get_channel_zones_by_channel(channel_id)
+
+
+@task_bp.route('/tasks/<int:task_id>/channels/<int:channel_id>/zones', methods=['POST'])
+def save_channel_zones(task_id: int, channel_id: int):
+    """保存通道的Zone配置（兼容路由，task_id 忽略）"""
+    return save_channel_zones_by_channel(channel_id)
 
 
 @task_bp.route('/tasks/<int:task_id>/channels/<int:channel_id>/zones', methods=['DELETE'])
 def delete_channel_zones(task_id: int, channel_id: int):
-    """
-    删除通道的Zone配置（重置为空）
-    
-    Args:
-        task_id: 任务ID
-        channel_id: 通道ID（设备通道池ID）
-        
+    """删除通道的Zone配置（兼容路由，task_id 忽略）"""
+    return delete_channel_zones_by_channel(channel_id)
+
+
+# ========================================
+# 通道快照 API（用于 Zone Canvas 编辑器底图）
+# ========================================
+
+@task_bp.route('/channels/<int:channel_id>/snapshot', methods=['GET'])
+def get_channel_snapshot(channel_id: int):
+    """获取通道的摄像机快照（截取一帧用于 Zone 配置画布底图）
+
+    使用 OpenCV VideoCapture 从 RTSP 流截取一帧，编码为 JPEG 返回。
+    包含超时保护（15秒）、打开重试与多帧读取，提升 RTSP 首次连接成功率。
+
+    Query Parameters:
+        max_width: 最大宽度（按比例缩放，默认不缩放）
+        max_height: 最大高度（按比例缩放，默认不缩放）
+
     Returns:
-        删除结果
+        JPEG 图片（Response），响应头包含 X-Snapshot-Width / X-Snapshot-Height
     """
-    task_manager = get_task_manager()
-    
-    # 检查任务是否存在
-    task = task_manager.get_task(task_id)
-    if not task:
-        return jsonify({'error': '任务不存在'}), 404
-    
-    # 删除Zone配置
-    success = task_manager.delete_channel_zones(task_id, channel_id)
-    
-    if success:
-        # WebSocket 通知
-        if _socketio:
-            _socketio.emit('zones_deleted', {'task_id': task_id, 'channel_id': channel_id})
-        
+    import threading
+    import cv2
+    import numpy as np
+    from io import BytesIO
+
+    # 获取通道信息
+    from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager
+    channel_pool_manager = get_device_channel_pool_manager()
+    channel = channel_pool_manager.get_device_channel(channel_id)
+
+    if not channel:
+        return jsonify({'error': '通道不存在'}), 404
+
+    # 获取 RTSP URL（视频文件需要特殊处理）
+    rtsp_url = channel.rtsp_url
+    from src.cameras.camera_manager import get_camera_manager
+    camera_manager = get_camera_manager()
+
+    if channel.camera_id:
+        camera_info = camera_manager.get_camera(channel.camera_id)
+        if camera_info and camera_info.protocol == 'file':
+            source = camera_info.source if hasattr(camera_info, 'source') else ''
+            rtsp_url = source.replace('file://', '') if source.startswith('file://') else source
+
+    if not rtsp_url:
+        return jsonify({'error': '通道未配置视频流地址'}), 400
+
+    # 截取参数：RTSP 首次连接较慢，给予充足超时与重试
+    SNAPSHOT_TIMEOUT = 15.0       # 整体超时（秒）
+    OPEN_RETRY_COUNT = 3          # VideoCapture 打开重试次数
+    OPEN_RETRY_INTERVAL = 1.0     # 重试间隔（秒）
+    READ_FRAME_LIMIT = 10         # 最多读取帧数（丢弃前几帧不稳定画面）
+
+    result = {'frame': None, 'error': None, 'detail': None}
+
+    def _capture():
+        cap = None
+        try:
+            for attempt in range(1, OPEN_RETRY_COUNT + 1):
+                cap = cv2.VideoCapture(rtsp_url)
+                if cap is None or not cap.isOpened():
+                    logger.warning(f"[Snapshot] VideoCapture 打开失败 (尝试 {attempt}/{OPEN_RETRY_COUNT}): {rtsp_url}")
+                    if cap is not None:
+                        cap.release()
+                        cap = None
+                    if attempt < OPEN_RETRY_COUNT:
+                        import time as _time
+                        _time.sleep(OPEN_RETRY_INTERVAL)
+                    continue
+
+                # 减少缓冲，尽快拿到最新帧
+                try:
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
+
+                # 读取多帧，跳过首帧可能的黑帧/损坏帧
+                for i in range(READ_FRAME_LIMIT):
+                    ret, frame = cap.read()
+                    if ret and frame is not None and frame.size > 0:
+                        result['frame'] = frame
+                        return
+                # 本轮打开成功但读不到有效帧
+                logger.warning(f"[Snapshot] 打开成功但读取帧失败 (尝试 {attempt}/{OPEN_RETRY_COUNT})")
+                cap.release()
+                cap = None
+                if attempt < OPEN_RETRY_COUNT:
+                    import time as _time
+                    _time.sleep(OPEN_RETRY_INTERVAL)
+
+            result['error'] = '无法读取视频帧'
+            result['detail'] = f'已重试 {OPEN_RETRY_COUNT} 次，请确认视频流地址可达：{rtsp_url}'
+        except Exception as e:
+            result['error'] = str(e)
+            result['detail'] = 'VideoCapture 异常'
+        finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+
+    thread = threading.Thread(target=_capture, daemon=True)
+    thread.start()
+    thread.join(timeout=SNAPSHOT_TIMEOUT)
+
+    if thread.is_alive():
+        # 超时（线程仍为 daemon，进程退出时自动结束）
+        logger.error(f"[Snapshot] 获取快照超时({SNAPSHOT_TIMEOUT}s): channel_id={channel_id}, url={rtsp_url}")
         return jsonify({
-            'message': 'Zone配置已删除',
-            'task_id': task_id,
-            'channel_id': channel_id
-        })
-    
-    return jsonify({'error': 'Zone配置删除失败'}), 500
+            'error': f'获取快照超时（{int(SNAPSHOT_TIMEOUT)}秒），请检查视频流是否可用',
+            'detail': f'视频流地址: {rtsp_url}'
+        }), 504
+
+    if result['error']:
+        logger.error(f"[Snapshot] 获取快照失败: channel_id={channel_id}, error={result['error']}, detail={result['detail']}, url={rtsp_url}")
+        return jsonify({
+            'error': f'获取快照失败: {result["error"]}',
+            'detail': result['detail'] or '请检查视频流地址是否正确、设备是否在线'
+        }), 500
+
+    frame = result['frame']
+    orig_h, orig_w = frame.shape[:2]
+
+    # 可选缩放
+    max_width = request.args.get('max_width', type=int)
+    max_height = request.args.get('max_height', type=int)
+
+    if max_width and orig_w > max_width:
+        scale = max_width / orig_w
+        frame = cv2.resize(frame, (max_width, int(orig_h * scale)))
+    if max_height and frame.shape[0] > max_height:
+        scale = max_height / frame.shape[0]
+        frame = cv2.resize(frame, (int(frame.shape[1] * scale), max_height))
+
+    out_h, out_w = frame.shape[:2]
+
+    # 编码为 JPEG
+    encode_params = [cv2.IMWRITE_JPEG_QUALITY, 85]
+    _, jpeg_buf = cv2.imencode('.jpg', frame, encode_params)
+
+    response = BytesIO(jpeg_buf.tobytes())
+    resp = send_file(
+        response,
+        mimetype='image/jpeg',
+        as_attachment=False
+    )
+    resp.headers['X-Snapshot-Width'] = str(out_w)
+    resp.headers['X-Snapshot-Height'] = str(out_h)
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return resp
 
 
 # ========================================

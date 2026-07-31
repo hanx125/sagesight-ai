@@ -25,25 +25,6 @@ function safeGetValue(elementId, defaultValue) {
 // 测试所有新增字段是否存在于DOM中
 function testNewFields() {
     const newFields = [
-        // detector_config.preprocessor
-        'detectorPreprocessorWidth',
-        'detectorPreprocessorHeight',
-        'detectorPreprocessorModelInputSize',
-        'detectorPreprocessorRgbMean',
-        'detectorPreprocessorRgbStd',
-
-        // motion_config
-        'motionDetectShadows',
-        'motionBlurSize',
-        'motionMorphSize',
-        'motionLearningRate',
-        'motionHistoryLength',
-        'motionInitThreshold',
-        'motionForegroundThreshold',
-        'motionMaxMotionRegions',
-        'motionShowVisualization',
-        'motionUseForReid',
-
         // display_config.debug_info
         'debugShowFps',
         'debugShowDetectionCount',

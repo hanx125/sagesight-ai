@@ -809,9 +809,7 @@ class VideoDecoder:
                 relative_pts_ns = pts_ns - (self.start_pts_ns or 0)
                 return relative_pts_ns
 
-        # 兜底方案：使用帧序号计算相对时间（但会打印警告）
-        if frame_seq % 100 == 0:
-            print(f"[VideoDecoder] 警告：帧{frame_seq}没有PTS信息，使用帧序号计算")
+        # 兜底方案：使用帧序号计算相对时间
         # 基于帧率和帧序号计算相对时间：timestamp = frame_seq * 1000000000 / fps
         fps = self.config.fps if self.config and hasattr(self.config, 'fps') else 25
         return int(frame_seq * 1_000_000_000 / fps)

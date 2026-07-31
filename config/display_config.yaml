@@ -2,70 +2,85 @@
 # 显示配置文件
 # ========================================
 # 用于控制检测结果的实时显示和 AI 视频流推送
+#
+# 硬件配置：NVIDIA RTX 2070 (8GB) | CUDA 12.9 | Python 3.11 | 32GB RAM
 
 # ========================================
 # 显示窗口配置（cv2.imshow）
 # ========================================
 display:
-  # 是否启用实时显示窗口（调试模式）
-  # 推荐值：false（生产环境），true（调试）
-  # 注意：多进程环境下每个 CameraWorker 都会弹出一个窗口
-  enabled: false
-
-  # 窗口标题
-  window_title: "SageSight AI - Detection Monitor"
-
   # 目标 FPS（显示帧率限制）
-  # 推荐值：15-30（调试），0（不限制）
+  # 说明：限制显示帧率，避免GUI占用过高CPU
+  # 推荐值：
+  #   - 25: 默认推荐值（平衡流畅性和性能）
+  #   - 15: 低性能设备（降低GUI开销）
+  #   - 0: 不限制（不推荐，可能导致GUI占用过高）
   target_fps: 25
 
-  # 是否启用 AI 视频流（通过 WebSocket 推送画框后的帧到前端）
-  # - RTSP流：推荐使用 ZLM 原始流 + WebSocket 检测数据叠加（ai_stream_enabled: false）
-  # - 视频文件：必须启用 AI 视频流（ai_stream_enabled: true），因为视频文件不走 ZLM
-  # 推荐值：true（视频文件），false（RTSP流）
-  # ✅ 已启用：配合优化的帧间隔防止内存溢出
-  ai_stream_enabled: true
-
   # AI 视频流帧间隔（每 N 帧发送一次，降低带宽）
-  # （当 ai_stream_enabled=true 时生效）
-  # ✅ 修复：从1改为10，降低到3fps（避免浏览器卡死）
-  # 原来：每帧都发送（30fps）→ 两个任务60fps → 浏览器主线程阻塞
-  # 现在：每10帧发送一次（3fps）→ 两个任务6fps → 流畅播放
-  ai_stream_interval: 10
+  # 说明：AI 视频流由前端点击 AI 播放按钮按需启用，不再由配置文件控制
+  # 前端调用 /api/ai-stream/enable → 后端开始推送带检测框的 JPEG 帧
+  # 前端调用 /api/ai-stream/disable → 后端停止推送
+  # ⚠️ 带宽和流畅度权衡：
+  #   - interval=1: 推送25fps（最流畅，但带宽高，约 640x480 的 25帧/秒）
+  #   - interval=3: 推送8fps（流畅，推荐）
+  #   - interval=5: 推送5fps（一般）
+  #   - interval=10: 推送2.5fps（太卡，不推荐）
+  ai_stream_interval: 3
 
-  # 显示开关
-  show_detection_boxes: true      # 是否显示检测框
-  show_track_boxes: true          # 是否显示跟踪框
-  show_trajectories: true         # 是否显示轨迹
-  show_motion_regions: true       # 是否显示运动检测区域
+  # ========================================
+  # 显示开关（前端控制）
+  # ========================================
+  # 以下参数控制前端显示的内容（由前端开关控制）
+
+  # 是否显示检测框
+  show_detection_boxes: true
+
+  # 是否显示跟踪框
+  show_track_boxes: true
+
+  # 是否显示轨迹
+  show_trajectories: true
+
+  # 是否显示运动检测区域
+  show_motion_regions: true
+
+  # 是否显示Zone区域（通道级区域检测框）
+  # ⚠️ Zone区域是通道级配置，从通道表读取，不从任务配置读取
+  show_zones: true
 
   # 轨迹历史长度（显示多少帧的轨迹）
+  # 说明：显示端按此长度截取轨迹历史
+  # 推荐值：30（约1秒的轨迹）
   trajectory_history_length: 30
 
 # ========================================
-# 检测框绘制配置
+# 检测框绘制配置（后端绘制参数）
 # ========================================
 detection_box:
   # 边界框颜色（BGR格式）
+  # 说明：OpenCV 使用 BGR 格式（Blue-Green-Red）
   color: [0, 255, 0]  # 绿色
 
-  # 边界框线宽
+  # 边界框线宽（像素）
+  # 推荐值：2（明显但不过粗）
   thickness: 2
 
   # 标签字体大小
+  # 推荐值：0.5（适中大小）
   font_scale: 0.5
 
   # 标签颜色（BGR格式）
   label_color: [0, 255, 0]  # 绿色
 
 # ========================================
-# 跟踪框绘制配置
+# 跟踪框绘制配置（后端绘制参数）
 # ========================================
 track_box:
   # 边界框颜色（BGR格式）
   color: [255, 0, 0]  # 蓝色
 
-  # 边界框线宽
+  # 边界框线宽（像素）
   thickness: 2
 
   # ID标签字体大小
@@ -75,66 +90,76 @@ track_box:
   label_color: [255, 0, 0]  # 蓝色
 
 # ========================================
-# 轨迹绘制配置
+# 轨迹绘制配置（后端绘制参数）
 # ========================================
 trajectory:
   # 轨迹线颜色（BGR格式）
   color: [0, 255, 255]  # 黄色
 
-  # 轨迹线宽度
+  # 轨迹线宽度（像素）
   thickness: 1
 
-  # 轨迹点大小
+  # 轨迹点大小（像素）
   point_size: 2
 
   # 轨迹点颜色（BGR格式）
   point_color: [0, 0, 255]  # 红色
 
 # ========================================
-# 运动检测区域绘制配置（预留）
+# 运动检测区域绘制配置（后端绘制参数）
 # ========================================
 motion_region:
   # 区域边界颜色（BGR格式）
   color: [255, 255, 0]  # 青色
 
-  # 区域边界线宽
+  # 区域边界线宽（像素）
   thickness: 1
 
   # 区域填充颜色（BGR格式，半透明）
   fill_color: [255, 255, 0]  # 青色
 
   # 填充透明度（0-255）
+  # 说明：值越大越不透明
   fill_alpha: 50
 
 # ========================================
-# 调试信息显示配置
+# 性能优化建议
 # ========================================
-debug_info:
-  # 是否显示FPS
-  show_fps: true
-
-  # 是否显示检测数量
-  show_detection_count: true
-
-  # 是否显示跟踪数量
-  show_track_count: true
-
-  # 是否显示帧ID
-  show_frame_id: true
-
-  # FPS显示位置（左上角）
-  fps_position: [10, 30]
-
-  # 信息字体大小
-  font_scale: 0.6
-
-  # 信息颜色（BGR格式）
-  text_color: [255, 255, 255]  # 白色
+# 1. GUI 性能优化：
+#    - 降低 target_fps（如15），减少GUI开销
+#    - 关闭不必要的显示开关（如 show_motion_regions=false）
+#    - 减少轨迹历史长度（如15），降低内存占用
+#
+# 2. AI 视频流优化：
+#    - 增大 ai_stream_interval（如5），降低带宽占用
+#    - AI 视频流由前端点击 AI 播放按钮按需启用，不再由配置文件控制
+#
+# 3. 绘制参数优化：
+#    - 调整字体大小（font_scale），适应不同分辨率
+#    - 调整线宽（thickness），平衡可见性和美观度
 
 # ========================================
-# 说明
+# 典型场景配置示例
 # ========================================
-# 1. 生产环境建议关闭显示窗口（enabled: false），避免 GUI 开销
-# 2. 调试时可以启用显示窗口（enabled: true），实时查看检测结果
-# 3. AI 视频流通过 WebSocket 推送到前端，推荐使用此方式替代 cv2.imshow
-# 4. 所有颜色均为 BGR 格式（OpenCV 标准）
+# 场景1：生产环境（无GUI，仅AI视频流）
+#   display:
+#     target_fps: 0
+#     ai_stream_interval: 3
+#   debug_info:
+#     show_fps: false
+#     show_frame_id: false
+#
+# 场景2：调试环境（开启所有显示）
+#   display:
+#     target_fps: 25
+#     ai_stream_interval: 1
+#   debug_info:
+#     show_fps: true
+#     show_detection_count: true
+#     show_track_count: true
+#     show_frame_id: true
+#
+# 场景3：RTSP流（使用ZLM原始流）
+#   display:
+#     target_fps: 0
+#     show_detection_boxes: true

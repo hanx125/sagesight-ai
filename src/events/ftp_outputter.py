@@ -47,18 +47,23 @@ class FTPOutputter:
                 ftp.mkd(current_dir)
                 ftp.cwd(current_dir)
     
-    def upload(self, event_id: str, image_bytes: bytes) -> str:
+    def upload(self, event_id: str, image_bytes: bytes, content_type: str = 'image/jpeg') -> str:
         """
         上传图片到 FTP 服务器
-        
+
         Args:
-            event_id: 事件 ID
+            event_id: 事件 ID（或文件名，如 "event_123.jpg" 或 "event_456.gif"）
             image_bytes: 图片字节数据
-        
+            content_type: 内容类型（默认 'image/jpeg'，FTP 不使用此参数，仅为接口统一）
+
         Returns:
             FTP 访问路径
         """
-        filename = f"{event_id}.jpg"
+        # 如果 event_id 已包含扩展名，直接使用；否则添加 .jpg
+        if '.' not in event_id:
+            filename = f"{event_id}.jpg"
+        else:
+            filename = event_id
         
         with ftplib.FTP() as ftp:
             # 连接到服务器

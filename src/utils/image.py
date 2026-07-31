@@ -13,8 +13,11 @@
 - 目标检测结果可视化
 """
 
+import ctypes
 import datetime
 import logging
+import os
+import platform
 import subprocess as sp
 import threading
 from abc import ABC, abstractmethod
@@ -28,6 +31,269 @@ import numpy as np
 from unidecode import unidecode
 
 logger = logging.getLogger(__name__)
+
+
+# ========================================
+# RGA 硬件加速支持（RK3588）
+# ========================================
+# RGA（Raster Graphic Acceleration）用于零拷贝 YUV→RGB 转换和缩放
+# 仅在瑞芯微平台（RK3588/RK3566/RK3568）上可用
+_RGA_LIB = None
+_RGA_AVAILABLE = False
+
+
+def _init_rga():
+    """初始化 RGA 硬件加速库（模块加载时自动执行）
+
+    RGA 是 RK3588 平台的硬件加速库，仅在 Linux/aarch64 环境下加载。
+    Windows 和其他平台自动跳过，使用 CPU 预处理。
+    """
+    global _RGA_LIB, _RGA_AVAILABLE
+
+    # 平台检查：RGA 仅在 Linux 上加载，避免 Windows 上加载 .so 文件报错
+    if platform.system() != 'Linux':
+        logger.info(f"[RGA] 当前平台 {platform.system()} 不支持 RGA，使用 CPU 预处理")
+        _RGA_AVAILABLE = False
+        return
+
+    try:
+        # 候选路径：项目内置 libs 目录 + 系统路径
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        lib_candidates = [
+            os.path.join(project_root, 'libs', 'librga', 'Linux', 'aarch64', 'librga.so'),
+            os.path.join(project_root, 'libs', 'librga', 'Linux', 'armhf', 'librga.so'),
+            '/usr/lib/librga.so',
+            '/usr/lib/aarch64-linux-gnu/librga.so',
+        ]
+        for lib_path in lib_candidates:
+            if os.path.exists(lib_path):
+                _RGA_LIB = ctypes.cdll.LoadLibrary(lib_path)
+                _RGA_AVAILABLE = True
+                logger.info(f"[RGA] 成功加载librga.so: {lib_path}")
+                return
+        logger.warning("[RGA] 未找到librga.so，将使用CPU预处理")
+    except Exception as e:
+        logger.error(f"[RGA] 加载librga失败: {e}")
+        _RGA_AVAILABLE = False
+
+
+_init_rga()
+
+
+def is_rga_available() -> bool:
+    """检查 RGA 硬件加速是否可用"""
+    return _RGA_AVAILABLE
+
+
+# ========================================
+# RGA ctypes 结构体定义和 API 绑定
+# ========================================
+# 参照 libs/librga/include/im2d_type.h 和 rga.h
+
+# 格式常量 (rga.h:38-141)
+_RK_FORMAT_RGB_888 = 0x2 << 8       # 0x200
+_RK_FORMAT_BGR_888 = 0x7 << 8       # 0x700
+_RK_FORMAT_YCbCr_420_P = 0xb << 8   # 0xb00 (I420/YUV420p)
+
+# 状态码 (im2d_type.h:250-259)
+_IM_STATUS_SUCCESS = 1
+
+# 颜色空间模式 (im2d_type.h:132-153)
+_IM_YUV_TO_RGB_BT601_LIMIT = 1
+
+
+class _im_rect(ctypes.Structure):
+    """im_rect (im2d_type.h:262-267): 裁剪矩形"""
+    _fields_ = [
+        ("x", ctypes.c_int),
+        ("y", ctypes.c_int),
+        ("width", ctypes.c_int),
+        ("height", ctypes.c_int),
+    ]
+
+
+class _im_colorkey_range(ctypes.Structure):
+    """im_colorkey_range (im2d_type.h:269-272)"""
+    _fields_ = [
+        ("max", ctypes.c_int),
+        ("min", ctypes.c_int),
+    ]
+
+
+class _im_nn_t(ctypes.Structure):
+    """im_nn_t (im2d_type.h:273-282)"""
+    _fields_ = [
+        ("scale_r", ctypes.c_int),
+        ("scale_g", ctypes.c_int),
+        ("scale_b", ctypes.c_int),
+        ("offset_r", ctypes.c_int),
+        ("offset_g", ctypes.c_int),
+        ("offset_b", ctypes.c_int),
+    ]
+
+
+class _rga_buffer_t(ctypes.Structure):
+    """rga_buffer_t (im2d_type.h:285-307): RGA 缓冲区描述符"""
+    _fields_ = [
+        ("vir_addr", ctypes.c_void_p),
+        ("phy_addr", ctypes.c_void_p),
+        ("fd", ctypes.c_int),
+        ("width", ctypes.c_int),
+        ("height", ctypes.c_int),
+        ("wstride", ctypes.c_int),
+        ("hstride", ctypes.c_int),
+        ("format", ctypes.c_int),
+        ("color_space_mode", ctypes.c_int),
+        ("global_alpha", ctypes.c_int),
+        ("rd_mode", ctypes.c_int),
+        ("color", ctypes.c_int),
+        ("colorkey_range", _im_colorkey_range),
+        ("nn", _im_nn_t),
+        ("rop_code", ctypes.c_int),
+        ("handle", ctypes.c_uint32),
+    ]
+
+
+# API 函数绑定（仅当 RGA 库可用时）
+_wrapbuffer_virtualaddr = None
+_improcess = None
+_releasebuffer_handle = None
+
+if _RGA_AVAILABLE:
+    try:
+        _wrapbuffer_virtualaddr = _RGA_LIB.wrapbuffer_virtualaddr_t
+        _wrapbuffer_virtualaddr.restype = _rga_buffer_t
+        _wrapbuffer_virtualaddr.argtypes = [
+            ctypes.c_void_p,  # vir_addr
+            ctypes.c_int,     # width
+            ctypes.c_int,     # height
+            ctypes.c_int,     # wstride
+            ctypes.c_int,     # hstride
+            ctypes.c_int,     # format
+        ]
+
+        # improcess：通用 blit 接口（im2d_single.h:479-480），
+        # 支持同时指定 srect/drect，一步完成裁剪+缩放+颜色转换
+        # 比两步 imcrop_t + imcvtcolor_t 更高效（省去中间缓冲区和两次 RGA 调用）
+        _improcess = _RGA_LIB.improcess
+        _improcess.restype = ctypes.c_int
+        _improcess.argtypes = [
+            _rga_buffer_t,    # src
+            _rga_buffer_t,    # dst
+            _rga_buffer_t,    # pat（不使用时传全零结构体）
+            _im_rect,         # srect（源矩形：裁剪区域）
+            _im_rect,         # drect（目标矩形：输出区域）
+            _im_rect,         # prect（不使用时传全零）
+            ctypes.c_int,     # usage（模式位掩码）
+        ]
+
+        # releasebuffer_handle：释放 wrapbuffer_virtualaddr_t 内部注册的内核资源
+        # librga 1.x 中 wrapbuffer_virtualaddr_t 会调用 importbuffer_virtualaddr，
+        # 必须配对调用 releasebuffer_handle，否则每帧泄漏内核 handle
+        _releasebuffer_handle = _RGA_LIB.releasebuffer_handle
+        _releasebuffer_handle.restype = ctypes.c_int
+        _releasebuffer_handle.argtypes = [ctypes.c_uint32]  # rga_buffer_handle_t
+
+        logger.info("[RGA] im2d API 绑定成功（improcess 单步模式）")
+    except Exception as e:
+        logger.error(f"[RGA] im2d API 绑定失败: {e}")
+        _wrapbuffer_virtualaddr = None
+        _improcess = None
+        _releasebuffer_handle = None
+
+
+def _rga_preprocess_i420(frame, region, output_size=(640, 640), output_format='rgb'):
+    """
+    使用 RGA 硬件加速：I420 裁剪 + 缩放 + RGB/BGR 转换（单步 improcess）
+
+    通过 improcess 通用 blit 接口，一步完成裁剪+缩放+颜色转换，
+    比两步 imcrop_t + imcvtcolor_t 更高效（省去中间缓冲区分配和两次 RGA 调用）。
+
+    Args:
+        frame: 原始 I420 帧 (1.5*H, W) numpy 数组
+        region: (x1, y1, x2, y2) 裁剪区域
+        output_size: (width, height) 输出尺寸
+        output_format: 'rgb' 或 'bgr'
+
+    Returns:
+        RGB/BGR numpy 数组 (output_height, output_width, 3)
+
+    Raises:
+        RuntimeError: RGA API 未绑定或调用失败
+    """
+    if _wrapbuffer_virtualaddr is None or _improcess is None:
+        raise RuntimeError("RGA API 未绑定")
+
+    # 解析原始帧尺寸
+    height = frame.shape[0] // 3 * 2
+    width = frame.shape[1]
+
+    # region 偶数对齐（I420 的 UV 平面 2x2 子采样要求）
+    x1 = (region[0] // 2) * 2
+    y1 = (region[1] // 2) * 2
+    x2 = ((region[2] + 1) // 2) * 2
+    y2 = ((region[3] + 1) // 2) * 2
+    # 限制在帧范围内
+    x1 = max(0, min(x1, width))
+    y1 = max(0, min(y1, height))
+    x2 = max(0, min(x2, width))
+    y2 = max(0, min(y2, height))
+    crop_w = x2 - x1
+    crop_h = y2 - y1
+
+    if crop_w <= 0 or crop_h <= 0:
+        raise ValueError(f"无效的裁剪区域: {region}, 对齐后: ({x1},{y1},{x2},{y2})")
+
+    # 确保内存连续（RGA 需要连续的物理内存）
+    frame = np.ascontiguousarray(frame)
+
+    # 分配输出 RGB/BGR 缓冲区（无需中间 I420 缓冲区）
+    out_w, out_h = output_size
+    output = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+
+    # 选择输出格式
+    if output_format == 'rgb':
+        dst_format = _RK_FORMAT_RGB_888
+    else:
+        dst_format = _RK_FORMAT_BGR_888
+
+    # usage 位掩码：颜色空间转换模式
+    usage = _IM_YUV_TO_RGB_BT601_LIMIT
+
+    # 收集 wrapbuffer_virtualaddr_t 注册的内核 handle，操作结束后统一释放
+    handles = []
+    try:
+        # 包装源和目标缓冲区（仅需 2 个，无中间缓冲区）
+        src_buf = _wrapbuffer_virtualaddr(
+            frame.ctypes.data, width, height, width, height, _RK_FORMAT_YCbCr_420_P
+        )
+        dst_buf = _wrapbuffer_virtualaddr(
+            output.ctypes.data, out_w, out_h, out_w, out_h, dst_format
+        )
+        handles = [src_buf.handle, dst_buf.handle]
+
+        # improcess 一步完成：裁剪 + 缩放 + 颜色转换
+        # srect 指定源图裁剪区域，drect 指定目标输出区域
+        # pat/prect 不使用，传全零结构体
+        srect = _im_rect(x1, y1, crop_w, crop_h)
+        drect = _im_rect(0, 0, out_w, out_h)
+        zero_rect = _im_rect(0, 0, 0, 0)
+        zero_buf = _rga_buffer_t()
+
+        status = _improcess(src_buf, dst_buf, zero_buf, srect, drect, zero_rect, usage)
+        if status != _IM_STATUS_SUCCESS:
+            raise RuntimeError(f"RGA improcess 失败: 错误码 {status}")
+    finally:
+        # 无论成功或失败，都释放内核 handle，避免资源泄漏
+        if _releasebuffer_handle is not None:
+            for h in handles:
+                if h:
+                    try:
+                        _releasebuffer_handle(h)
+                    except Exception:
+                        pass
+
+    return output
 
 
 def transliterate_to_latin(text: str) -> str:
@@ -658,7 +924,13 @@ def yuv_region_2_yuv(frame, region):
 
 def yuv_region_2_rgb(frame, region):
     try:
-        # TODO: does this copy the numpy array?
+        # RGA 硬件加速（优先）
+        if _RGA_AVAILABLE:
+            try:
+                return _rga_preprocess_i420(frame, region, (640, 640), 'rgb')
+            except Exception as e:
+                logger.warning(f"[RGA] RGB预处理失败，回退到CPU: {e}")
+        # CPU 回退
         yuv_cropped_frame = yuv_crop_and_resize(frame, region)
         return cv2.cvtColor(yuv_cropped_frame, cv2.COLOR_YUV2RGB_I420)
     except:
@@ -669,6 +941,13 @@ def yuv_region_2_rgb(frame, region):
 
 def yuv_region_2_bgr(frame, region):
     try:
+        # RGA 硬件加速（优先）
+        if _RGA_AVAILABLE:
+            try:
+                return _rga_preprocess_i420(frame, region, (640, 640), 'bgr')
+            except Exception as e:
+                logger.warning(f"[RGA] BGR预处理失败，回退到CPU: {e}")
+        # CPU 回退
         yuv_cropped_frame = yuv_crop_and_resize(frame, region)
         return cv2.cvtColor(yuv_cropped_frame, cv2.COLOR_YUV2BGR_I420)
     except:

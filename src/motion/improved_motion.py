@@ -241,29 +241,7 @@ class ImprovedMotionDetector:
         findContours_time = (time.time() - t8) * 1000
         self._perf_step_times['findContours'].append(findContours_time)
 
-        # ✅ 调试信息：如果findContours耗时超过100ms，输出详细信息
-        if findContours_time > 100:
-            import logging
-            logger = logging.getLogger('MotionDetector')
-            logger.warning(f"[MotionDetector] findContours耗时异常: {findContours_time:.2f}ms")
-            logger.warning(f"  图像尺寸: {resized_frame.shape}")
-            logger.warning(f"  轮廓总数: {len(contours)}")
-            logger.warning(f"  threshold图像白色像素占比: {np.sum(thresh_dilated > 0) / thresh_dilated.size:.2%}")
-            # 统计轮廓大小分布
-            if len(contours) > 0:
-                contour_areas = [cv2.contourArea(c) for c in contours]
-                logger.warning(f"  轮廓面积范围: {min(contour_areas):.1f} - {max(contour_areas):.1f}")
-                logger.warning(f"  大于100的轮廓数: {sum(1 for a in contour_areas if a > 100)}")
-
-        # ✅ 性能日志：每50帧输出一次详细分析（降低频率以更快看到结果）
-        if self._perf_frame_count % 50 == 0:
-            import logging
-            logger = logging.getLogger('MotionDetector')
-            logger.info(f"[MotionDetector] 运动检测步骤性能分析（最近100帧平均）:")
-            for step, times in self._perf_step_times.items():
-                if len(times) > 0:
-                    avg_time = sum(times[-100:]) / min(100, len(times))
-                    logger.info(f"  {step}: {avg_time:.2f}ms")
+       
 
         # 提取运动区域（新增性能统计）
         t9 = time.time()

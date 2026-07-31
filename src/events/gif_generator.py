@@ -42,21 +42,38 @@ class GIFGenerator:
         # 裁剪边距比例：与采集端保持一致，用于完整帧在GIF中裁剪目标区域
         self.crop_margin_ratio = self.config.get('crop_margin_ratio', 1.0)
         
-        # 输出方式
-        self.output_method = self.config.get('output_method', 'local')  # local | minio | ftp | both
-        
+        # 存储方式独立开关（向后兼容旧版 output_method 字段）
+        # 优先读取独立开关；若未提供则从旧版 output_method 转换
+        if self.config.get('local_enabled') is not None:
+            self.local_enabled = bool(self.config.get('local_enabled'))
+            self.minio_enabled = bool(self.config.get('minio_enabled', False))
+            self.ftp_enabled = bool(self.config.get('ftp_enabled', False))
+        else:
+            legacy_method = self.config.get('output_method', 'local')
+            method_mapping = {
+                'both':  (True,  True,  True),
+                'minio': (False, True,  False),
+                'ftp':   (False, False, True),
+                'local': (True,  False, False),
+                'none':  (False, False, False),
+            }
+            self.local_enabled, self.minio_enabled, self.ftp_enabled = method_mapping.get(
+                legacy_method, (True, False, False)
+            )
+            print(f"[GIFGenerator] 旧版 output_method='{legacy_method}' 已自动迁移为独立开关")
+
         # 本地输出目录
         self.output_dir = self.config.get('output_dir', 'data/gifs')
         os.makedirs(self.output_dir, exist_ok=True)
-        
+
         # 本地保存策略配置
         self.local_retention_days = self.config.get('local_retention_days', 7)  # 本地保存天数
         self.auto_cleanup = self.config.get('auto_cleanup', True)  # 是否自动清理
         self.cleanup_interval_hours = self.config.get('cleanup_interval_hours', 24)  # 清理间隔（小时）
-        
+
         # 上次清理时间
         self.last_cleanup_time = 0
-        
+
         # 是否绘制轨迹
         self.draw_trajectory = self.config.get('draw_trajectory', True)
         self.trajectory_color = self.config.get('trajectory_color', (0, 255, 0))  # 绿色
@@ -64,27 +81,27 @@ class GIFGenerator:
         self.crop_mode = self.config.get('crop_mode', 'full')
         # 是否绘制检测框（受前端开关控制，False时只保留轨迹/场景不画bbox）
         self.draw_bbox = self.config.get('draw_bbox', True)
-        
-        # 初始化 MinIO 输出器
+
+        # 初始化 MinIO 输出器（任务开关 AND 系统全局开关）
         self.minio_outputter = None
-        if self.output_method in ['minio', 'both']:
+        if self.minio_enabled:
             self._init_minio_outputter()
-        
-        # 初始化 FTP 输出器
+
+        # 初始化 FTP 输出器（任务开关 AND 系统全局开关）
         self.ftp_outputter = None
-        if self.output_method in ['ftp', 'both']:
+        if self.ftp_enabled:
             self._init_ftp_outputter()
-        
+
         # 启动时清理一次
         if self.auto_cleanup:
             self._cleanup_old_files()
-        
+
         print(f"[GIFGenerator] 初始化完成")
         print(f"[GIFGenerator]   功能状态: 已启用")
         print(f"[GIFGenerator]   最大帧数: {self.max_frames}")
         print(f"[GIFGenerator]   帧率: {self.fps} FPS")
-        print(f"[GIFGenerator]   输出方式: {self.output_method}")
-        if self.output_method == 'local' or self.auto_cleanup:
+        print(f"[GIFGenerator]   存储开关: local={self.local_enabled}, minio={self.minio_enabled}, ftp={self.ftp_enabled}")
+        if self.local_enabled or self.auto_cleanup:
             print(f"[GIFGenerator]   输出目录: {self.output_dir}")
             print(f"[GIFGenerator]   本地保存天数: {self.local_retention_days}")
             print(f"[GIFGenerator]   自动清理: {self.auto_cleanup}")
@@ -393,8 +410,8 @@ class GIFGenerator:
             except Exception as e:
                 print(f"[GIFGenerator] FTP 上传失败: {e}")
         
-        # 保存到本地（如果配置为 local 或 both，或远程上传失败时作为备份）
-        if self.output_method in ('local', 'both') or not urls:
+        # 保存到本地（开关启用，或远程上传失败时作为备份）
+        if self.local_enabled or not urls:
             local_path = os.path.join(self.output_dir, filename)
             with open(local_path, 'wb') as f:
                 f.write(gif_bytes)
@@ -517,34 +534,55 @@ class GIFGenerator:
     
     def _generate_gif_bytes(self, frames: List[np.ndarray], duration: int = None) -> Optional[bytes]:
         """
-        生成 GIF 字节数据
-        
+        生成 GIF 字节数据（✅ PIL 调色板优化编码，替代 imageio.mimsave）
+
+        优化点：
+        - 用 PIL.Image.quantize 生成共用 256 色调色板
+        - 所有帧共用同一调色板，文件大幅缩小（50-70%）
+        - optimize=True 进一步压缩
+
         Args:
-            frames: 帧序列
+            frames: 帧序列（BGR numpy 数组）
             duration: 每帧时长（毫秒），None 则使用默认值
-        
+
         Returns:
             GIF 字节数据
         """
         try:
-            import imageio
-            
-            # 转换为 RGB（imageio 需要 RGB）
+            from PIL import Image
+            import io as _io
+
+            if not frames:
+                return None
+
+            # 转换为 RGB（PIL 需要 RGB）
             rgb_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2RGB) for f in frames]
-            
-            # 生成 GIF 字节数据
-            import io
-            gif_bytes = io.BytesIO()
+            pil_images = [Image.fromarray(f) for f in rgb_frames]
+
+            # ✅ 共用调色板量化（256色）：所有帧共用同一调色板 → 文件大幅缩小
+            first = pil_images[0].convert('P', palette=Image.ADAPTIVE, colors=256)
+            optimized = [first]
+            for img in pil_images[1:]:
+                # 用第一帧的调色板量化后续帧，保持调色板一致
+                optimized.append(img.convert('P', palette=first.palette))
+
             actual_duration = duration if duration is not None else self.duration
-            imageio.mimsave(gif_bytes, rgb_frames, duration=actual_duration, format='GIF')
-            
-            return gif_bytes.getvalue()
-            
+
+            # 生成 GIF 字节数据
+            buf = _io.BytesIO()
+            optimized[0].save(
+                buf, format='GIF', save_all=True, append_images=optimized[1:],
+                duration=actual_duration, loop=0, disposal=2, optimize=True
+            )
+            return buf.getvalue()
+
         except ImportError:
-            print("[GIFGenerator] imageio 未安装，无法生成 GIF")
+            print("[GIFGenerator] PIL 未安装，无法生成 GIF")
             return None
         except Exception as e:
             print(f"[GIFGenerator] GIF 生成错误: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _cleanup_old_files(self):

@@ -14,7 +14,7 @@ monitoring:
   data_path: logs/monitoring
 database:
   type: sqlite
-  path: data/sagesight.db
+  path: data/tasks.db
   pool_enabled: false
   pool_size: 5
 web_server:
@@ -47,28 +47,28 @@ hardware:
     gpu_mem_limit: 6442450944
 storage:
   minio:
-    enabled: false  # 禁用 MinIO（避免连接超时阻塞启动）
+    enabled: true
     endpoint: 192.168.5.40:9000
     access_key: minioadmin
     secret_key: minioadmin
     secure: false
     presigned_expires: 3600
   ftp:
-    enabled: false
+    enabled: true
     host: 192.168.5.2
     port: 21
     username: admin
     password: admin123
     passive_mode: true
 mqtt:
-  enabled: false
+  enabled: true
   config:
     broker: mqtt://localhost:1883
     topic: sagesight/events
     qos: 1
     retain: false
 websocket:
-  enabled: false
+  enabled: true
   config:
     host: 0.0.0.0
     port: 8765

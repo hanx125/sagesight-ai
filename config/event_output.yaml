@@ -1,139 +1,237 @@
 # ========================================
 # 事件输出配置文件
 # ========================================
-# 用于配置检测事件的输出方式，支持双通道架构：
-# - MQTT：完整事件数据给其他平台订阅（系统配置）
-# - WebSocket：实时绘制数据给前端（系统配置）
-# - Storage：MinIO和FTP存储（系统配置）
+# 用于配置检测事件的输出方式，支持多通道架构：
+# - 本地存储：事件图片和GIF保存到本地
+# - MinIO对象存储：分布式存储，支持云端备份
+# - FTP文件传输：传统FTP服务器存储
+# - MQTT消息推送：事件数据推送到MQTT Broker
 #
-# 注意：
-# - enabled、camera_id是任务表的单独字段，不从配置文件读取
-# - storage、mqtt、websocket属于系统配置，从system_config.yaml读取
-# - 此文件仅包含任务级配置（image_output、compression、gif、filter等）
 
 # ========================================
-# 全局配置
+# 全局配置说明
 # ========================================
+# ⚠️ 注意：以下参数由任务表提供，不从配置文件读取：
+# - enabled: 任务表的 event_enabled 字段
+# - camera_id: 任务表的 camera 字段
+# - task_id: 任务表的 task_id 字段
+# - algorithm: 任务表的 algorithm 字段
+# - save_to_db: 任务表的 save_to_db 字段
+#
+# ⚠️ 注意：以下参数由系统配置提供，不从配置文件读取：
+# - mqtt: 系统配置 system_config.yaml 的 mqtt 段
+# - storage: 系统配置 system_config.yaml 的 storage 段
+# - web_server: 系统配置 system_config.yaml 的 web_server 段
 
 event_output:
-  # 注意：enabled是任务表的单独字段（event_enabled），不从配置文件读取
-  # 注意：camera_id是任务表的camera字段，不从配置文件读取（每个摄像头ID不同）
-  
-  # 注意：storage、mqtt、websocket属于系统配置，从system_config.yaml读取
-  # 这些配置不在event_config中保存
-
   # ========================================
-  # 元数据配置（固定）
-  # ========================================
-  metadata: {}
-
-  # ========================================
-  # 图片输出配置
+  # 图片输出配置（任务级配置）
   # ========================================
   image_output:
-    # 输出方式：minio, ftp, both, none
-    method: both
-    
-    # MinIO 存储桶（使用全局 storage.minio 配置）
+    # 存储方式独立开关（打开哪个就存储哪个）
+    # ⚠️ 实际存储行为 = 任务开关 AND 系统全局开关
+    # 例如：local_enabled=true 且 system_config.yaml 的 storage.local.enabled=true 才会存储
+
+    # 本地存储开关
+    # 说明：保存到本地文件系统（output/images 目录）
+    local_enabled: true
+
+    # MinIO存储开关
+    # 说明：保存到MinIO对象存储（需要 system_config.yaml 的 storage.minio.enabled=true）
+    minio_enabled: true
+
+    # FTP存储开关
+    # 说明：保存到FTP服务器（需要 system_config.yaml 的 storage.ftp.enabled=true）
+    ftp_enabled: false
+
+    # MinIO 存储桶名称
+    # 说明：使用全局 storage.minio 配置的连接信息
     minio_bucket: "sagesight-images"
-    
-    # FTP 远程目录（使用全局 storage.ftp 配置）
+
+    # FTP 远程目录
+    # 说明：使用全局 storage.ftp 配置的连接信息
     ftp_remote_dir: "/sagesight/images"
-    
-    # 本地保存配置（可选）
-    local_backup: true            # ✅ 启用本地备份（上传失败时自动保存）
-    output_dir: "output/images"   # ✅ 修改为output目录
-    local_retention_days: 7       # 本地保存天数（默认7天）
-    auto_cleanup: true            # 是否自动清理过期文件
-    cleanup_interval_hours: 24    # 清理间隔（小时）
-    # 是否在事件图片上绘制检测框（前端开关控制）
+
+    # 本地保存配置
+    output_dir: "output/images"       # 本地保存目录（默认 output/images）
+    local_retention_days: 7           # 本地保存天数（默认7天）
+    auto_cleanup: true                # 是否自动清理过期文件
+    cleanup_interval_hours: 24        # 清理间隔（小时，默认24小时）
+
+    # 是否在事件图片上绘制检测框
+    # 说明：由前端开关控制（display_config.yaml 的 show_detection_boxes）
     draw_bbox: true
-  
+
   # ========================================
-  # 图片压缩配置
+  # 图片压缩配置（任务级配置）
   # ========================================
   compression:
+    # 是否启用图片压缩
     enabled: true
-    quality: 80          # JPEG 质量 (0-100)
-    max_width: 640       # 最大宽度
-    max_height: 480      # 最大高度
-  
+
+    # JPEG 质量（0-100）
+    # 推荐值：80（平衡质量和大小）
+    quality: 80
+
+    # 最大宽度（像素）
+    # 说明：图片宽度超过此值会缩放
+    max_width: 640
+
+    # 最大高度（像素）
+    # 说明：图片高度超过此值会缩放
+    max_height: 480
+
   # ========================================
-  # GIF 动画配置
+  # GIF 动画配置（任务级配置）
   # ========================================
   gif:
-    # GIF 功能开关（总开关，优先级最高）
-    enabled: false                # true=启用GIF生成，false=禁用GIF生成
-    
-    # 输出方式：local | minio | ftp | both | none
-    output_method: both           # ✅ 修改为both（同时保存本地和上传MinIO）
+    # GIF 功能总开关（优先级最高）
+    # - true: 启用GIF生成（需要帧缓存和足够的计算资源）
+    # - false: 禁用GIF生成（节省CPU和内存）
+    enabled: true
 
-    # 本地保存配置（仅当 output_method 为 local 或 both 时使用）
-    output_dir: "output/gifs"     # ✅ 修改为output目录
-    local_retention_days: 7       # 本地保留天数（默认7天）
-    auto_cleanup: true            # 是否自动清理过期文件
-    cleanup_interval_hours: 24    # 清理间隔（小时）
+    # 存储方式独立开关
+    # ⚠️ 实际存储行为 = 任务开关 AND 系统全局开关
+    local_enabled: true               # 本地存储开关
+    minio_enabled: true               # MinIO存储开关（需要 system_config.yaml 的 storage.minio.enabled=true）
+    ftp_enabled: false                # FTP存储开关（需要 system_config.yaml 的 storage.ftp.enabled=true）
+
+    # 本地保存配置
+    output_dir: "output/gifs"         # 本地保存目录（默认 output/gifs）
+    local_retention_days: 7           # 本地保留天数（默认7天）
+    auto_cleanup: true                # 是否自动清理过期文件
+    cleanup_interval_hours: 24        # 清理间隔（小时，默认24小时）
 
     # GIF 参数
-    max_frames: 60                # 最大帧数（增加到60，覆盖更长时间跨度）
-    fps: 10                       # GIF 播放帧率（提高到10，配合时长计算）
-    max_width: 320                # 最大宽度
-    max_height: 240               # 最大高度
-    draw_trajectory: true         # 是否绘制轨迹
-    trajectory_color: [0, 255, 0] # 轨迹颜色（BGR格式，绿色）
-    # 是否在GIF帧上绘制检测框（前端开关控制）
-    draw_bbox: true
+    max_frames: 20                    # 最大帧数（20帧足够展示轨迹，降低CPU和文件大小）
+    fps: 8                            # GIF 播放帧率（8fps平衡流畅度和文件大小）
+    max_width: 240                    # 最大宽度（像素，GIF预览用，无需高分辨率）
+    max_height: 180                   # 最大高度（像素）
+    draw_trajectory: true             # 是否绘制轨迹
+    trajectory_color: [0, 255, 0]     # 轨迹颜色（BGR格式，绿色）
+    draw_bbox: true                   # 是否在GIF帧上绘制检测框
 
     # GIF 生成模式（基于帧缓存）
-    # crop_mode: 裁剪模式 - 'full' 全场景帧（不裁剪，bbox直接画在完整画面上）
-    #                    - 'target' 裁剪目标区域（旧逻辑，裁剪到目标附近）
+    # crop_mode: 裁剪模式
+    #   - 'full': 全场景帧（不裁剪，bbox直接画在完整画面上）
+    #   - 'target': 裁剪目标区域（旧逻辑，裁剪到目标附近）
     crop_mode: full
-    # pre_seconds: 事件起始前多少秒的帧纳入GIF（需 <= cache_retention）
-    pre_seconds: 5.0
-    # post_seconds: 事件结束后多少秒的帧纳入GIF（目标消失后等待此时间再生成）
-    post_seconds: 5.0
-    # 帧缓存配置（用于GIF原始帧回放）
-    cache_fps: 10                 # 缓存采样率（帧/秒）
-    cache_retention: 20.0         # 缓存保留秒数（需 >= pre_seconds + 最长事件时长 + post_seconds）
 
-    # MinIO 存储桶（使用全局 storage.minio 配置）
+    # 时间窗口配置（秒）
+    pre_seconds: 5.0                  # 事件起始前多少秒的帧纳入GIF
+    post_seconds: 5.0                 # 事件结束后多少秒的帧纳入GIF
+
+    # 帧缓存配置（用于GIF原始帧回放）
+    cache_fps: 5                      # 缓存采样率（帧/秒，5fps足够生成GIF，降低内存压力）
+    cache_retention: 10.0             # 缓存保留秒数（pre+post=10s，缓存10s足够）
+
+    # MinIO 存储桶名称
     minio_bucket: "sagesight-gifs"
 
-    # FTP 远程目录（使用全局 storage.ftp 配置）
+    # FTP 远程目录
     ftp_remote_dir: "/gifs"
-  
+
   # ========================================
-  # 轨迹配置（固定）
-  # ========================================
-  trajectory: {}
-  
-  # ========================================
-  # 截图配置（固定）
-  # ========================================
-  # ========================================
-  # 关键帧采集配置
+  # 关键帧采集配置（任务级配置）
   # ========================================
   capture:
-    # 采集策略：full（完整帧）| cropped（裁剪帧）| keyframe（关键帧）| periodic（周期采集）
+    # 采集策略
+    # - full: 完整帧（保存原始分辨率）
+    # - cropped: 裁剪帧（裁剪到目标区域）
+    # - keyframe: 关键帧（根据变化阈值判断）
+    # - periodic: 周期采集（每 N 帧采集一帧）
     strategy: periodic
+
     # 周期采集间隔（每 N 帧采集一帧，越小采集越密集）
     interval: 5
-    # 变化阈值（像素，用于关键帧策略判断）
+
+    # 变化阈值（像素，用于 keyframe 策略判断）
     change_threshold: 50
+
     # 首次出现时保存完整帧
     save_full_on_start: true
+
     # 目标消失时保存完整帧
     save_full_on_end: true
+
     # 裁剪边距比例：在 bbox 各方向扩展 bbox 尺寸的比例
-    # 0.5=扩展50%（裁剪范围=bbox的2倍），1.0=扩展100%（裁剪范围=bbox的3倍）
-    # 值越大，裁剪画面范围越大，目标占比越小，保留更多上下文，避免过度放大导致模糊
+    # - 0.5: 扩展50%（裁剪范围=bbox的2倍）
+    # - 1.0: 扩展100%（裁剪范围=bbox的3倍，推荐）
     crop_margin_ratio: 1.0
-  
+
   # ========================================
-  # 事件过滤配置
+  # 事件过滤配置（任务级配置）
   # ========================================
   filter:
     # 只发送特定类别的事件（空列表表示全部）
+    # 例如：['person', 'car', 'truck']
     target_classes: ['person', 'car']
+
     # 只发送置信度高于此值的事件
+    # 推荐值：0.3（过滤低置信度误检）
     min_confidence: 0.3
+
+  # ========================================
+  # 轨迹配置（固定，不可配置）
+  # ========================================
+  trajectory: {}
+
+  # ========================================
+  # 截图配置（固定，不可配置）
+  # ========================================
+
+# ========================================
+# 性能优化建议
+# ========================================
+# 1. 存储优化：
+#    - 仅启用必要的存储方式（如仅 local_enabled=true）
+#    - 设置合理的 local_retention_days（如7天），避免磁盘占满
+#    - 启用 auto_cleanup 自动清理过期文件
+#
+# 2. GIF 生成优化：
+#    - 谨慎启用 GIF 功能（CPU占用高）
+#    - 调整 max_frames（如30），减少帧数和文件大小
+#    - 降低 fps（如5），减少GIF大小
+#    - 设置合理的 cache_retention（如20秒），避免内存占用过高
+#
+# 3. 图片压缩优化：
+#    - 启用图片压缩（compression.enabled=true）
+#    - 设置合理的 quality（如80），平衡质量和大小
+#    - 限制 max_width/max_height（如640x480），减少文件大小
+
+# ========================================
+# 典型场景配置示例
+# ========================================
+# 场景1：本地存储（单机部署）
+#   image_output:
+#     local_enabled: true
+#     minio_enabled: false
+#     ftp_enabled: false
+#     local_retention_days: 7
+#   gif:
+#     enabled: false
+#
+# 场景2：分布式存储（云部署）
+#   image_output:
+#     local_enabled: false
+#     minio_enabled: true
+#     ftp_enabled: false
+#   gif:
+#     enabled: true
+#     minio_enabled: true
+#     max_frames: 30
+#     fps: 5
+#
+# 场景3：高精度存储（详细记录）
+#   image_output:
+#     local_enabled: true
+#     minio_enabled: true
+#     local_retention_days: 30
+#   compression:
+#     quality: 95
+#     max_width: 1280
+#     max_height: 720
+#   gif:
+#     enabled: true
+#     max_frames: 120
+#     fps: 15

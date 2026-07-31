@@ -4,44 +4,6 @@
 
 {% block content %}
 <div class="page-container">
-    <!-- 筛选区域 -->
-    <div class="filter-section">
-        <div class="filter-left">
-            <div class="filter-group">
-                <label>类型：</label>
-                <select id="filterType" onchange="loadAlgorithms()">
-                    <option value="">全部</option>
-                    <option value="detection">检测</option>
-                    <option value="tracking">跟踪</option>
-                    <option value="recognition">识别</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label>状态：</label>
-                <select id="filterStatus" onchange="loadAlgorithms()">
-                    <option value="">全部</option>
-                    <option value="active">可用</option>
-                    <option value="inactive">不可用</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label>搜索：</label>
-                <input type="text" id="filterSearch" placeholder="搜索算法名称..." oninput="loadAlgorithms()">
-            </div>
-            <div class="filter-actions">
-                <button class="btn btn-secondary" onclick="resetFilters()">重置</button>
-            </div>
-        </div>
-        <div class="filter-right">
-            <button class="btn btn-primary" onclick="openCreateModal()">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-                </svg>
-                添加算法
-            </button>
-        </div>
-    </div>
-
     <!-- 统计卡片 -->
     <div class="stats-cards">
         <div class="stat-card">
@@ -88,6 +50,23 @@
                 <div class="stat-label">模型文件</div>
             </div>
         </div>
+    </div>
+
+    <!-- 筛选工具栏（隐藏，避免影响页面布局） -->
+    <div style="display: none;">
+        <select id="filterType">
+            <option value="">全部类型</option>
+            <option value="detection">目标检测</option>
+            <option value="tracking">目标跟踪</option>
+            <option value="recognition">目标识别</option>
+            <option value="segmentation">图像分割</option>
+        </select>
+        <select id="filterStatus">
+            <option value="">全部状态</option>
+            <option value="active">可用</option>
+            <option value="inactive">不可用</option>
+        </select>
+        <input type="text" id="filterSearch" placeholder="搜索算法...">
     </div>
 
     <!-- 算法列表 -->

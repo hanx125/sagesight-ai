@@ -101,21 +101,17 @@ def get_default_decoder_config() -> Dict:
 
 
 def get_default_detector_config() -> Dict:
-    """获取默认检测器配置（从配置文件读取）"""
+    """获取默认检测器配置（从配置文件读取）
+
+    预处理（NV12→RGB→Resize）由 region_utils.create_tensor_input 在检测器进程内完成，
+    不再需要独立的 preprocessor 配置段。模型输入尺寸（input_width/input_height）由算法库提供，
+    此处仅作为算法库未提供时的兜底默认值。
+    """
     config = load_yaml_config(DETECTOR_CONFIG_PATH)
 
-    # 合并 preprocessor 和 detector 配置
-    preprocessor_config = config.get('preprocessor', {})
     detector_config = config.get('detector', {})
 
     default_config = {
-        # 预处理器配置
-        'width': preprocessor_config.get('width', 640),
-        'height': preprocessor_config.get('height', 640),
-        'model_input_size': preprocessor_config.get('model_input_size', 640),
-        'rgb_mean': preprocessor_config.get('rgb_mean', [0.0, 0.0, 0.0]),
-        'rgb_std': preprocessor_config.get('rgb_std', [1.0, 1.0, 1.0]),
-
         # 检测器配置
         'backend': detector_config.get('backend', 'onnx_tensorrt'),
         'use_fp16': detector_config.get('use_fp16', True),
@@ -130,44 +126,36 @@ def get_default_detector_config() -> Dict:
         'gpu_mem_limit': detector_config.get('gpu_mem_limit', 6442450944)
     }
 
-    # 注意：target_classes是任务表的单独字段，不从配置文件读取
+    # 注意：target_classes 是任务表的单独字段，不从配置文件读取
 
     return default_config
 
 
 def get_default_tracker_config() -> Dict:
-    """获取默认跟踪器配置（从配置文件读取）"""
+    """获取默认跟踪器配置（从配置文件读取，Norfair 架构）"""
     config = load_yaml_config(TRACKER_CONFIG_PATH)
 
-    # 注意：enabled是任务表的单独字段（tracking_enabled），不从配置文件读取
+    # 注意：enabled 是任务表的单独字段（tracking_enabled），不从配置文件读取
 
     # 获取 tracker_type 和 debug_print_interval
-    tracker_type = config.get('tracker_type', 'botsort')
+    tracker_type = config.get('tracker_type', 'norfair')
     debug_print_interval = config.get('debug_print_interval', 0)
 
-    # 获取 botsort 配置
-    botsort_config = config.get('botsort', {})
+    # 获取 norfair 配置
+    norfair_config = config.get('norfair', {})
 
     default_config = {
-        # 注意：不包含enabled字段（enabled是任务表的单独字段tracking_enabled）
+        # 注意：不包含 enabled 字段（enabled 是任务表的单独字段 tracking_enabled）
         'tracker_type': tracker_type,
 
-        # ✅ 添加调试打印间隔配置
+        # 调试打印间隔配置
         'debug_print_interval': debug_print_interval,
 
-        # botsort配置
-        'track_thresh': botsort_config.get('track_thresh', 0.30),
-        'low_score_thresh': botsort_config.get('low_score_thresh', 0.10),
-        'match_thresh': botsort_config.get('match_thresh', 0.50),
-        'max_age': botsort_config.get('max_age', 45),
-        'n_init': botsort_config.get('n_init', 2),
-        'max_history_length': botsort_config.get('max_history_length', 30),
-        'use_reid': botsort_config.get('use_reid', False),
-        'reid_model_type': botsort_config.get('reid_model_type', 'none'),
-        'reid_model_path': botsort_config.get('reid_model_path', ''),
-        'reid_thresh': botsort_config.get('reid_thresh', 0.3),
-        'device': botsort_config.get('device', 'cpu'),
-        'half': botsort_config.get('half', False)
+        # Norfair 核心配置
+        # n_init: 新轨迹确认帧数（映射到 NorfairTracker.min_initialized）
+        # max_age: 最大丢失帧数（映射到 NorfairTracker.max_disappeared）
+        'n_init': norfair_config.get('n_init', 3),
+        'max_age': norfair_config.get('max_age', 30),
     }
 
     return default_config
@@ -180,34 +168,19 @@ def get_default_motion_config() -> Dict:
     # 注意：enabled是任务表的单独字段（motion_enabled），不从配置文件读取
 
     # motion_config.yaml 的结构是顶层直接有字段，没有 'motion' 顶层键
-    # 需要读取 fusion 子配置
-    fusion_config = config.get('fusion', {})
-
+    # 参数与 ImprovedMotionDetector（帧差法）的构造参数一一对应
     default_config = {
-        # 注意：不包含enabled字段（enabled是任务表的单独字段motion_enabled）
+        # 注意：不包含 enabled 字段（enabled 是任务表的单独字段 motion_enabled）
 
-        # 核心参数
-        'history': config.get('history', 500),
-        'var_threshold': config.get('var_threshold', 16.0),
-        'detect_shadows': config.get('detect_shadows', False),
-        'min_area': config.get('min_area', 500),
-        'blur_size': config.get('blur_size', 5),
-        'morph_size': config.get('morph_size', 5),
-        'learning_rate': config.get('learning_rate', -1),
-        'motion_history_length': config.get('motion_history_length', 10),
-        'init_threshold': config.get('init_threshold', 30),
-        'foreground_threshold': config.get('foreground_threshold', 0.3),
-        'max_motion_regions': config.get('max_motion_regions', 20),
-
-        # ✅ 添加可视化配置（固定，不从前端读取）
-        'show_visualization': config.get('show_visualization', False),
-
-        # 融合策略配置
-        'confidence_boost': fusion_config.get('confidence_boost', 0.15),
-        'confidence_penalty': fusion_config.get('confidence_penalty', 0.05),
-
-        # ✅ 添加ReID配置（固定，不从前端读取）
-        'use_for_reid': fusion_config.get('use_for_reid', True)
+        # 核心参数（与 ImprovedMotionDetector 构造参数对齐）
+        'motion_height': config.get('motion_height', 180),         # 运动检测分辨率（降采样高度）
+        'threshold': config.get('threshold', 25),                   # 运动阈值（0-255）
+        'contour_area': config.get('contour_area', 200),            # 最小轮廓面积（像素）
+        'improve_contrast': config.get('improve_contrast', False),  # 是否增强对比度（适应光照变化）
+        'blur_radius': config.get('blur_radius', 1),                # 高斯滤波半径（降噪）
+        'frame_alpha': config.get('frame_alpha', 0.01),             # 背景更新速率（0-1）
+        'contrast_frame_history': config.get('contrast_frame_history', 50),  # 对比度历史帧数
+        'lightning_threshold': config.get('lightning_threshold', 0.8),       # 闪电检测阈值（重新校准）
     }
 
     return default_config
@@ -252,6 +225,95 @@ def get_default_event_config() -> Dict:
     }
 
     return default_config
+
+
+def _normalize_storage_switches(cfg: Dict, defaults: Dict[str, bool]) -> Dict[str, bool]:
+    """将旧版存储模式字段归一化为独立开关
+
+    优先级：独立开关字段 > 旧版 method/output_method > 旧版 local_backup > 默认值
+
+    Args:
+        cfg: image_output 或 gif 配置字典
+        defaults: 默认开关 {'local': bool, 'minio': bool, 'ftp': bool}
+
+    Returns:
+        归一化后的开关 {'local': bool, 'minio': bool, 'ftp': bool}
+    """
+    result = dict(defaults)
+
+    if not cfg:
+        return result
+
+    # 1. 优先读取独立开关字段
+    if cfg.get('local_enabled') is not None:
+        result['local'] = bool(cfg.get('local_enabled'))
+    if cfg.get('minio_enabled') is not None:
+        result['minio'] = bool(cfg.get('minio_enabled'))
+    if cfg.get('ftp_enabled') is not None:
+        result['ftp'] = bool(cfg.get('ftp_enabled'))
+
+    # 2. 向后兼容：旧版 method / output_method 字段
+    legacy_method = cfg.get('method') or cfg.get('output_method')
+    if legacy_method is not None and cfg.get('local_enabled') is None:
+        mapping = {
+            'both':  (True,  True,  True),
+            'minio': (False, True,  False),
+            'ftp':   (False, False, True),
+            'local': (True,  False, False),
+            'none':  (False, False, False),
+        }
+        result['local'], result['minio'], result['ftp'] = mapping.get(legacy_method, (True, True, True))
+
+    # 3. 向后兼容：旧版 local_backup 字段（仅图片输出使用）
+    if cfg.get('local_backup') is not None and cfg.get('local_enabled') is None and legacy_method is None:
+        result['local'] = bool(cfg.get('local_backup'))
+
+    return result
+
+
+def normalize_event_config_storage(event_config: Dict) -> Dict:
+    """归一化事件配置中的存储开关字段
+
+    将旧版 method / output_method / local_backup 字段转换为独立开关
+    （local_enabled / minio_enabled / ftp_enabled），并清理旧版字段，
+    确保配置格式统一。返回深拷贝，不修改原配置。
+
+    Args:
+        event_config: 原始事件配置字典
+
+    Returns:
+        归一化后的事件配置字典
+    """
+    if not event_config:
+        return event_config
+
+    # 深拷贝，避免修改原对象
+    result = json.loads(json.dumps(event_config))
+
+    # 处理 image_output 段
+    image_output = result.get('image_output', {})
+    if image_output:
+        switches = _normalize_storage_switches(image_output, {'local': True, 'minio': False, 'ftp': False})
+        image_output['local_enabled'] = switches['local']
+        image_output['minio_enabled'] = switches['minio']
+        image_output['ftp_enabled'] = switches['ftp']
+        # 清理旧版字段
+        image_output.pop('method', None)
+        image_output.pop('local_backup', None)
+        result['image_output'] = image_output
+
+    # 处理 gif 段
+    gif = result.get('gif', {})
+    if gif:
+        switches = _normalize_storage_switches(gif, {'local': True, 'minio': False, 'ftp': False})
+        gif['local_enabled'] = switches['local']
+        gif['minio_enabled'] = switches['minio']
+        gif['ftp_enabled'] = switches['ftp']
+        # 清理旧版字段
+        gif.pop('output_method', None)
+        result['gif'] = gif
+
+    return result
 
 
 def get_default_display_config() -> Dict:
@@ -392,9 +454,6 @@ class DetectionTask:
     # 显示配置（JSON）- 测试工具专用，任务配置中使用空字典
     display_config: Dict = field(default_factory=dict)
 
-    # Zone区域配置（JSON）- 任务级别默认配置
-    zones_config: List[Dict] = field(default_factory=list)
-
     # 时间戳
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -426,9 +485,8 @@ class DetectionTask:
             'detector_config': self.detector_config,
             'tracker_config': self.tracker_config,
             'motion_config': self.motion_config,
-            'event_config': self.event_config,
+            'event_config': normalize_event_config_storage(self.event_config),
             'display_config': self.display_config,
-            'zones_config': self.zones_config,  # 新增：Zone区域配置
             'created_at': format_datetime(self.created_at),
             'updated_at': format_datetime(self.updated_at)
         }
@@ -454,7 +512,6 @@ class DetectionTask:
             motion_config=data.get('motion_config', get_default_motion_config()),
             event_config=data.get('event_config', get_default_event_config()),
             display_config=data.get('display_config', get_default_display_config()),
-            zones_config=data.get('zones_config', []),  # 新增：Zone区域配置
             created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None,
             updated_at=datetime.fromisoformat(data['updated_at']) if data.get('updated_at') else None
         )
@@ -474,7 +531,7 @@ class DetectionTask:
             'detector_config': self.detector_config,
             'tracker_config': self.tracker_config,
             'motion_config': self.motion_config,
-            'event_config': self.event_config,
+            'event_config': normalize_event_config_storage(self.event_config),
             'display_config': self.display_config
         }
 
@@ -524,6 +581,7 @@ class EventRecord:
     metadata: Dict = field(default_factory=dict)
     start_time: Optional[datetime] = None  # 跟踪起始时间
     end_time: Optional[datetime] = None    # 跟踪终止时间
+    status: str = "tracking_start"  # 事件状态：tracking_start/tracking_update/tracking_end/gif_ready
     created_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
@@ -556,6 +614,7 @@ class EventRecord:
             'metadata': self.metadata,
             'start_time': format_datetime(self.start_time),
             'end_time': format_datetime(self.end_time),
+            'status': self.status,
             'created_at': format_datetime(self.created_at)
         }
 
@@ -640,6 +699,7 @@ class TaskManager:
                     rtsp_url VARCHAR(200) NOT NULL,
                     channel_source VARCHAR(50) DEFAULT 'local_platform',
                     enabled INTEGER DEFAULT 1,
+                    zones_config TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
@@ -661,6 +721,49 @@ class TaskManager:
                     UNIQUE(task_id, channel_id)
                 )
             ''')
+
+            # ========================================
+            # Zone 配置存储位置统一：通道级（device_channel_pool.zones_config）
+            # ========================================
+            # 确保 device_channel_pool 表有 zones_config 列（历史数据库可能缺失）
+            cursor.execute("PRAGMA table_info(device_channel_pool)")
+            dcp_cols = [row[1] for row in cursor.fetchall()]
+            if 'zones_config' not in dcp_cols:
+                cursor.execute("ALTER TABLE device_channel_pool ADD COLUMN zones_config TEXT")
+                logger.info("[TaskManager] device_channel_pool 表添加 zones_config 字段")
+
+            # 数据迁移：把任务-通道绑定表中的 zones_config 迁移到通道表（按 channel_id 取非空值）
+            # 迁移后清空绑定表的 zones_config，使通道表成为唯一数据源
+            try:
+                # 取绑定表中每个 channel 的非空 zones_config（优先最后一个非空值）
+                cursor.execute('''
+                    SELECT channel_id, zones_config
+                    FROM task_device_channel_bindings
+                    WHERE zones_config IS NOT NULL AND zones_config != ''
+                ''')
+                migrated_rows = cursor.fetchall()
+                if migrated_rows:
+                    # 按 channel_id 聚合，保留最后一个非空值
+                    channel_zones_map = {}
+                    for ch_id, zc in migrated_rows:
+                        if zc:
+                            channel_zones_map[ch_id] = zc
+                    for ch_id, zc in channel_zones_map.items():
+                        cursor.execute(
+                            "UPDATE device_channel_pool SET zones_config = ? WHERE id = ?",
+                            (zc, ch_id)
+                        )
+                    # 清空绑定表的 zones_config（通道表已成为唯一数据源）
+                    cursor.execute(
+                        "UPDATE task_device_channel_bindings SET zones_config = NULL "
+                        "WHERE zones_config IS NOT NULL"
+                    )
+                    logger.info(
+                        f"[TaskManager] 已将 {len(channel_zones_map)} 个通道的 Zone 配置"
+                        f"从 task_device_channel_bindings 迁移到 device_channel_pool"
+                    )
+            except Exception as e:
+                logger.warning(f"[TaskManager] Zone 配置迁移失败，跳过: {e}")
             
             # ========================================
             # 摄像机-设备通道池关联表
@@ -701,6 +804,7 @@ class TaskManager:
                     metadata TEXT,
                     start_time DATETIME,
                     end_time DATETIME,
+                    status VARCHAR(20) DEFAULT 'tracking_start',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (task_id) REFERENCES detection_tasks(id)
                 )
@@ -728,6 +832,57 @@ class TaskManager:
             if 'end_time' not in columns:
                 cursor.execute("ALTER TABLE events ADD COLUMN end_time DATETIME")
                 print("[TaskManager] events 表添加 end_time 字段")
+
+            # ========================================
+            # 迁移：统一 status 为独立列（废弃 metadata.status）
+            # 三段式幂等迁移：建列 → 回填 → 清理
+            # ========================================
+            if 'status' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN status VARCHAR(20) DEFAULT 'tracking_start'")
+                print("[TaskManager] events 表添加 status 字段")
+
+            # 回填：从 metadata.status 复制到独立 status 列
+            try:
+                cursor.execute('''
+                    UPDATE events
+                    SET status = json_extract(metadata, '$.status')
+                    WHERE json_extract(metadata, '$.status') IS NOT NULL
+                      AND json_extract(metadata, '$.status') != ''
+                ''')
+                if cursor.rowcount > 0:
+                    print(f"[TaskManager] 已从 metadata.status 回填 {cursor.rowcount} 条事件的 status 列")
+            except Exception as e:
+                logger.warning(f"json_extract 回填 status 失败，跳过: {e}")
+
+            # 旧事件兜底：metadata 无 status 的行视为已结束
+            try:
+                cursor.execute('''
+                    UPDATE events
+                    SET status = 'tracking_end'
+                    WHERE (json_extract(metadata, '$.status') IS NULL
+                           OR json_extract(metadata, '$.status') = '')
+                      AND (status IS NULL OR status = '' OR status = 'tracking_start')
+                ''')
+            except Exception as e:
+                logger.warning(f"旧事件兜底回填 status 失败: {e}")
+
+            # 清理：从 metadata JSON 中移除 status 键（统一到独立列）
+            try:
+                cursor.execute("SELECT id, metadata FROM events WHERE metadata LIKE '%\"status\"%'")
+                rows_to_clean = cursor.fetchall()
+                for row_id, meta_str in rows_to_clean:
+                    try:
+                        meta = json.loads(meta_str) if meta_str else {}
+                        if 'status' in meta:
+                            meta.pop('status', None)
+                            cursor.execute('UPDATE events SET metadata = ? WHERE id = ?',
+                                           (json.dumps(meta), row_id))
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                if rows_to_clean:
+                    print(f"[TaskManager] 已从 {len(rows_to_clean)} 条事件的 metadata 中清理 status 键")
+            except Exception as e:
+                logger.warning(f"清理 metadata.status 失败: {e}")
             
             # ========================================
             # 算法注册表（保留表结构，避免旧触发器/外键引用失败）
@@ -759,7 +914,12 @@ class TaskManager:
             # ========================================
             cursor.execute("PRAGMA table_info(detection_tasks)")
             columns = [column[1] for column in cursor.fetchall()]
-            
+
+            # 添加detection_type字段到detection_tasks表
+            if 'detection_type' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN detection_type VARCHAR(20) DEFAULT 'realtime'")
+                logger.info("数据库迁移: 添加detection_type字段到detection_tasks表")
+
             # ✓ 新增：添加model_type字段到detection_tasks表
             if 'model_type' not in columns:
                 cursor.execute("ALTER TABLE detection_tasks ADD COLUMN model_type VARCHAR(50) DEFAULT 'yolov11n'")
@@ -794,9 +954,9 @@ class TaskManager:
                 (task_name, enabled, status, detection_type, algorithm, model_path, model_type, target_classes,
                  motion_detection_enabled, tracking_enabled,
                  decoder_config, detector_config,
-                 tracker_config, motion_config, event_config, display_config, zones_config,
+                 tracker_config, motion_config, event_config, display_config,
                  created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 task.task_name,
                 task.enabled,
@@ -814,7 +974,6 @@ class TaskManager:
                 json.dumps(task.motion_config),
                 json.dumps(task.event_config),
                 json.dumps(task.display_config),
-                json.dumps(task.zones_config),  # 新增：zones_config字段
                 now,
                 now
             ))
@@ -828,9 +987,16 @@ class TaskManager:
         """获取单个任务"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT * FROM detection_tasks WHERE id = ?', (task_id,))
+            # 明确指定列名查询，避免ALTER TABLE导致的列顺序问题
+            cursor.execute('''SELECT id, task_name, enabled, status, detection_type,
+                              algorithm, model_path, model_type, target_classes,
+                              motion_detection_enabled, tracking_enabled,
+                              decoder_config, detector_config, tracker_config,
+                              motion_config, event_config, display_config,
+                              created_at, updated_at
+                              FROM detection_tasks WHERE id = ?''', (task_id,))
             row = cursor.fetchone()
-            
+
             if row:
                 task = self._row_to_task(row)
                 return task
@@ -838,33 +1004,40 @@ class TaskManager:
     
     def get_all_tasks(self, enabled_only: bool = False, status: str = None) -> List[DetectionTask]:
         """获取所有任务
-        
+
         Args:
             enabled_only: 只获取启用的任务
             status: 按状态筛选
-        
+
         Returns:
             任务列表
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
-            query = 'SELECT * FROM detection_tasks WHERE 1=1'
+
+            # 明确指定列名查询，避免ALTER TABLE导致的列顺序问题
+            query = '''SELECT id, task_name, enabled, status, detection_type,
+                       algorithm, model_path, model_type, target_classes,
+                       motion_detection_enabled, tracking_enabled,
+                       decoder_config, detector_config, tracker_config,
+                       motion_config, event_config, display_config,
+                       created_at, updated_at
+                       FROM detection_tasks WHERE 1=1'''
             params = []
-            
+
             if enabled_only:
                 query += ' AND enabled = 1'
             if status:
                 query += ' AND status = ?'
                 params.append(status)
-            
+
             query += ' ORDER BY created_at DESC'
-            
+
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            
+
             tasks = [self._row_to_task(row) for row in rows]
-            
+
             return tasks
     
     def update_task(self, task_id: int, updates: Dict) -> bool:
@@ -880,7 +1053,7 @@ class TaskManager:
             
             # JSON 字段列表
             json_fields = ['target_classes', 'decoder_config', 'detector_config',
-                          'tracker_config', 'motion_config', 'event_config', 'display_config', 'zones_config']  # 新增：zones_config
+                          'tracker_config', 'motion_config', 'event_config', 'display_config']
 
             updatable_fields = {
                 'task_name': 'task_name',
@@ -898,8 +1071,7 @@ class TaskManager:
                 'tracker_config': 'tracker_config',
                 'motion_config': 'motion_config',
                 'event_config': 'event_config',
-                'display_config': 'display_config',
-                'zones_config': 'zones_config'  # 新增：zones_config字段支持更新
+                'display_config': 'display_config'
             }
             
             set_clause = []
@@ -1017,7 +1189,6 @@ class TaskManager:
             motion_config=safe_json_loads_with_defaults(row[14] if len(row) > 14 else None, get_default_motion_config()),  # 索引调整：13 → 14
             event_config=safe_json_loads_with_defaults(row[15] if len(row) > 15 else None, get_default_event_config()),  # 索引调整：14 → 15
             display_config=safe_json_loads(row[16] if len(row) > 16 else None, get_default_display_config()),  # ✅ 完全使用数据库配置
-            zones_config=safe_json_loads_list(row[19] if len(row) > 19 else None, []),  # 新增：zones_config字段（索引19）
             created_at=parse_datetime(row[17] if len(row) > 17 else None),  # 索引调整：16 → 17
             updated_at=parse_datetime(row[18] if len(row) > 18 else None)  # 索引调整：17 → 18
         )
@@ -1032,12 +1203,12 @@ class TaskManager:
             cursor = conn.cursor()
             
             cursor.execute('''
-                INSERT INTO events 
-                (event_id, task_id, camera_id, algorithm, type, class_name, 
+                INSERT INTO events
+                (event_id, task_id, camera_id, algorithm, type, class_name,
                  confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
                  local_gif_url, minio_gif_url, ftp_gif_url,
-                 metadata, start_time, end_time, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 metadata, start_time, end_time, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 event.event_id,
                 event.task_id,
@@ -1056,12 +1227,121 @@ class TaskManager:
                 json.dumps(event.metadata),
                 event.start_time,
                 event.end_time,
+                event.status,
                 datetime.now()
             ))
             
             conn.commit()
             return cursor.lastrowid
-    
+
+    def update_event(self, event_id: str, event_type: str = None,
+                     metadata: Dict = None, image_urls: Dict = None,
+                     gif_urls: Dict = None, start_time=None, end_time=None,
+                     bbox: List[float] = None, confidence: float = None,
+                     class_name: str = None,
+                     status: str = None) -> bool:
+        """更新事件记录
+
+        支持部分更新：仅更新提供的字段，未提供的字段保持不变。
+
+        Args:
+            event_id: 事件 UUID
+            event_type: 事件类型（detection/track_start/track_end/tracking/tracking_end）
+            metadata: 元数据字典（合并到现有 metadata，不再承载 status）
+            image_urls: 图片 URL 字典 {'local': ..., 'MinIOOutputter': ..., 'FTPOutputter': ...}
+            gif_urls: GIF URL 字典 {'local': ..., 'minio': ..., 'ftp': ...}
+            start_time: 跟踪起始时间
+            end_time: 跟踪终止时间
+            bbox: 检测框坐标
+            confidence: 置信度
+            class_name: 类别名称
+            status: 事件状态（tracking_start/tracking_update/tracking_end/gif_ready），写入独立 status 列
+
+        Returns:
+            是否更新成功
+        """
+        updates = []
+        params = []
+
+        if event_type is not None:
+            updates.append('type = ?')
+            params.append(event_type)
+
+        if status is not None:
+            updates.append('status = ?')
+            params.append(status)
+
+        if start_time is not None:
+            updates.append('start_time = ?')
+            params.append(start_time)
+
+        if end_time is not None:
+            updates.append('end_time = ?')
+            params.append(end_time)
+
+        if bbox is not None:
+            updates.append('bbox = ?')
+            params.append(json.dumps(bbox))
+
+        if confidence is not None:
+            updates.append('confidence = ?')
+            params.append(confidence)
+
+        if class_name is not None:
+            updates.append('class_name = ?')
+            params.append(class_name)
+
+        if image_urls:
+            if image_urls.get('local'):
+                updates.append('local_image_url = ?')
+                params.append(image_urls['local'])
+            if image_urls.get('MinIOOutputter'):
+                updates.append('minio_image_url = ?')
+                params.append(image_urls['MinIOOutputter'])
+            if image_urls.get('FTPOutputter'):
+                updates.append('ftp_image_url = ?')
+                params.append(image_urls['FTPOutputter'])
+
+        if gif_urls:
+            if gif_urls.get('local'):
+                updates.append('local_gif_url = ?')
+                params.append(gif_urls['local'])
+            if gif_urls.get('minio'):
+                updates.append('minio_gif_url = ?')
+                params.append(gif_urls['minio'])
+            if gif_urls.get('ftp'):
+                updates.append('ftp_gif_url = ?')
+                params.append(gif_urls['ftp'])
+
+        if metadata is not None:
+            # ✅ 合并 metadata 而非替换（避免覆盖已有的 track_id, center 等字段）
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT metadata FROM events WHERE event_id = ?', (event_id,))
+                row = cursor.fetchone()
+            existing_metadata = {}
+            if row and row[0]:
+                try:
+                    existing_metadata = json.loads(row[0])
+                except (json.JSONDecodeError, TypeError):
+                    existing_metadata = {}
+            if isinstance(metadata, dict):
+                existing_metadata.update(metadata)
+            updates.append('metadata = ?')
+            params.append(json.dumps(existing_metadata))
+
+        if not updates:
+            return False
+
+        params.append(event_id)
+        query = f"UPDATE events SET {', '.join(updates)} WHERE event_id = ?"
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            conn.commit()
+            return cursor.rowcount > 0
+
     def get_events(
         self, 
         task_id: int = None, 
@@ -1075,10 +1355,10 @@ class TaskManager:
             cursor = conn.cursor()
             
             # 明确指定列名查询，避免ALTER TABLE导致的列顺序问题
-            query = '''SELECT id, event_id, task_id, camera_id, algorithm, type, class_name, 
+            query = '''SELECT id, event_id, task_id, camera_id, algorithm, type, class_name,
                        confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
                        local_gif_url, minio_gif_url, ftp_gif_url,
-                       metadata, start_time, end_time, created_at FROM events WHERE 1=1'''
+                       metadata, start_time, end_time, status, created_at FROM events WHERE 1=1'''
             params = []
             
             if task_id:
@@ -1165,10 +1445,10 @@ class TaskManager:
                 except (ValueError, TypeError):
                     return value  # 保持原字符串
         
-        created_at = parse_datetime(row[18])  # created_at 在 index 18
+        created_at = parse_datetime(row[19])  # created_at 在 index 19
         start_time = parse_datetime(row[16])  # start_time 在 index 16
         end_time = parse_datetime(row[17])    # end_time 在 index 17
-        
+
         return EventRecord(
             id=row[0],
             event_id=row[1],
@@ -1188,6 +1468,7 @@ class TaskManager:
             metadata=safe_json_loads(row[15], {}),
             start_time=start_time,
             end_time=end_time,
+            status=row[18] or 'tracking_start',
             created_at=created_at
         )
     
@@ -1262,93 +1543,88 @@ class TaskManager:
         }
     
     # ========================================
-    # ✅ 新增：Zone配置管理（通道级别）
+    # Zone配置管理（通道级别，存储于 device_channel_pool.zones_config）
     # ========================================
-    
-    def get_channel_zones(self, task_id: int, channel_id: int) -> List[Dict]:
+
+    def get_channel_zones(self, channel_id: int) -> List[Dict]:
         """
-        获取通道的Zone配置
-        
+        获取通道的Zone配置（通道级，与任务无关）
+
         Args:
-            task_id: 任务ID
-            channel_id: 通道ID（设备通道池ID）
-            
+            channel_id: 通道ID（device_channel_pool.id）
+
         Returns:
             Zone配置列表
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT zones_config 
-                FROM task_device_channel_bindings 
-                WHERE task_id = ? AND channel_id = ?
-            ''', (task_id, channel_id))
-            
+
+            cursor.execute(
+                "SELECT zones_config FROM device_channel_pool WHERE id = ?",
+                (channel_id,)
+            )
+
             row = cursor.fetchone()
-            
+
             if row and row[0]:
                 try:
                     zones = json.loads(row[0])
                     return zones if isinstance(zones, list) else []
                 except (json.JSONDecodeError, TypeError):
                     return []
-            
+
             return []
-    
-    def save_channel_zones(self, task_id: int, channel_id: int, zones_config: List[Dict]) -> bool:
+
+    def save_channel_zones(self, channel_id: int, zones_config: List[Dict]) -> bool:
         """
-        保存通道的Zone配置
-        
+        保存通道的Zone配置（通道级，与任务无关）
+
         Args:
-            task_id: 任务ID
-            channel_id: 通道ID（设备通道池ID）
+            channel_id: 通道ID（device_channel_pool.id）
             zones_config: Zone配置列表
-            
+
         Returns:
             是否保存成功
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                
-                # 检查绑定记录是否存在
-                cursor.execute('''
-                    SELECT id FROM task_device_channel_bindings 
-                    WHERE task_id = ? AND channel_id = ?
-                ''', (task_id, channel_id))
-                
+
+                # 检查通道是否存在
+                cursor.execute(
+                    "SELECT id FROM device_channel_pool WHERE id = ?",
+                    (channel_id,)
+                )
+
                 if not cursor.fetchone():
-                    logger.error(f"绑定记录不存在: task_id={task_id}, channel_id={channel_id}")
+                    logger.error(f"通道不存在: channel_id={channel_id}")
                     return False
-                
-                # 更新Zone配置
-                cursor.execute('''
-                    UPDATE task_device_channel_bindings 
-                    SET zones_config = ? 
-                    WHERE task_id = ? AND channel_id = ?
-                ''', (json.dumps(zones_config), task_id, channel_id))
-                
+
+                # 更新通道级 Zone 配置
+                cursor.execute(
+                    "UPDATE device_channel_pool SET zones_config = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (json.dumps(zones_config), channel_id)
+                )
+
                 conn.commit()
-                logger.info(f"Zone配置已保存: task_id={task_id}, channel_id={channel_id}, zones_count={len(zones_config)}")
+                logger.info(f"Zone配置已保存: channel_id={channel_id}, zones_count={len(zones_config)}")
                 return True
-                
+
         except Exception as e:
             logger.error(f"保存Zone配置失败: {e}")
             return False
-    
-    def delete_channel_zones(self, task_id: int, channel_id: int) -> bool:
+
+    def delete_channel_zones(self, channel_id: int) -> bool:
         """
         删除通道的Zone配置（重置为空）
-        
+
         Args:
-            task_id: 任务ID
-            channel_id: 通道ID
-            
+            channel_id: 通道ID（device_channel_pool.id）
+
         Returns:
             是否删除成功
         """
-        return self.save_channel_zones(task_id, channel_id, [])
+        return self.save_channel_zones(channel_id, [])
 
 
 # 全局任务管理器实例

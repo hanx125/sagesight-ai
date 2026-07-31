@@ -1,0 +1,4 @@
+knife
+people
+gun
+cudgel

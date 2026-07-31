@@ -147,71 +147,9 @@ class AlgorithmManager:
             
             conn.commit()
             
-            # 初始化默认算法（如果不存在）
-            self._init_default_algorithms()
+            # ✅ 移除自动初始化默认算法的逻辑，改为用户手动管理
             
             logger.info(f"算法管理器数据库初始化完成: {self.db_path}")
-    
-    def _init_default_algorithms(self):
-        """初始化默认算法配置"""
-        default_algorithms = [
-            {
-                'name': 'YOLOv11n',
-                'type': 'detection',
-                'version': 'v1.0',
-                'status': 'active',
-                'description': 'YOLOv11 Nano版本，轻量级目标检测模型，适合边缘设备',
-                'model_path': 'models/yolov11n.onnx',
-                'model_type': 'yolov11n',  # 新增：模型类型字段
-                'model_format': 'onnx',
-                'input_size': '640x640',
-                'labels_file': 'models/yolov11_labels.txt'
-            },
-            {
-                'name': 'YOLOv8n',
-                'type': 'detection',
-                'version': 'v1.0',
-                'status': 'active',
-                'description': 'YOLOv8 Nano版本，轻量级目标检测模型',
-                'model_path': 'models/yolov8n.onnx',
-                'model_type': 'yolov8n',  # 新增：模型类型字段
-                'model_format': 'onnx',
-                'input_size': '640x640',
-                'labels_file': 'models/yolov8_labels.txt'
-            }
-        ]
-        
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            
-            for algo_data in default_algorithms:
-                # 检查是否已存在
-                cursor.execute('SELECT id FROM algorithm_configs WHERE name = ?', (algo_data['name'],))
-                if cursor.fetchone() is None:
-                    # 插入新算法
-                    now = datetime.now()
-                    cursor.execute('''
-                        INSERT INTO algorithm_configs 
-                        (name, type, version, status, description, model_path, model_type, model_format, 
-                         input_size, labels_file, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        algo_data['name'],
-                        algo_data['type'],
-                        algo_data['version'],
-                        algo_data['status'],
-                        algo_data['description'],
-                        algo_data['model_path'],
-                        algo_data.get('model_type', 'yolov11n'),
-                        algo_data['model_format'],
-                        algo_data['input_size'],
-                        algo_data.get('labels_file', ''),
-                        now,
-                        now
-                    ))
-                    logger.info(f"初始化默认算法: {algo_data['name']}")
-            
-            conn.commit()
     
     def _row_to_config(self, row: tuple) -> AlgorithmConfig:
         """将数据库行转换为 AlgorithmConfig 对象"""

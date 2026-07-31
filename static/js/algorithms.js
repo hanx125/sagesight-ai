@@ -292,10 +292,20 @@ function initWebSocket() {
 
 async function loadAlgorithms() {
     try {
-        // 获取筛选条件
-        const type = document.getElementById('filterType').value;
-        const status = document.getElementById('filterStatus').value;
-        const search = document.getElementById('filterSearch').value;
+        // 获取筛选条件（如果元素存在）
+        const filterTypeEl = document.getElementById('filterType');
+        const filterStatusEl = document.getElementById('filterStatus');
+        const filterSearchEl = document.getElementById('filterSearch');
+        
+        // 如果筛选元素不存在，说明不在算法管理页面，跳过加载
+        if (!filterTypeEl && !filterStatusEl && !filterSearchEl) {
+            console.log('[algorithms.js] 当前页面没有算法筛选元素，跳过加载');
+            return;
+        }
+        
+        const type = filterTypeEl ? filterTypeEl.value : '';
+        const status = filterStatusEl ? filterStatusEl.value : '';
+        const search = filterSearchEl ? filterSearchEl.value : '';
         
         // 构建查询参数
         let url = '/api/algorithms';

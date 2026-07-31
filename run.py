@@ -105,11 +105,12 @@ logger.info(f"日志系统初始化完成: file={_log_file}, level={_log_cfg.get
 # 模块级别的任务执行函数（用于multiprocessing）
 # ========================================
 
-def _run_executor_process(task_config: Dict):
+def _run_executor_process(task_config: Dict, ai_stream_enabled_state=None):
     """运行任务执行器（在独立进程中）
 
     Args:
         task_config: 任务配置字典
+        ai_stream_enabled_state: 已废弃（保留参数兼容旧调用），AI 流状态改用文件标记
 
     Note:
         此函数必须在模块级别定义，以便multiprocessing能够pickle
@@ -121,12 +122,25 @@ def _run_executor_process(task_config: Dict):
 
     # 从数据库加载设备通道（摄像机）列表
     from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager
-    
+    from src.tasks.task_manager import TaskManager
+
     channel_pool_manager = get_device_channel_pool_manager()
+    task_manager = TaskManager()  # 子进程中的本地实例（用于读取通道级 Zone 配置）
     task_id = task_config.get('id')
     
     # 获取任务关联的所有设备通道
     channels = channel_pool_manager.get_task_device_channels(task_id)
+
+    # ✅ 如果任务没有关联的设备通道，优雅退出（不抛异常）
+    if not channels:
+        print(f"[MultiCameraExecutor-{task_id}] 任务没有关联的摄像机通道，跳过启动")
+        print(f"[MultiCameraExecutor-{task_id}] 请先在任务配置中添加设备通道")
+        # 更新任务状态为 stopped，避免监控线程反复重启
+        try:
+            task_manager.update_task(task_id, {'status': 'stopped', 'enabled': False})
+        except Exception:
+            pass
+        return
 
     # 获取摄像机管理器（用于查询protocol字段）
     from src.cameras.camera_manager import get_camera_manager
@@ -135,8 +149,13 @@ def _run_executor_process(task_config: Dict):
     # 将设备通道转换为摄像机配置列表
     cameras = []
     for channel in channels:
-        # 优先使用关联的摄像机 ID，如果没有则使用通道 ID 作为降级方案
-        effective_camera_id = channel.camera_id if channel.camera_id else str(channel.id)
+        # 优先使用关联的摄像机 ID，如果没有或为空值则使用通道 ID 作为降级方案
+        # 注意：空列表 [] 在 Python 中是 truthy，需要显式检查
+        raw_camera_id = channel.camera_id
+        if raw_camera_id is None or (isinstance(raw_camera_id, str) and not raw_camera_id.strip()) or (isinstance(raw_camera_id, (list, dict)) and not raw_camera_id):
+            effective_camera_id = str(channel.id)
+        else:
+            effective_camera_id = str(raw_camera_id)
 
         # 从摄像机表获取protocol字段（用于判断视频文件）
         camera_info = camera_manager.get_camera(effective_camera_id)
@@ -155,13 +174,14 @@ def _run_executor_process(task_config: Dict):
             'camera_name': channel.channel_name,
             'rtsp_url': rtsp_url,  # 使用处理后的路径
             'channel_source': channel.channel_source,
-            'protocol': protocol  # 添加protocol字段（视频文件需要）
+            'protocol': protocol,  # 添加protocol字段（视频文件需要）
+            'zones_config': task_manager.get_channel_zones(channel.id),  # 通道级 Zone 配置（device_channel_pool.zones_config）
         }
         cameras.append(camera_config)
     
     # 创建任务执行器并运行（run()方法包含主循环）
     from src.tasks.task_executor import MultiCameraTaskExecutor
-    executor = MultiCameraTaskExecutor(task_config, cameras)
+    executor = MultiCameraTaskExecutor(task_config, cameras, ai_stream_enabled_state=ai_stream_enabled_state)
     executor.run()  # 运行任务执行器（阻塞，直到任务停止）
 
 
@@ -171,6 +191,7 @@ class TaskProcessManager:
     def __init__(self):
         """初始化进程管理器"""
         self.task_processes: Dict[int, multiprocessing.Process] = {}
+        self.task_cameras: Dict[int, list] = {}  # {task_id: [camera_id, ...]} 记录任务关联的摄像机
         self.running = False
 
         logger.info("[TaskProcessManager] 初始化完成（multiprocessing 模式）")
@@ -193,9 +214,31 @@ class TaskProcessManager:
             return False
 
         try:
+            # 记录任务关联的摄像机ID（用于 stop_task 时清理 AI 流状态）
+            # 注意：使用与 _run_executor_process 相同的降级逻辑获取 effective_camera_id
+            try:
+                from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager
+                _channel_pool_mgr = get_device_channel_pool_manager()
+                _channels = _channel_pool_mgr.get_task_device_channels(task_id)
+                _camera_ids = []
+                for _ch in _channels:
+                    _raw_id = getattr(_ch, 'camera_id', None)
+                    # 空列表/空字典/空字符串/None 均视为无效，降级为通道ID
+                    if (_raw_id is None or
+                        (isinstance(_raw_id, str) and not _raw_id.strip()) or
+                        (isinstance(_raw_id, (list, dict)) and not _raw_id)):
+                        _camera_ids.append(str(_ch.id))
+                    else:
+                        _camera_ids.append(str(_raw_id))
+                self.task_cameras[task_id] = _camera_ids
+            except Exception as e:
+                logger.warning(f"[TaskProcessManager] 获取任务 {task_id} 摄像机列表失败: {e}")
+                self.task_cameras[task_id] = []
+
             # 使用 Process 类启动 task_executor（自动配置日志队列）
             # 注意：设置为非守护进程（daemon=False），因为任务可能需要创建子进程
             # 例如：检测进程池（DetectionProcessPool）需要创建 Manager 子进程
+            # AI 流状态改用文件标记管理（data/ai_stream_flags/），不再传递 Manager dict
             process = Process(
                 target=_run_executor_process,
                 args=(task_config,),
@@ -280,6 +323,15 @@ class TaskProcessManager:
                     logger.error(f"[TaskProcessManager] 任务 {task_id} 无法被杀死（僵尸进程）")
 
             del self.task_processes[task_id]
+
+            # 清理 AI 流推送标记文件（防止任务重启后旧标记残留导致推流异常）
+            camera_ids = self.task_cameras.pop(task_id, [])
+            if camera_ids:
+                _clear_ai_stream_flags(camera_ids)
+                for camera_id in camera_ids:
+                    _ai_stream_cache.pop(camera_id, None)
+                logger.info(f"[TaskProcessManager] 已清理任务 {task_id} 的 AI 流标记: cameras={camera_ids}")
+
             logger.info(f"[TaskProcessManager] 任务 ID={task_id} 已停止")
 
             return True
@@ -374,6 +426,59 @@ app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 # 初始化SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
+# ========================================
+# AI 视频流推送状态（文件标记方案）
+# ========================================
+# 使用文件标记替代 multiprocessing.Manager dict，避免 Windows spawn 模式下
+# Manager dict 代理经过两层进程 pickle（主进程→任务进程→TrackedObjectProcessor进程）
+# 后失效的问题。
+#
+# 原理：
+# - 前端点击 AI 播放 → /api/ai-stream/enable → 创建标记文件 data/ai_stream_flags/{camera_id}.flag
+# - 前端点击停止 → /api/ai-stream/disable → 删除标记文件
+# - TrackedObjectProcessor 检查标记文件是否存在，决定是否推送 AI 帧
+# - 文件 I/O 对每秒几次的检查没有性能影响
+_ai_stream_flag_dir = Path(project_root) / 'data' / 'ai_stream_flags'
+
+
+def init_ai_stream_state():
+    """初始化 AI 视频流推送的文件标记目录。
+
+    清理上次运行残留的标记文件，确保任务启动时所有 AI 流默认关闭。
+    """
+    global _ai_stream_flag_dir
+    _ai_stream_flag_dir = Path(project_root) / 'data' / 'ai_stream_flags'
+    _ai_stream_flag_dir.mkdir(parents=True, exist_ok=True)
+    # 清理残留的标记文件
+    for flag_file in _ai_stream_flag_dir.glob('*.flag'):
+        try:
+            flag_file.unlink()
+        except Exception:
+            pass
+    logger.info(f"[Main] AI 视频流标记目录已初始化: {_ai_stream_flag_dir}")
+
+
+def _set_ai_stream_flag(camera_id: str, enabled: bool):
+    """设置摄像机 AI 流的启用标记文件"""
+    flag_file = _ai_stream_flag_dir / f'{camera_id}.flag'
+    try:
+        if enabled:
+            flag_file.touch()
+        else:
+            flag_file.unlink(missing_ok=True)
+    except Exception as e:
+        logger.error(f"设置 AI 流标记失败: camera_id={camera_id}, enabled={enabled}, error={e}")
+
+
+def _clear_ai_stream_flags(camera_ids: list):
+    """清理指定摄像机的 AI 流标记文件（任务停止时调用）"""
+    for camera_id in camera_ids:
+        try:
+            flag_file = _ai_stream_flag_dir / f'{camera_id}.flag'
+            flag_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
 # 注册Blueprint
 register_algorithm_blueprint(app, socketio)
 register_task_blueprint(app, socketio)
@@ -443,7 +548,7 @@ def get_process_manager():
 # ========================================
 
 # 不需要认证的路径前缀
-PUBLIC_PATHS = ('/login', '/api/auth/', '/api/ai-stream/', '/api/events/push', '/api/detection-metadata/', '/static/', '/output/')
+PUBLIC_PATHS = ('/login', '/api/auth/', '/api/ai-stream/', '/api/events/push', '/api/events/update', '/api/events/gif_ready', '/static/', '/output/')
 
 @app.before_request
 def check_auth():
@@ -588,21 +693,16 @@ def get_stream_status(task_id):
 # ========================================
 # 系统使用 Flask-SocketIO 作为唯一的 WebSocket 通信方案（端口 5555，namespace: '/ws'）
 #
-# 两种推送模式：
-#
-# 1. RTSP摄像机模式（前端画框）：
-#    - CameraWorker → HTTP POST /api/detection-metadata/push
-#    - 主进程 → socketio.emit('detection_frame', {...}, namespace='/ws')
-#    - 前端接收事件，在播放画面上叠加绘制检测框
-#    - 优点：减少带宽占用，前端可灵活控制绘制样式
-#
-# 2. 视频文件模式（后端画框）：
-#    - CameraWorker → HTTP POST /api/ai-stream/push
+# AI 视频流推送模式（后端画框，统一架构）：
+#    - TrackedObjectProcessor → HTTP POST /api/ai-stream/push（仅当 {flag_dir}/{camera_id}.flag 存在时推送）
 #    - 主进程 → socketio.emit('ai_stream_frame', {...}, namespace='/ws')
-#    - 前端接收事件，直接显示带检测框的MJPEG流
-#    - 优点：简化前端实现，确保绘制效果一致性
+#    - 前端接收事件，直接在 Canvas 上 drawImage 显示带检测框的 JPEG 帧
+#    - 前端点击 AI 播放 → /api/ai-stream/enable → 创建标记文件 → 后端开始推流
+#    - 前端点击停止 → /api/ai-stream/disable → 删除标记文件 → 后端停止推流
+#    文件标记方案替代 Manager dict 代理，避免 Windows spawn 模式下跨两层进程 pickle 失效
 #
 # 注意：独立的 WebSocketOutputter 已废弃（system_config.yaml:71: enabled: false）
+# 注意：旧的 detection_frame 前端画框模式已完全移除，统一使用后端画框
 # ========================================
 
 # AI 视频帧缓存（最近帧）
@@ -615,7 +715,8 @@ def push_ai_stream_frame():
         data = request.get_json()
         task_id = data.get('task_id')
         camera_id = data.get('camera_id')
-        frame = data.get('frame')
+        # 兼容 frame_base64（TrackedObjectProcessor 发送）和 frame（旧版兼容）
+        frame = data.get('frame_base64') or data.get('frame')
         timestamp = data.get('timestamp')
 
         if not camera_id or not frame:
@@ -650,26 +751,70 @@ def push_event_to_websocket():
         data = request.get_json()
         if not data or 'event_id' not in data:
             return jsonify({'error': '参数不完整'}), 400
-        
+
         # 通过 WebSocket 广播到驾驶舱
         socketio.emit('new_event', data, namespace='/ws')
         logger.debug(f"事件已推送到驾驶舱: {data.get('event_id', '')[:8]}... type={data.get('type', '')}")
-        
+
         return jsonify({'success': True})
-        
+
     except Exception as e:
         logger.error(f"推送事件到驾驶舱失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/events/update', methods=['POST'])
+def push_event_update_to_websocket():
+    """接收事件状态更新（ended），通过 WebSocket 广播到驾驶舱
+
+    单一事件模型：跟踪结束时调用，让前端更新已显示事件卡片的状态为"已结束"。
+    """
+    try:
+        data = request.get_json()
+        if not data or 'event_id' not in data:
+            return jsonify({'error': '参数不完整'}), 400
+
+        socketio.emit('event_update', data, namespace='/ws')
+        logger.info(f"[Event] event_update 推送: event_id={data['event_id'][:8]}, status={data.get('status', '')}")
+
+        return jsonify({'success': True})
+
+    except Exception as e:
+        logger.error(f"推送 event_update 失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/events/gif_ready', methods=['POST'])
+def push_gif_ready_to_websocket():
+    """接收 GIF 生成完成通知，通过 WebSocket 广播到驾驶舱和事件管理页面
+
+    让前端实时收到 GIF 并更新已显示事件卡片的 GIF 缩略图。
+    """
+    try:
+        data = request.get_json()
+        if not data or 'event_id' not in data:
+            return jsonify({'error': '参数不完整'}), 400
+
+        socketio.emit('gif_ready', data, namespace='/ws')
+        logger.info(f"[GIF] gif_ready 推送: event_id={data['event_id'][:8]}")
+
+        return jsonify({'success': True})
+
+    except Exception as e:
+        logger.error(f"推送 gif_ready 失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/ai-stream/enable/<camera_id>', methods=['POST'])
 def enable_ai_stream(camera_id):
-    """启用摄像机的 AI 视频流"""
-    try:
-        # AI 流配置已在 display_config.yaml 中启用（ai_stream_enabled: true）
-        # 任务进程启动时会自动读取该配置
-        # 此 API 仅用于前端状态同步，实际无需额外操作
+    """启用摄像机的 AI 视频流（前端点击 AI 播放时调用）
 
+    通过创建文件标记通知任务子进程的 TrackedObjectProcessor 开始推送 AI 帧到前端。
+    文件标记方案不依赖 Manager dict 代理的跨进程传递，更加可靠。
+    """
+    try:
+        _set_ai_stream_flag(camera_id, True)
+        logger.info(f"[AI流] 已启用: camera_id={camera_id}")
         return jsonify({'success': True, 'message': 'AI 视频流已启用'})
 
     except Exception as e:
@@ -677,84 +822,20 @@ def enable_ai_stream(camera_id):
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/ai-stream/start/<camera_id>', methods=['POST'])
-def start_ai_stream(camera_id):
-    """
-    ✅ 新增：前端启动AI播放时通知后端，并返回当前frame_seq
-    用于前后端帧序号同步
-    """
-    try:
-        logger.info(f"[AI模式] 前端启动AI播放: camera_id={camera_id}")
-
-        # ✅ 简化方案：返回0，让前端等待后端推送检测数据后自动同步
-        # 前端会根据接收到的第一帧检测数据的frame_seq进行同步
-        return jsonify({'success': True, 'frame_seq': 0})
-
-    except Exception as e:
-        logger.error(f"启动AI视频流失败: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
 @app.route('/api/ai-stream/disable/<camera_id>', methods=['POST'])
 def disable_ai_stream(camera_id):
-    """禁用摄像机的 AI 视频流"""
-    try:
-        # 清除缓存
-        _ai_stream_cache.pop(camera_id, None)
+    """禁用摄像机的 AI 视频流（前端点击停止 AI 播放时调用）
 
+    通过删除文件标记通知任务子进程的 TrackedObjectProcessor 停止推送 AI 帧到前端。
+    """
+    try:
+        _set_ai_stream_flag(camera_id, False)
+        _ai_stream_cache.pop(camera_id, None)
+        logger.info(f"[AI流] 已禁用: camera_id={camera_id}")
         return jsonify({'success': True, 'message': 'AI 视频流已禁用'})
 
     except Exception as e:
         logger.error(f"禁用 AI 视频流失败: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-# ========================================
-# 检测框元数据推送（用于RTSP摄像机前端画框）
-# ========================================
-
-@app.route('/api/detection-metadata/push', methods=['POST'])
-def push_detection_metadata():
-    """接收任务进程推送的检测框坐标元数据，并通过 WebSocket 广播给前端"""
-    try:
-        data = request.get_json()
-        task_id = data.get('task_id')
-        camera_id = data.get('camera_id')
-        frame_id = data.get('frame_id')
-        frame_seq = data.get('frame_seq', frame_id)  # ✅ 新增：帧序号（默认与frame_id一致）
-        detections = data.get('detections', [])
-        tracks = data.get('tracks', [])
-        trajectories = data.get('trajectories', {})
-        timestamp = data.get('timestamp')  # ✅ 毫秒时间戳
-
-        if not camera_id:
-            return jsonify({'error': '缺少 camera_id 参数'}), 400
-
-        # ✅ 调试：输出接收到的数据（降级为DEBUG，避免刷屏）
-        app.logger.debug(
-            f"[API] 接收检测数据: camera_id={camera_id}, frame_id={frame_id}, "
-            f"timestamp={timestamp}, detections={len(detections)}, tracks={len(tracks)}"
-        )
-
-        # 通过 WebSocket 广播给订阅的客户端（前端画框）
-        socketio.emit('detection_frame', {
-            'task_id': task_id,
-            'camera_id': camera_id,
-            'frame_id': frame_id,
-            'frame_seq': frame_seq,  # ✅ 新增：帧序号
-            'timestamp': timestamp,  # ✅ 毫秒时间戳
-            'detections': detections,
-            'tracks': tracks,
-            'trajectories': trajectories
-        }, namespace='/ws')
-
-        # ✅ 调试：输出推送状态（降级为DEBUG，避免刷屏）
-        app.logger.debug(f"[API] WebSocket推送成功: camera_id={camera_id}")
-
-        return jsonify({'success': True})
-
-    except Exception as e:
-        logger.error(f"推送检测框元数据失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -915,6 +996,11 @@ def task_monitor_thread():
 # ========================================
 
 if __name__ == '__main__':
+    # 初始化 AI 流推送共享状态（必须在 main 块内创建 Manager）
+    # Windows 使用 spawn 模式启动子进程，子进程会重新导入本模块，
+    # 若在模块顶层创建 Manager() 会导致递归创建子进程的 RuntimeError。
+    init_ai_stream_state()
+
     logger.info("="*60)
     logger.info("SageSight AI 检测系统 - 统一主程序")
     logger.info("="*60)

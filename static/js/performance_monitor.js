@@ -11,7 +11,6 @@
     const perfMonitor = {
         // WebSocket消息统计
         websocket: {
-            detection_frame: { count: 0, lastTime: 0, avgInterval: 0, intervals: [] },
             ai_stream_frame: { count: 0, lastTime: 0, avgInterval: 0, intervals: [], frameSizes: [] },
             new_event: { count: 0, lastTime: 0, avgInterval: 0, intervals: [] },
             total: 0
@@ -232,10 +231,6 @@
             uptime: ((Date.now() - perfMonitor.startTime) / 1000).toFixed(1) + 's',
 
             websocket: {
-                detection_frame: {
-                    count: perfMonitor.websocket.detection_frame.count,
-                    avgInterval: perfMonitor.websocket.detection_frame.avgInterval.toFixed(1) + 'ms'
-                },
                 ai_stream_frame: {
                     count: perfMonitor.websocket.ai_stream_frame.count,
                     avgInterval: perfMonitor.websocket.ai_stream_frame.avgInterval.toFixed(1) + 'ms',
@@ -344,7 +339,6 @@
             <div style="margin-bottom: 15px; padding: 10px; background: rgba(0, 255, 0, 0.1); border-radius: 4px;">
                 <div style="font-weight: bold; margin-bottom: 8px;">📊 WebSocket消息统计</div>
                 <div style="margin-left: 15px; line-height: 1.6;">
-                    <div>✅ detection_frame: ${report.websocket.detection_frame.count} 条 (${report.websocket.detection_frame.avgInterval})</div>
                     <div>✅ ai_stream_frame: ${report.websocket.ai_stream_frame.count} 条 (${report.websocket.ai_stream_frame.avgInterval}) - ${report.websocket.ai_stream_frame.avgFrameSize}</div>
                     <div>✅ new_event: ${report.websocket.new_event.count} 条 (${report.websocket.new_event.avgInterval})</div>
                     <div style="margin-top: 5px; color: #ffff00;">总计: ${report.websocket.total} 条</div>

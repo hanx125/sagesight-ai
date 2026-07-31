@@ -57,8 +57,8 @@ class EventOutput:
         self._init_image_outputters()
 
         # 图片本地保存配置
+        # local_enabled 由 _init_image_outputters 设置（支持独立开关和旧版 local_backup 兼容）
         image_cfg = config.get('image_output', {})
-        self.local_backup_enabled = image_cfg.get('local_backup', False)  # 是否本地备份
         self.local_output_dir = image_cfg.get('output_dir', 'output/images')  # 本地保存目录（默认 output/images）
         self.local_retention_days = image_cfg.get('local_retention_days', 7)  # 本地保存天数
         self.auto_cleanup = image_cfg.get('auto_cleanup', True)  # 是否自动清理
@@ -86,10 +86,23 @@ class EventOutput:
         # 过滤配置
         self.filter_cfg = config.get('filter', {})
 
+        # GIF 配置（供 TrackedObjectProcessor 读取）
+        self.gif_cfg = config.get('gif', {})
+        self.gif_enabled = self.gif_cfg.get('enabled', False)
+
+        # 关键帧采集配置（供 TrackedObjectProcessor 读取）
+        capture_cfg = config.get('capture', {})
+        self.capture_save_full_on_start = capture_cfg.get('save_full_on_start', True)
+        self.capture_save_full_on_end = capture_cfg.get('save_full_on_end', True)
+
+        # GIF 生成器（延迟初始化，仅在 GIF 启用时创建）
+        self._gif_generator = None
+
         print(f"[EventOutput] 初始化完成")
         print(f"[EventOutput]   MQTT 输出器: {self.mqtt_outputter.__class__.__name__ if self.mqtt_outputter else 'None'}")
         print(f"[EventOutput]   图片输出器数量: {len(self.image_outputters)}")
-        if self.local_backup_enabled or self.auto_cleanup:
+        if getattr(self, 'local_enabled', False) or self.auto_cleanup:
+            print(f"[EventOutput]   本地保存: {'启用' if getattr(self, 'local_enabled', False) else '禁用'}")
             print(f"[EventOutput]   本地保存目录: {self.local_output_dir}")
             print(f"[EventOutput]   本地保存天数: {self.local_retention_days}")
             print(f"[EventOutput]   自动清理: {self.auto_cleanup}")
@@ -116,30 +129,57 @@ class EventOutput:
             print(f"[EventOutput] MQTT 输出器初始化失败: {e}")
 
     def _init_image_outputters(self):
-        """初始化图片输出器"""
+        """初始化图片输出器（根据独立开关：local_enabled / minio_enabled / ftp_enabled）"""
         image_cfg = self.config.get('image_output', {})
-        method = image_cfg.get('method', 'none')
-        
-        # 获取全局存储配置
+
+        # 向后兼容：旧版 method 字段自动转换为独立开关
+        method = image_cfg.get('method', None)
+        if method is not None and 'local_enabled' not in image_cfg:
+            if method == 'both':
+                image_cfg['local_enabled'] = True
+                image_cfg['minio_enabled'] = True
+                image_cfg['ftp_enabled'] = True
+            elif method == 'minio':
+                image_cfg['local_enabled'] = False
+                image_cfg['minio_enabled'] = True
+                image_cfg['ftp_enabled'] = False
+            elif method == 'ftp':
+                image_cfg['local_enabled'] = False
+                image_cfg['minio_enabled'] = False
+                image_cfg['ftp_enabled'] = True
+            elif method == 'local':
+                image_cfg['local_enabled'] = True
+                image_cfg['minio_enabled'] = False
+                image_cfg['ftp_enabled'] = False
+            elif method == 'none':
+                image_cfg['local_enabled'] = False
+                image_cfg['minio_enabled'] = False
+                image_cfg['ftp_enabled'] = False
+            print(f"[EventOutput] 旧版 method='{method}' 已自动迁移为独立开关")
+
+        # 读取三个独立开关
+        self.local_enabled = image_cfg.get('local_enabled', True)
+        minio_enabled = image_cfg.get('minio_enabled', False)
+        ftp_enabled = image_cfg.get('ftp_enabled', False)
+
+        # 获取全局存储配置（连接参数和全局开关）
         storage_config = self.config.get('storage', {})
         global_minio_config = storage_config.get('minio', {})
         global_ftp_config = storage_config.get('ftp', {})
 
+        print(f"[EventOutput] 存储开关: local={self.local_enabled}, minio={minio_enabled}, ftp={ftp_enabled}")
+
         try:
-            # MinIO 输出器
-            if method in ['minio', 'both']:
-                # 检查是否启用 MinIO
+            # ========================================
+            # MinIO 输出器（任务开关 AND 系统全局开关）
+            # ========================================
+            if minio_enabled:
                 if not global_minio_config.get('enabled', False):
-                    print(f"[EventOutput] MinIO 已禁用，跳过图片MinIO输出器初始化")
+                    print(f"[EventOutput] MinIO 任务开关已启用，但系统全局 storage.minio.enabled=false，跳过MinIO输出器")
                 else:
                     minio_bucket = image_cfg.get('minio_bucket', 'sagesight-images')
-                
-                # 合并配置：全局配置 + 图片特定配置
-                minio_config = {}
-                
-                if global_minio_config:
                     minio_config = {
-                        'enabled': global_minio_config.get('enabled', True),
+                        'enabled': True,
                         'endpoint': global_minio_config.get('endpoint', 'localhost:9000'),
                         'access_key': global_minio_config.get('access_key', 'minioadmin'),
                         'secret_key': global_minio_config.get('secret_key', 'minioadmin'),
@@ -147,38 +187,20 @@ class EventOutput:
                         'presigned_expires': global_minio_config.get('presigned_expires', 3600),
                         'bucket': minio_bucket
                     }
-                else:
-                    # 向后兼容：使用单独的 minio 配置
-                    old_minio_config = image_cfg.get('minio', {})
-                    minio_config = {
-                        'enabled': old_minio_config.get('enabled', True),
-                        'endpoint': old_minio_config.get('endpoint', 'localhost:9000'),
-                        'access_key': old_minio_config.get('access_key', 'minioadmin'),
-                        'secret_key': old_minio_config.get('secret_key', 'minioadmin'),
-                        'secure': old_minio_config.get('secure', False),
-                        'bucket': old_minio_config.get('bucket', minio_bucket)
-                    }
-                
-                if minio_config.get('enabled', True):
                     from .minio_outputter import MinIOOutputter
                     self.image_outputters.append(MinIOOutputter(minio_config))
-                    print(f"[EventOutput] MinIO 输出器已初始化")
-                    print(f"[EventOutput]   Bucket: {minio_config.get('bucket')}")
-            
-            # FTP 输出器
-            if method in ['ftp', 'both']:
-                # 检查是否启用 FTP
+                    print(f"[EventOutput] MinIO 输出器已初始化 (Bucket: {minio_config.get('bucket')})")
+
+            # ========================================
+            # FTP 输出器（任务开关 AND 系统全局开关）
+            # ========================================
+            if ftp_enabled:
                 if not global_ftp_config.get('enabled', False):
-                    print(f"[EventOutput] FTP 已禁用，跳过图片FTP输出器初始化")
+                    print(f"[EventOutput] FTP 任务开关已启用，但系统全局 storage.ftp.enabled=false，跳过FTP输出器")
                 else:
                     ftp_remote_dir = image_cfg.get('ftp_remote_dir', '/sagesight/images')
-                
-                # 合并配置：全局配置 + 图片特定配置
-                ftp_config = {}
-                
-                if global_ftp_config:
                     ftp_config = {
-                        'enabled': global_ftp_config.get('enabled', True),
+                        'enabled': True,
                         'host': global_ftp_config.get('host', 'localhost'),
                         'port': global_ftp_config.get('port', 21),
                         'username': global_ftp_config.get('username', 'ftpuser'),
@@ -186,25 +208,10 @@ class EventOutput:
                         'passive_mode': global_ftp_config.get('passive_mode', True),
                         'remote_dir': ftp_remote_dir
                     }
-                else:
-                    # 向后兼容：使用单独的 ftp 配置
-                    old_ftp_config = image_cfg.get('ftp', {})
-                    ftp_config = {
-                        'enabled': old_ftp_config.get('enabled', True),
-                        'host': old_ftp_config.get('host', 'localhost'),
-                        'port': old_ftp_config.get('port', 21),
-                        'username': old_ftp_config.get('username', 'ftpuser'),
-                        'password': old_ftp_config.get('password', 'ftppassword'),
-                        'passive_mode': old_ftp_config.get('passive_mode', True),
-                        'remote_dir': old_ftp_config.get('remote_dir', ftp_remote_dir)
-                    }
-                
-                if ftp_config.get('enabled', True):
                     from .ftp_outputter import FTPOutputter
                     self.image_outputters.append(FTPOutputter(ftp_config))
-                    print(f"[EventOutput] FTP 输出器已初始化")
-                    print(f"[EventOutput]   Remote Dir: {ftp_config.get('remote_dir')}")
-                    
+                    print(f"[EventOutput] FTP 输出器已初始化 (Remote Dir: {ftp_config.get('remote_dir')})")
+
         except Exception as e:
             print(f"[EventOutput] 图片输出器初始化失败: {e}")
     
@@ -529,48 +536,50 @@ class EventOutput:
         local_image_path = None
         
         print(f"[EventOutput]   图片处理: image is not None={image is not None}")
-        print(f"[EventOutput]   local_backup_enabled={self.local_backup_enabled}, image_outputters count={len(self.image_outputters)}")
+        print(f"[EventOutput]   local_enabled={getattr(self, 'local_enabled', False)}, image_outputters count={len(self.image_outputters)}")
         
         if image is not None:
             try:
                 compressed_image = self._compress_image(image)
                 print(f"[EventOutput]   图片压缩成功: {len(compressed_image)} bytes")
-                
-                # ✅ 强制先保存到本地（无论配置如何，符合项目约束）
-                local_image_path = self._save_image_local(event_id, compressed_image)
-                if local_image_path:
-                    # ✅ 修复：生成完整的 HTTP URL（避免浏览器 HTTPS 强制升级）
-                    # 将本地路径转换为 URL（如 output/images/xxx.jpg -> http://localhost:5555/output/images/xxx.jpg）
-                    local_image_url = f"http://{self.server_host}:{self.server_port}/{local_image_path}"
-                    image_urls['local'] = local_image_url
-                    print(f"[EventOutput]   图片本地保存成功: {local_image_path}")
-                    print(f"[EventOutput]   图片 URL: {local_image_url}")
-                
-                # 2. 再根据配置上传到远程服务器（MinIO/FTP）
+
+                # 根据独立开关决定是否保存到本地
+                if getattr(self, 'local_enabled', False):
+                    local_image_path = self._save_image_local(event_id, compressed_image)
+                    if local_image_path:
+                        # 生成完整的 HTTP URL（避免浏览器 HTTPS 强制升级）
+                        local_image_url = f"http://{self.server_host}:{self.server_port}/{local_image_path}"
+                        image_urls['local'] = local_image_url
+                        print(f"[EventOutput]   图片本地保存成功: {local_image_path}")
+                        print(f"[EventOutput]   图片 URL: {local_image_url}")
+                else:
+                    print(f"[EventOutput]   本地存储已禁用，跳过本地保存")
+
+                # 再根据配置上传到远程服务器（MinIO/FTP）
                 if self.image_outputters:
                     for outputter in self.image_outputters:
                         try:
-                            url = outputter.upload(event_id, compressed_image)
+                            url = outputter.upload(event_id, compressed_image, content_type='image/jpeg')
                             image_urls[outputter.__class__.__name__] = url
                             print(f"[EventOutput]   图片上传成功 ({outputter.__class__.__name__}): {url}")
                         except Exception as e:
                             print(f"[EventOutput] 图片上传失败 ({outputter.__class__.__name__}): {e}")
-                        
+
             except Exception as e:
                 print(f"[EventOutput] 图片处理失败: {e}")
                 import traceback
                 traceback.print_exc()
-                
-                # 处理失败时也强制本地保存
-                try:
-                    compressed_image = self._compress_image(image)
-                    local_image_path = self._save_image_local(event_id, compressed_image)
-                    if local_image_path:
-                        # ✅ 修复：生成完整的 HTTP URL
-                        local_image_url = f"http://{self.server_host}:{self.server_port}/{local_image_path}"
-                        image_urls['local'] = local_image_url
-                except Exception as e2:
-                    print(f"[EventOutput] 本地保存失败: {e2}")
+
+                # 处理失败时根据开关决定是否本地保存
+                if getattr(self, 'local_enabled', False):
+                    try:
+                        compressed_image = self._compress_image(image)
+                        local_image_path = self._save_image_local(event_id, compressed_image)
+                        if local_image_path:
+                            local_image_url = f"http://{self.server_host}:{self.server_port}/{local_image_path}"
+                            image_urls['local'] = local_image_url
+                    except Exception as e2:
+                        print(f"[EventOutput] 本地保存失败: {e2}")
         else:
             print(f"[EventOutput]   未传入图片，跳过图片处理")
         
@@ -636,7 +645,8 @@ class EventOutput:
                 ftp_gif_url=gif_urls.get('ftp', ''),
                 metadata=event.get('metadata', {}),
                 start_time=self._parse_datetime(event['data'].get('start_time')),
-                end_time=self._parse_datetime(event['data'].get('end_time'))
+                end_time=self._parse_datetime(event['data'].get('end_time')),
+                status=event['data'].get('status', 'tracking_start')
             )
             task_manager.add_event(event_record)
             
@@ -652,11 +662,17 @@ class EventOutput:
     
     @staticmethod
     def _parse_datetime(value):
-        """安全解析时间字符串"""
+        """安全解析时间字符串或时间戳"""
         if not value:
             return None
         if isinstance(value, datetime):
             return value
+        # 支持float/int类型的时间戳（Unix timestamp）
+        if isinstance(value, (float, int)):
+            try:
+                return datetime.fromtimestamp(value)
+            except (ValueError, TypeError, OSError):
+                return None
         try:
             return datetime.fromisoformat(str(value))
         except (ValueError, TypeError):
@@ -685,6 +701,7 @@ class EventOutput:
                 'ftp_image_url': event_record.ftp_image_url,
                 'start_time': event_record.start_time.isoformat() + 'Z' if event_record.start_time else None,
                 'end_time': event_record.end_time.isoformat() + 'Z' if event_record.end_time else None,
+                'status': event_record.status,
                 'created_at': event_record.created_at.isoformat() + 'Z' if event_record.created_at else None
             }
             
@@ -738,22 +755,272 @@ class EventOutput:
             metadata=extra_metadata
         )
 
+    def update_event(self, event_id: str, status: str = None,
+                     data: Dict = None, image=None,
+                     push_websocket: bool = False) -> bool:
+        """更新事件记录
+
+        供 TrackedObjectProcessor 在跟踪过程中更新事件状态和数据。
+        如果提供图片，会保存图片并更新图片 URL。
+
+        Args:
+            event_id: 事件 UUID
+            status: 事件状态（tracking_start / tracking_update / tracking_end / gif_ready），写入独立 status 列
+            data: 更新数据字典（可能包含 start_time, end_time, bbox 等）
+            image: 可选的图片数据（OpenCV BGR 格式）
+            push_websocket: 是否推送 event_update 到前端（end 时为 True）
+
+        Returns:
+            是否更新成功
+        """
+        try:
+            from src.tasks.task_manager import TaskManager
+            task_manager = TaskManager()
+
+            image_urls = {}
+            gif_urls = {}
+
+            # 处理图片（如果提供）
+            if image is not None:
+                try:
+                    compressed_image = self._compress_image(image)
+
+                    # 本地保存
+                    if getattr(self, 'local_enabled', False):
+                        local_path = self._save_image_local(event_id, compressed_image)
+                        if local_path:
+                            image_urls['local'] = f"http://{self.server_host}:{self.server_port}/{local_path}"
+
+                    # 远程上传
+                    if self.image_outputters:
+                        for outputter in self.image_outputters:
+                            try:
+                                url = outputter.upload(event_id, compressed_image, content_type='image/jpeg')
+                                image_urls[outputter.__class__.__name__] = url
+                            except Exception as e:
+                                print(f"[EventOutput] 更新事件图片上传失败 ({outputter.__class__.__name__}): {e}")
+                except Exception as e:
+                    print(f"[EventOutput] 更新事件图片处理失败: {e}")
+
+            # 提取 data 中的字段
+            metadata = data.get('metadata') if data else None
+            start_time = self._parse_datetime(data.get('start_time')) if data else None
+            end_time = self._parse_datetime(data.get('end_time')) if data else None
+            bbox = data.get('bbox') if data else None
+            confidence = data.get('confidence') if data else None
+            class_name = data.get('class_name') if data else None
+
+            # 提取 gif_urls（如果存在）
+            if data and 'gif_urls' in data:
+                gif_urls = data['gif_urls']
+
+            # ✅ status 写入独立 status 列（不再塞入 metadata）
+            # 将 data 中不属于独立列的额外字段放入 metadata
+            if data:
+                known_keys = ('metadata', 'start_time', 'end_time', 'bbox',
+                              'gif_urls', 'confidence', 'class_name', 'status')
+                extra_meta = {k: v for k, v in data.items() if k not in known_keys}
+                if extra_meta:
+                    if metadata is None:
+                        metadata = {}
+                    if isinstance(metadata, dict):
+                        metadata.update(extra_meta)
+                    else:
+                        metadata = extra_meta
+
+            # 更新数据库（event_type=None 表示不更新 type 字段，保持创建时的 'tracking'）
+            success = task_manager.update_event(
+                event_id=event_id,
+                event_type=None,
+                metadata=metadata,
+                image_urls=image_urls if image_urls else None,
+                gif_urls=gif_urls if gif_urls else None,
+                start_time=start_time,
+                end_time=end_time,
+                bbox=bbox,
+                confidence=confidence,
+                class_name=class_name,
+                status=status
+            )
+
+            if success:
+                print(f"[EventOutput] 事件更新成功: event_id={event_id[:8]}, status={status}")
+            else:
+                print(f"[EventOutput] 事件更新失败（未找到记录）: event_id={event_id[:8]}")
+
+            # ✅ 新增：end 时推送 event_update 到前端
+            if push_websocket and success:
+                self._push_event_update_to_websocket(event_id, status, data, image_urls)
+
+            return success
+
+        except Exception as e:
+            print(f"[EventOutput] 更新事件异常: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _push_event_update_to_websocket(self, event_id: str, status: str,
+                                        data: Dict, image_urls: Dict):
+        """推送事件状态更新到前端驾驶舱（event_update 事件）
+
+        Args:
+            event_id: 事件 UUID
+            status: 事件状态（active / ended）
+            data: 更新数据字典
+            image_urls: 图片 URL 字典
+        """
+        try:
+            import requests
+            payload = {
+                'event_id': event_id,
+                'status': status,
+                'data': data or {},
+                'image_urls': image_urls or {},
+            }
+            requests.post(
+                'http://127.0.0.1:5555/api/events/update',
+                json=payload,
+                timeout=2
+            )
+        except Exception as e:
+            print(f"[EventOutput] 推送 event_update 失败: {e}")
+
+    def _get_gif_generator(self):
+        """延迟初始化 GIF 生成器"""
+        if self._gif_generator is None:
+            try:
+                from .gif_generator import GIFGenerator
+                # 合并全局存储配置到 GIF 配置中
+                gif_config = dict(self.gif_cfg)
+                gif_config['storage'] = self.config.get('storage', {})
+                self._gif_generator = GIFGenerator(gif_config)
+            except Exception as e:
+                print(f"[EventOutput] GIF 生成器初始化失败: {e}")
+                self._gif_generator = None
+        return self._gif_generator
+
+    def generate_gif(self, event_id: str, frames: list,
+                     bbox: tuple = None, trajectory_points: list = None) -> Optional[str]:
+        """生成 GIF 并更新事件的 GIF URL
+
+        Args:
+            event_id: 事件 UUID
+            frames: 帧图像列表（numpy 数组，BGR 格式）
+            bbox: 目标边界框 (x1, y1, x2, y2)
+            trajectory_points: 轨迹点列表（当前由 GIFGenerator 内部根据 bbox 生成）
+
+        Returns:
+            GIF 本地路径（成功）或 None（失败/未启用）
+        """
+        if not self.gif_enabled:
+            return None
+
+        gif_generator = self._get_gif_generator()
+        if gif_generator is None:
+            return None
+
+        try:
+            # 将纯图像列表转换为 GIFGenerator 期望的帧字典列表
+            bbox_list = list(bbox) if bbox else [0, 0, 0, 0]
+            gif_frames = []
+            for img in frames:
+                if img is None:
+                    continue
+                gif_frames.append({
+                    'image': img,
+                    'bbox': bbox_list,
+                    'is_full_frame': True,
+                })
+
+            if not gif_frames:
+                print(f"[EventOutput] GIF 帧序列为空，跳过生成: event_id={event_id[:8]}")
+                return None
+
+            # 生成输出文件名（基于 event_id）
+            output_filename = f"{event_id[:8]}.gif"
+
+            # 调用 GIFGenerator 生成 GIF
+            gif_urls = gif_generator.generate(
+                track_id=0,  # 不使用 track_id，由 output_filename 决定文件名
+                frames=gif_frames,
+                output_filename=output_filename
+            )
+
+            if not gif_urls:
+                return None
+
+            # 更新数据库中的 GIF URL 和状态
+            from src.tasks.task_manager import TaskManager
+            task_manager = TaskManager()
+            task_manager.update_event(
+                event_id=event_id,
+                gif_urls=gif_urls,
+                status='gif_ready'
+            )
+
+            local_path = gif_urls.get('local', '')
+            print(f"[EventOutput] GIF 生成成功: event_id={event_id[:8]}, urls={list(gif_urls.keys())}")
+
+            # ✅ 新增：推送 gif_ready 到前端（驾驶舱 + 事件管理页面）
+            self._push_gif_ready_to_websocket(event_id, gif_urls)
+
+            return local_path if local_path else None
+
+        except Exception as e:
+            print(f"[EventOutput] GIF 生成失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _push_gif_ready_to_websocket(self, event_id: str, gif_urls: dict):
+        """推送 GIF 完成通知到前端（gif_ready 事件）
+
+        让前端实时收到 GIF 并更新已显示事件卡片的 GIF 缩略图。
+
+        Args:
+            event_id: 事件 UUID
+            gif_urls: GIF URL 字典 {'local': ..., 'minio': ..., 'ftp': ...}
+        """
+        try:
+            import requests
+            payload = {
+                'event_id': event_id,
+                'local_gif_url': gif_urls.get('local', ''),
+                'minio_gif_url': gif_urls.get('minio', ''),
+                'ftp_gif_url': gif_urls.get('ftp', ''),
+            }
+            requests.post(
+                'http://127.0.0.1:5555/api/events/gif_ready',
+                json=payload,
+                timeout=2
+            )
+        except Exception as e:
+            print(f"[EventOutput] 推送 gif_ready 失败: {e}")
+
     def close(self):
         """关闭所有输出器"""
+        # 关闭 GIF 生成器
+        if self._gif_generator is not None:
+            try:
+                self._gif_generator.close()
+            except Exception as e:
+                print(f"[EventOutput] 关闭 GIF 生成器失败: {e}")
+
         # 关闭 MQTT 输出器
         if self.mqtt_outputter:
             try:
                 self.mqtt_outputter.close()
             except Exception as e:
                 print(f"[EventOutput] 关闭 MQTT 输出器失败: {e}")
-        
+
         # 关闭 WebSocket 输出器
         if self.websocket_outputter:
             try:
                 self.websocket_outputter.close()
             except Exception as e:
                 print(f"[EventOutput] 关闭 WebSocket 输出器失败: {e}")
-        
+
         # 关闭图片输出器
         for outputter in self.image_outputters:
             try:

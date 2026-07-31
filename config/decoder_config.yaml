@@ -27,22 +27,63 @@ decoder:
 
   # ========== 硬件加速配置 ==========
   # 硬件加速预设（必须使用）
-  # 支持的预设：
-  #   - preset-dxva2: Windows DXVA2（推荐 Windows）
-  #   - preset-nvidia: NVIDIA CUDA（需要 NVIDIA GPU）
-  #   - preset-intel-qsv-h264: Intel QSV（需要 Intel GPU）
-  #   - preset-vaapi: AMD VAAPI（Linux + AMD GPU）
-  #   - preset-rk-h264: Rockchip RKMPP（RK3588/RK3566）
-  # 空字符串：使用 CPU 解码（不推荐）
-  hwaccel_preset: "preset-dxva2"
+  # 支持的预设（完整列表）：
+  #   ✅ NVIDIA GPU（推荐）：
+  #     - preset-nvidia: NVIDIA CUDA（通用，推荐）
+  #     - preset-nvidia-h264: NVIDIA H.264 专用
+  #     - preset-nvidia-h265: NVIDIA H.265 专用
+  #     - preset-nvidia-mjpeg: NVIDIA MJPEG 专用
+  #
+  #   ✅ Windows 通用：
+  #     - preset-dxva2: Windows DXVA2（兼容性最好）
+  #
+  #   ✅ Intel GPU：
+  #     - preset-intel-qsv-h264: Intel QSV H.264
+  #     - preset-intel-qsv-h265: Intel QSV H.265
+  #
+  #   ✅ AMD GPU（Linux）：
+  #     - preset-vaapi: AMD VAAPI
+  #
+  #   ✅ 嵌入式平台：
+  #     - preset-rk-h264: Rockchip RK3588/RK3566 H.264
+  #     - preset-rk-h265: Rockchip RK3588/RK3566 H.265
+  #     - preset-jetson-h264: Jetson Nano/Xavier H.264
+  #     - preset-jetson-h265: Jetson Nano/Xavier H.265
+  #     - preset-rpi-64-h264: Raspberry Pi H.264
+  #     - preset-rpi-64-h265: Raspberry Pi H.265
+  #
+  #   ⚠️ 实验性：
+  #     - preset-vulkan: Vulkan（实验性，不推荐生产环境）
+  #
+  # 空字符串：使用 CPU 解码（不推荐，性能差）
+  #
+  # ⚠️ 根据您的硬件环境（NVIDIA RTX 2070 + CUDA 12.9），建议使用 "preset-nvidia"
+  # 如果遇到兼容性问题，可以回退到 "preset-dxva2"（Windows 通用）
+  hwaccel_preset: "preset-nvidia"
 
   # ========== 输入预设配置 ==========
-  # 输入预设（用于优化 RTSP 流处理）
-  # 支持的预设：
-  #   - preset-rtsp-generic: RTSP 通用预设（推荐）
-  #   - preset-rtsp-udp: RTSP UDP 传输
-  #   - preset-http-mjpeg-generic: HTTP MJPEG 流
-  # 空字符串：使用默认 RTSP 配置
+  # 输入预设（用于优化 RTSP/HTTP/RTMP 流处理）
+  # 支持的预设（完整列表）：
+  #   ✅ RTSP 流（推荐）：
+  #     - preset-rtsp-generic: RTSP 通用预设（推荐，TCP 传输，稳定优先）
+  #     - preset-rtsp-restream: RTSP 重流预设（低延迟，适合本地推流）
+  #     - preset-rtsp-restream-low-latency: RTSP 重流低延迟预设（最低延迟）
+  #     - preset-rtsp-udp: RTSP UDP 传输（低延迟，需要网络稳定）
+  #     - preset-rtsp-blue-iris: RTSP Blue Iris 专用（兼容 Blue Iris 软件）
+  #
+  #   ✅ HTTP 流：
+  #     - preset-http-mjpeg-generic: HTTP MJPEG 流（适合 MJPEG 摄像头）
+  #     - preset-http-jpeg-generic: HTTP JPEG 流（适合单帧 JPEG 摄像头）
+  #     - preset-http-reolink: HTTP Reolink 专用（兼容 Reolink 摄像头）
+  #
+  #   ✅ RTMP 流：
+  #     - preset-rtmp-generic: RTMP 流（适合 RTMP 推流）
+  #
+  # 空字符串：使用默认 RTSP 配置（TCP 传输）
+  #
+  # ⚠️ 推荐使用 "preset-rtsp-generic"（通用性强，稳定性好）
+  # 如果遇到网络抖动或丢包问题，可以尝试 "preset-rtsp-udp"（需要网络稳定）
+  # 如果需要最低延迟，可以尝试 "preset-rtsp-restream-low-latency"
   input_preset: "preset-rtsp-generic"
 
   # ========== 输出配置 ==========
@@ -66,78 +107,41 @@ decoder:
   # 说明：高码率视频建议增大此值
   buffer_size: 2097152  # 2 * 1024 * 1024
 
-  # ========== 环形缓冲区配置（新架构）==========
+  # ========== 环形缓冲区配置（零拷贝架构）==========
   # 环形缓冲区块数量（推荐：10）
   # 说明：块数量越多，可以缓存的帧越多，避免丢帧
-  # - 太少：容易丢帧（检测速度跟不上时）
-  # - 太多：内存占用增加，但更稳定
+  # 每块大小 = width * height * 1.5（I420 格式）
+  # 例如：640x640 I420 = 640 * 640 * 1.5 = 614,400 字节 ≈ 0.6 MB
+  #
   # 推荐值：
-  #   - 实时性优先：5-8块
-  #   - 稳定性优先：10-15块
+  #   - 实时性优先（低延迟）：5-8 块（内存占用小，但容易丢帧）
+  #   - 稳定性优先（推荐）：10-15 块（内存占用适中，稳定性好）
+  #   - 高吞吐量场景：20-30 块（适合高码率视频或多任务并发）
+  #
+  # ⚠️ 内存占用计算：block_count * width * height * 1.5
+  # 例如：10 块 * 640 * 640 * 1.5 = 6 MB
   ring_buffer_block_count: 10
 
   # 索引队列大小（推荐：50）
-  # 说明：索引队列用于调度和同步，只存储索引（不存储数据）
-  # - 太小：容易丢帧
+  # 说明：索引队列用于调度和同步，只存储索引（序列号、块ID、时间戳）
+  # 不存储实际帧数据，内存占用极小（每个索引约 32 字节）
+  #
+  # 推荐值：ring_buffer_block_count * 5（例如：10 * 5 = 50）
+  # - 太小：容易丢帧（生产速度 > 消费速度时）
   # - 太大：增加延迟（但不会丢失帧）
-  # 推荐值：ring_buffer_block_count * 5
+  #
+  # ⚠️ 内存占用计算：queue_size * 32 字节（几乎可忽略）
   index_queue_size: 50
-
-  # ========== 预处理配置 ==========
-  # 模型输入尺寸（YOLO模型通常为640）
-  # 说明：与YOLO模型训练时的输入尺寸一致
-  model_input_size: 640
-
-  # 是否启用GPU预处理（推荐：false）
-  # 说明：Windows上预编译的OpenCV通常不支持CUDA
-  # - false：CPU预处理（I420架构，性能已优化60%）
-  # - true：GPU预处理（需要编译支持CUDA的OpenCV）
-  # 当前建议：使用CPU预处理，I420架构性能已经很好（15-20ms）
-  use_gpu_preprocess: false
-
-  # RGB均值（用于归一化，默认：[0.0, 0.0, 0.0]）
-  # 说明：预处理时的RGB通道均值
-  # 大多数YOLO模型使用[0.0, 0.0, 0.0]
-  rgb_mean: [0.0, 0.0, 0.0]
-
-  # RGB标准差（用于归一化，默认：[1.0, 1.0, 1.0]）
-  # 说明：预处理时的RGB通道标准差
-  # 大多数YOLO模型使用[1.0, 1.0, 1.0]
-  rgb_std: [1.0, 1.0, 1.0]
 
   # ========== FFmpeg 滤镜参数（视频预处理）==========
   # FFmpeg 滤镜参数（用于视频预处理）
   # 说明：在解码后、缩放前应用的滤镜，如降噪、锐化等
   # 例如：["noise=c1s=1:allf", "unsharp=5:5:1.0:5:5:0.0"]
   # 空列表：不应用额外滤镜
+  #
+  # 注意：以下参数已移除（实际配置来源）：
+  # - model_input_size: 从算法库获取（algorithm.input_width/height）
+  # - use_gpu_preprocess: 从检测器配置获取（detector_config.yaml）
+  # - rgb_mean/rgb_std: 从算法库获取（algorithm.rgb_mean/std）
   ffmpeg_filters: []
 
-# ----------------------------------------
-# 任务表动态配置说明
-# ----------------------------------------
-# 任务表中的 decoder_config 字段可以覆盖上述默认值
-# 例如（JSON 格式）：
-# {
-#   "width": 1920,
-#   "height": 1080,
-#   "fps": 30,
-#   "hwaccel_preset": "preset-dxva2",
-#   "input_preset": "preset-rtsp-generic",
-#   "ring_buffer_block_count": 15,
-#   "index_queue_size": 75,
-#   "model_input_size": 640,
-#   "use_gpu_preprocess": true,
-#   "rgb_mean": [0.0, 0.0, 0.0],
-#   "rgb_std": [1.0, 1.0, 1.0],
-#   "ffmpeg_filters": ["noise=c1s=1:allf"]  # 降噪滤镜示例
-# }
-#
-# GPU预处理性能优化建议：
-# - 如果OpenCV编译时包含CUDA支持，建议启用use_gpu_preprocess
-# - GPU预处理可以将预处理耗时从20ms降低到5ms（提升75%）
-# - CPU占用降低70%，适合多摄像机并发场景
-#
-# 优先级：
-# 1. 任务表中的配置（最高优先级）
-# 2. 本配置文件中的默认值
-# 3. DecoderConfig 类中的硬编码默认值（最低优先级）

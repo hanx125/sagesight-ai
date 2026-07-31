@@ -306,38 +306,6 @@
     </div>
 </div>
 
-<!-- 通道Zone配置模态框（二级） -->
-<div id="channelZoneConfigModal" class="modal modal-secondary">
-    <div class="modal-content modal-large">
-        <div class="modal-header">
-            <h3 id="channelZoneConfigTitle">Zone区域配置</h3>
-            <button class="modal-close" onclick="closeChannelZoneConfigModal()">&times;</button>
-        </div>
-        <div class="modal-body">
-            <form id="channelZoneConfigForm">
-                <input type="hidden" id="channelZoneConfigTaskId">
-                <input type="hidden" id="channelZoneConfigChannelId">
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <button type="button" class="btn btn-secondary" onclick="addChannelZone()">+ 添加Zone区域</button>
-                        <small style="color: #888; font-size: 12px; margin-left: 10px;">支持多个区域，每个区域可单独配置</small>
-                    </div>
-                </div>
-
-                <!-- Zone列表容器 -->
-                <div id="channelZonesContainer">
-                    <!-- Zone配置项将通过JavaScript动态添加 -->
-                </div>
-            </form>
-        </div>
-        <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeChannelZoneConfigModal()">取消</button>
-            <button type="button" class="btn btn-primary" onclick="saveChannelZoneConfig()">保存配置</button>
-        </div>
-    </div>
-</div>
-
 <!-- 参数配置模态框 -->
 <div id="configModal" class="modal">
     <div class="modal-content modal-xlarge">
@@ -357,7 +325,6 @@
                     <div class="config-tab" data-tab="motion" onclick="switchConfigTab('motion')">运动检测</div>
                     <div class="config-tab" data-tab="event" onclick="switchConfigTab('event')">事件输出</div>
                     <div class="config-tab" data-tab="display" onclick="switchConfigTab('display')">显示配置</div>
-                    <div class="config-tab" data-tab="zones" onclick="switchConfigTab('zones')">Zone区域</div>
                 </div>
 
                 <!-- 选项卡内容区域 -->
@@ -472,7 +439,9 @@
                             <small style="color: #888; font-size: 12px;">视频预处理滤镜，如降噪、锐化等（可选）</small>
                         </div>
                         <div class="form-group">
-                            <!-- 占位，保持布局对齐 -->
+                            <label for="decoderModelInputSize">模型输入尺寸</label>
+                            <input type="number" id="decoderModelInputSize" name="decoder_model_input_size" placeholder="640">
+                            <small style="color: #888; font-size: 12px;">YOLO模型通常为640</small>
                         </div>
                     </div>
                 </div>
@@ -480,33 +449,7 @@
                 <!-- 检测器配置 -->
                 <div class="form-section tab-panel" data-tab="detector">
                     <h4 class="form-section-title">检测器配置</h4>
-                    
-                    <!-- 检测架构模式 -->
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="useDetectionPool">检测架构模式</label>
-                            <select id="useDetectionPool" name="use_detection_pool">
-                                <option value="false">单线程模式（稳定，适合低配机器）</option>
-                                <option value="true">进程池模式（高并发，适合多核CPU）</option>
-                            </select>
-                            <small style="color: #888; font-size: 12px;">
-                                单线程：传统架构，稳定可靠，适合单摄像机或低性能设备<br>
-                                进程池：多进程并行检测，充分利用GPU，适合多摄像机或高性能服务器
-                            </small>
-                        </div>
-                        <div class="form-group">
-                            <label for="useGpuPreprocess">GPU预处理加速</label>
-                            <select id="useGpuPreprocess" name="use_gpu_preprocess">
-                                <option value="false">禁用（CPU预处理）</option>
-                                <option value="true">启用（GPU加速）</option>
-                            </select>
-                            <small style="color: #888; font-size: 12px;">
-                                使用GPU进行I420→RGB转换、resize和归一化操作<br>
-                                性能提升75%，CPU占用降低70%，需要OpenCV CUDA支持
-                            </small>
-                        </div>
-                    </div>
-                    
+
                     <div class="form-row">
                         <div class="form-group">
                             <label for="detectorBackend">推理后端</label>
@@ -536,6 +479,16 @@
                             <label for="detectorTensorrtEnginePath">TensorRT Engine路径</label>
                             <input type="text" id="detectorTensorrtEnginePath" name="detector_tensorrt_engine_path" placeholder="models/yolov11n_trt_fp16.engine">
                             <small style="color: #888; font-size: 12px;">仅backend=tensorrt时使用（onnx_tensorrt会自动生成）</small>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="detectorTensorrtCachePath">TensorRT缓存路径</label>
+                            <input type="text" id="detectorTensorrtCachePath" name="detector_tensorrt_cache_path" placeholder="./trt_cache">
+                            <small style="color: #888; font-size: 12px;">TensorRT Engine缓存目录（onnx_tensorrt后端）</small>
+                        </div>
+                        <div class="form-group">
+                            <!-- 占位 -->
                         </div>
                     </div>
                     <div class="form-row">
@@ -574,192 +527,98 @@
                             </select>
                             <small style="color: #888; font-size: 12px;">仅backend=rknn时使用</small>
                         </div>
+                        <div class="form-group">
+                            <label for="detectorRknnCoreMask">RKNN核心掩码</label>
+                            <select id="detectorRknnCoreMask" name="detector_rknn_core_mask">
+                                <option value="0">自动（双核）</option>
+                                <option value="1">NPU0</option>
+                                <option value="2">NPU1</option>
+                                <option value="3">双核并行</option>
+                            </select>
+                            <small style="color: #888; font-size: 12px;">RK3588双核NPU配置</small>
+                        </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
                             <label for="detectorRknnDeviceId">RKNN设备ID</label>
                             <input type="text" id="detectorRknnDeviceId" name="detector_rknn_device_id" placeholder="">
-                            <small style="color: #888; font-size: 12px;">多设备时指定设备ID</small>
+                            <small style="color: #888; font-size: 12px;">多设备时指定（可选）</small>
                         </div>
                         <div class="form-group">
-                            <!-- 占位，保持布局对齐 -->
-                        </div>
-                    </div>
-
-                    <!-- 新增：预处理器配置 -->
-                    <h5 style="margin-top: 20px; margin-bottom: 10px; color: #666; font-size: 14px;">预处理器配置</h5>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="detectorPreprocessorWidth">输入宽度</label>
-                            <input type="number" id="detectorPreprocessorWidth" name="detector_preprocessor_width" placeholder="640">
-                            <small style="color: #888; font-size: 12px;">模型输入宽度</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="detectorPreprocessorHeight">输入高度</label>
-                            <input type="number" id="detectorPreprocessorHeight" name="detector_preprocessor_height" placeholder="640">
-                            <small style="color: #888; font-size: 12px;">模型输入高度</small>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="detectorPreprocessorModelInputSize">模型输入尺寸</label>
-                            <input type="number" id="detectorPreprocessorModelInputSize" name="detector_preprocessor_model_input_size" placeholder="640">
-                            <small style="color: #888; font-size: 12px;">模型输入尺寸（正方形）</small>
-                        </div>
-                        <div class="form-group">
-                            <!-- 占位，保持布局对齐 -->
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="detectorPreprocessorRgbMean">RGB均值</label>
-                            <input type="text" id="detectorPreprocessorRgbMean" name="detector_preprocessor_rgb_mean" placeholder="0.0,0.0,0.0">
-                            <small style="color: #888; font-size: 12px;">RGB通道均值（逗号分隔）</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="detectorPreprocessorRgbStd">RGB标准差</label>
-                            <input type="text" id="detectorPreprocessorRgbStd" name="detector_preprocessor_rgb_std" placeholder="1.0,1.0,1.0">
-                            <small style="color: #888; font-size: 12px;">RGB通道标准差（逗号分隔）</small>
+                            <!-- 占位 -->
                         </div>
                     </div>
                 </div>
 
-                <!-- 跟踪器配置 -->
+                <!-- 跟踪器配置（Norfair） -->
                 <div class="form-section tab-panel" data-tab="tracker">
-                    <h4 class="form-section-title">跟踪器配置</h4>
+                    <h4 class="form-section-title">跟踪器配置（Norfair）</h4>
                     <div class="form-row">
-                        <div class="form-group">
-                            <label for="trackerTrackThresh">高分检测阈值</label>
-                            <input type="number" id="trackerTrackThresh" name="tracker_track_thresh" step="0.01" min="0" max="1" placeholder="0.30">
-                        </div>
-                        <div class="form-group">
-                            <label for="trackerMatchThresh">匹配阈值</label>
-                            <input type="number" id="trackerMatchThresh" name="tracker_match_thresh" step="0.01" min="0" max="1" placeholder="0.50">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="trackerMaxAge">最大丢失帧数</label>
-                            <input type="number" id="trackerMaxAge" name="tracker_max_age" placeholder="45">
-                        </div>
                         <div class="form-group">
                             <label for="trackerNInit">确认帧数</label>
-                            <input type="number" id="trackerNInit" name="tracker_n_init" placeholder="2">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="trackerMaxHistoryLength">轨迹历史长度</label>
-                            <input type="number" id="trackerMaxHistoryLength" name="tracker_max_history_length" placeholder="30">
+                            <input type="number" id="trackerNInit" name="tracker_n_init" placeholder="3">
+                            <small style="color: #888; font-size: 12px;">目标连续被检测到该帧数后确认为有效轨迹</small>
                         </div>
                         <div class="form-group">
-                            <!-- 占位，保持布局对齐 -->
+                            <label for="trackerMaxAge">最大丢失帧数</label>
+                            <input type="number" id="trackerMaxAge" name="tracker_max_age" placeholder="30">
+                            <small style="color: #888; font-size: 12px;">目标连续丢失该帧数后注销轨迹</small>
                         </div>
                     </div>
                 </div>
 
-                <!-- 运动检测配置 -->
+                <!-- 运动检测配置（帧差法） -->
                 <div class="form-section tab-panel" data-tab="motion">
-                    <h4 class="form-section-title">运动检测配置</h4>
+                    <h4 class="form-section-title">运动检测配置（帧差法）</h4>
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="motionHistory">历史帧数</label>
-                            <input type="number" id="motionHistory" name="motion_history" placeholder="500">
+                            <label for="motionHeight">检测分辨率</label>
+                            <input type="number" id="motionHeight" name="motion_height" placeholder="180">
+                            <small style="color: #888; font-size: 12px;">运动检测降采样高度（宽度按比例），值小性能好</small>
                         </div>
                         <div class="form-group">
-                            <label for="motionVarThreshold">方差阈值</label>
-                            <input type="number" id="motionVarThreshold" name="motion_var_threshold" step="0.1" placeholder="16.0">
+                            <label for="motionThreshold">运动阈值</label>
+                            <input type="number" id="motionThreshold" name="motion_threshold" min="0" max="255" placeholder="25">
+                            <small style="color: #888; font-size: 12px;">帧差二值化阈值（0-255），值小更敏感</small>
                         </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="motionMinArea">最小区域面积</label>
-                            <input type="number" id="motionMinArea" name="motion_min_area" placeholder="500">
+                            <label for="motionContourArea">最小轮廓面积</label>
+                            <input type="number" id="motionContourArea" name="motion_contour_area" placeholder="200">
+                            <small style="color: #888; font-size: 12px;">过滤小于此面积的轮廓（降噪）</small>
                         </div>
                         <div class="form-group">
-                            <label for="motionConfidenceBoost">置信度增益</label>
-                            <input type="number" id="motionConfidenceBoost" name="motion_confidence_boost" step="0.01" min="0" max="1" placeholder="0.15">
+                            <label for="motionBlurRadius">滤波半径</label>
+                            <input type="number" id="motionBlurRadius" name="motion_blur_radius" placeholder="1">
+                            <small style="color: #888; font-size: 12px;">高斯滤波半径（降噪）</small>
                         </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="motionConfidencePenalty">置信度惩罚</label>
-                            <input type="number" id="motionConfidencePenalty" name="motion_confidence_penalty" step="0.01" min="0" max="1" placeholder="0.05">
+                            <label for="motionFrameAlpha">背景更新速率</label>
+                            <input type="number" id="motionFrameAlpha" name="motion_frame_alpha" step="0.01" min="0" max="1" placeholder="0.01">
+                            <small style="color: #888; font-size: 12px;">背景模型更新速率（0-1），值大更新快</small>
                         </div>
                         <div class="form-group">
-                            <!-- 占位，保持布局对齐 -->
+                            <label for="motionLightningThreshold">闪电阈值</label>
+                            <input type="number" id="motionLightningThreshold" name="motion_lightning_threshold" step="0.01" min="0" max="1" placeholder="0.8">
+                            <small style="color: #888; font-size: 12px;">运动占比超此值触发重新校准</small>
                         </div>
                     </div>
-
-                    <!-- 新增：高级运动检测参数 -->
-                    <h5 style="margin-top: 20px; margin-bottom: 10px; color: #666; font-size: 14px;">高级参数</h5>
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="motionDetectShadows">检测阴影</label>
-                            <select id="motionDetectShadows" name="motion_detect_shadows">
-                                <option value="true">启用</option>
-                                <option value="false">禁用</option>
+                            <label for="motionImproveContrast">对比度增强</label>
+                            <select id="motionImproveContrast" name="motion_improve_contrast">
+                                <option value="false">禁用（性能优先）</option>
+                                <option value="true">启用（适应光照变化）</option>
                             </select>
-                            <small style="color: #888; font-size: 12px;">背景减除时检测阴影</small>
+                            <small style="color: #888; font-size: 12px;">开启可适应光照变化，增加约10ms开销</small>
                         </div>
                         <div class="form-group">
-                            <label for="motionBlurSize">模糊核大小</label>
-                            <input type="number" id="motionBlurSize" name="motion_blur_size" placeholder="5">
-                            <small style="color: #888; font-size: 12px;">高斯模糊核大小（奇数）</small>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="motionMorphSize">形态学核大小</label>
-                            <input type="number" id="motionMorphSize" name="motion_morph_size" placeholder="5">
-                            <small style="color: #888; font-size: 12px;">形态学操作核大小</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="motionLearningRate">学习率</label>
-                            <input type="number" id="motionLearningRate" name="motion_learning_rate" step="0.01" placeholder="-1">
-                            <small style="color: #888; font-size: 12px;">背景学习率（-1为自动）</small>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="motionHistoryLength">运动历史长度</label>
-                            <input type="number" id="motionHistoryLength" name="motion_history_length" placeholder="10">
-                            <small style="color: #888; font-size: 12px;">运动历史记录帧数</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="motionInitThreshold">初始阈值</label>
-                            <input type="number" id="motionInitThreshold" name="motion_init_threshold" placeholder="30">
-                            <small style="color: #888; font-size: 12px;">初始化阈值</small>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="motionForegroundThreshold">前景阈值</label>
-                            <input type="number" id="motionForegroundThreshold" name="motion_foreground_threshold" step="0.01" min="0" max="1" placeholder="0.3">
-                            <small style="color: #888; font-size: 12px;">前景检测阈值</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="motionMaxMotionRegions">最大运动区域数</label>
-                            <input type="number" id="motionMaxMotionRegions" name="motion_max_motion_regions" placeholder="20">
-                            <small style="color: #888; font-size: 12px;">最大运动区域数量</small>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="motionShowVisualization">显示可视化</label>
-                            <select id="motionShowVisualization" name="motion_show_visualization">
-                                <option value="true">启用</option>
-                                <option value="false">禁用</option>
-                            </select>
-                            <small style="color: #888; font-size: 12px;">显示运动检测可视化</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="motionUseForReid">用于ReID</label>
-                            <select id="motionUseForReid" name="motion_use_for_reid">
-                                <option value="true">启用</option>
-                                <option value="false">禁用</option>
-                            </select>
-                            <small style="color: #888; font-size: 12px;">运动检测辅助ReID</small>
+                            <label for="motionContrastFrameHistory">对比度历史帧数</label>
+                            <input type="number" id="motionContrastFrameHistory" name="motion_contrast_frame_history" placeholder="50">
+                            <small style="color: #888; font-size: 12px;">对比度历史保留帧数（值大响应慢）</small>
                         </div>
                     </div>
                 </div>
@@ -775,17 +634,39 @@
                                 <option value="false">禁用</option>
                             </select>
                         </div>
+                    </div>
+
+                    <!-- 图片存储开关（独立控制本地/MinIO/FTP） -->
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 1 1 100%;">
+                            <label>图片存储方式</label>
+                            <small style="color: #888; font-size: 12px; display: block;">打开哪个就存储哪个；MinIO/FTP需在系统管理中启用对应全局存储</small>
+                        </div>
+                    </div>
+                    <div class="form-row">
                         <div class="form-group">
-                            <label for="eventImageMethod">图片输出方式</label>
-                            <select id="eventImageMethod" name="event_image_method">
-                                <option value="both">上传+本地保存</option>
-                                <option value="minio">仅上传MinIO</option>
-                                <option value="ftp">仅上传FTP</option>
-                                <option value="local">仅本地保存</option>
+                            <label for="eventLocalEnabled">本地存储</label>
+                            <select id="eventLocalEnabled" name="event_local_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="eventMinioEnabled">MinIO存储</label>
+                            <select id="eventMinioEnabled" name="event_minio_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="eventFtpEnabled">FTP存储</label>
+                            <select id="eventFtpEnabled" name="event_ftp_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
                             </select>
                         </div>
                     </div>
-                    
+
                     <!-- GIF配置 -->
                     <div class="form-row">
                         <div class="form-group">
@@ -796,15 +677,36 @@
                             </select>
                             <small style="color: #888; font-size: 12px;">禁用可降低CPU占用</small>
                         </div>
+                    </div>
+
+                    <!-- GIF存储开关（独立控制本地/MinIO/FTP） -->
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 1 1 100%;">
+                            <label>GIF存储方式</label>
+                            <small style="color: #888; font-size: 12px; display: block;">打开哪个就存储哪个；MinIO/FTP需在系统管理中启用对应全局存储</small>
+                        </div>
+                    </div>
+                    <div class="form-row">
                         <div class="form-group">
-                            <label for="eventGifOutputMethod">GIF输出方式</label>
-                            <select id="eventGifOutputMethod" name="event_gif_output_method">
-                                <option value="both">上传+本地保存</option>
-                                <option value="minio">仅上传MinIO</option>
-                                <option value="ftp">仅上传FTP</option>
-                                <option value="local">仅本地保存</option>
+                            <label for="eventGifLocalEnabled">本地存储</label>
+                            <select id="eventGifLocalEnabled" name="event_gif_local_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
                             </select>
-                            <small style="color: #888; font-size: 12px;">GIF动画存储方式</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="eventGifMinioEnabled">MinIO存储</label>
+                            <select id="eventGifMinioEnabled" name="event_gif_minio_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="eventGifFtpEnabled">FTP存储</label>
+                            <select id="eventGifFtpEnabled" name="event_gif_ftp_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
                         </div>
                     </div>
                     <div class="form-row">
@@ -829,13 +731,7 @@
                         <div class="form-group">
                             <label for="eventMinConfidence">最小置信度</label>
                             <input type="number" id="eventMinConfidence" name="event_min_confidence" step="0.01" min="0" max="1" placeholder="0.5">
-                        </div>
-                        <div class="form-group">
-                            <label for="eventLocalBackup">本地备份</label>
-                            <select id="eventLocalBackup" name="event_local_backup">
-                                <option value="true">启用</option>
-                                <option value="false">禁用</option>
-                            </select>
+                            <small style="color: #888; font-size: 12px;">低于此置信度的事件将被过滤</small>
                         </div>
                     </div>
                     <div class="form-row">
@@ -895,17 +791,9 @@
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="displayAIStreamEnabled">启用AI视频流</label>
-                            <select id="displayAIStreamEnabled" name="display_ai_stream_enabled">
-                                <option value="true">启用</option>
-                                <option value="false">禁用</option>
-                            </select>
-                            <small style="color: #999;">⚠️ 建议间隔≥10，避免浏览器卡死</small>
-                        </div>
-                        <div class="form-group">
                             <label for="displayAIStreamInterval">AI流帧间隔</label>
                             <input type="number" id="displayAIStreamInterval" name="display_ai_stream_interval" placeholder="10" min="5" max="30">
-                            <small style="color: #999;">推荐值：10-20</small>
+                            <small style="color: #999;">推荐值：10-20（AI流由前端点击播放时按需启用）</small>
                         </div>
                     </div>
                     <div class="form-row">
@@ -938,6 +826,14 @@
                                 <option value="true">启用</option>
                                 <option value="false">禁用</option>
                             </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="displayShowZones">显示检测区域</label>
+                            <select id="displayShowZones" name="display_show_zones">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                            <small style="color: #888; font-size: 12px;">Zone区域多边形（通道级配置）</small>
                         </div>
                     </div>
                     <div class="form-row">
@@ -1009,79 +905,6 @@
                             <!-- 占位，保持布局对齐 -->
                         </div>
                     </div>
-
-                    <!-- 新增：调试信息配置 -->
-                    <h5 style="margin-top: 20px; margin-bottom: 10px; color: #666; font-size: 14px;">调试信息</h5>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="debugShowFps">显示FPS</label>
-                            <select id="debugShowFps" name="debug_show_fps">
-                                <option value="true">启用</option>
-                                <option value="false">禁用</option>
-                            </select>
-                            <small style="color: #888; font-size: 12px;">在画面上显示帧率</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="debugShowDetectionCount">显示检测数</label>
-                            <select id="debugShowDetectionCount" name="debug_show_detection_count">
-                                <option value="true">启用</option>
-                                <option value="false">禁用</option>
-                            </select>
-                            <small style="color: #888; font-size: 12px;">显示检测到的目标数量</small>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="debugShowTrackCount">显示跟踪数</label>
-                            <select id="debugShowTrackCount" name="debug_show_track_count">
-                                <option value="true">启用</option>
-                                <option value="false">禁用</option>
-                            </select>
-                            <small style="color: #888; font-size: 12px;">显示跟踪的目标数量</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="debugShowFrameId">显示帧ID</label>
-                            <select id="debugShowFrameId" name="debug_show_frame_id">
-                                <option value="true">启用</option>
-                                <option value="false">禁用</option>
-                            </select>
-                            <small style="color: #888; font-size: 12px;">显示当前帧序号</small>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="debugFpsPosition">FPS位置(x,y)</label>
-                            <input type="text" id="debugFpsPosition" name="debug_fps_position" placeholder="10,30">
-                            <small style="color: #888; font-size: 12px;">调试信息显示位置</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="debugFontScale">调试字体大小</label>
-                            <input type="number" id="debugFontScale" name="debug_font_scale" step="0.1" placeholder="0.6">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="debugTextColor">调试文字颜色(BGR)</label>
-                            <input type="text" id="debugTextColor" name="debug_text_color" placeholder="255,255,255">
-                        </div>
-                        <div class="form-group">
-                            <!-- 占位，保持布局对齐 -->
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Zone区域配置 -->
-                <div class="form-section tab-panel" data-tab="zones">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                        <h4 class="form-section-title">Zone区域配置</h4>
-                        <button type="button" class="btn btn-primary btn-sm" onclick="addZoneConfig()">
-                            <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;vertical-align:middle;">
-                                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-                            </svg>
-                            添加区域
-                        </button>
-                    </div>
-                    <div id="zonesConfigContainer"></div>
                 </div>
 
                 </div><!-- config-tab-content -->
@@ -1133,10 +956,264 @@
         </div>
     </div>
 </div>
+
+<!-- Zone 区域配置模态框 -->
+<div id="channelZoneConfigModal" class="modal">
+    <div class="modal-content modal-large" style="max-width: 1000px;">
+        <div class="modal-header">
+            <h3>Zone区域配置 - <span id="zoneConfigChannelName"></span></h3>
+            <button class="modal-close" onclick="closeChannelZoneConfig()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="zone-config-layout">
+                <!-- 左侧：区域列表 + 属性面板（先设置区域，再绘制多边形） -->
+                <div class="zone-panel-section">
+                    <!-- 区域列表 -->
+                    <div class="zone-panel-block">
+                        <div class="zone-panel-header">
+                            <h4>区域列表</h4>
+                            <div class="zone-panel-actions">
+                                <button type="button" class="btn btn-sm btn-primary" onclick="addZone()" title="新增一个区域并进入绘制">+ 添加区域</button>
+                                <button type="button" class="btn btn-sm btn-danger" onclick="clearAllZones()" title="清除所有区域">全部清除</button>
+                            </div>
+                        </div>
+                        <div id="zoneList" class="zone-list">
+                            <div class="zone-list-empty">暂无区域，请点击“添加区域”</div>
+                        </div>
+                    </div>
+
+                    <!-- 区域属性 -->
+                    <div class="zone-panel-block">
+                        <h4>区域属性</h4>
+                        <div class="zone-prop-form">
+                            <div class="form-group">
+                                <label for="zonePropName">区域名称</label>
+                                <input type="text" id="zonePropName" placeholder="输入区域名称" oninput="onZonePropChange()">
+                            </div>
+                            <div class="form-group">
+                                <label for="zonePropRequired">必需区域</label>
+                                <select id="zonePropRequired" onchange="onZonePropChange()">
+                                    <option value="false">否</option>
+                                    <option value="true">是</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="zonePropLoitering">徘徊检测</label>
+                                <select id="zonePropLoitering" onchange="onZonePropChange()">
+                                    <option value="false">禁用</option>
+                                    <option value="true">启用</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="zonePropLoiteringTime">徘徊阈值（秒）</label>
+                                <input type="number" id="zonePropLoiteringTime" min="5" max="3600" value="30" disabled onchange="onZonePropChange()">
+                            </div>
+                            <button type="button" class="btn btn-sm btn-secondary zone-redraw-btn" id="redrawZoneBtn" onclick="redrawActiveZone()" disabled>重新绘制多边形</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右侧：Canvas 画布 -->
+                <div class="zone-canvas-section">
+                    <div class="zone-canvas-toolbar">
+                        <span class="zone-canvas-hint">先点“添加区域”新建区域，再在画布上左键添加顶点 | 双击/点击首顶点闭合 | 拖拽移动 | 右键删除顶点</span>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="cancelDrawing()">取消绘制</button>
+                    </div>
+                    <canvas id="zoneCanvas" width="640" height="480" style="border: 1px solid var(--border-color); background: #2a2a2a; cursor: crosshair; max-width: 100%;"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="refreshSnapshot()">
+                <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;margin-right:4px;">
+                    <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                </svg>
+                刷新快照
+            </button>
+            <button type="button" class="btn btn-secondary" onclick="closeChannelZoneConfig()">取消</button>
+            <button type="button" class="btn btn-primary" id="zoneConfigSaveBtn" onclick="saveZoneConfig()">保存配置</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    .zone-config-layout {
+        display: flex;
+        gap: 16px;
+        height: 520px;
+    }
+    .zone-canvas-section {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .zone-canvas-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+    }
+    .zone-canvas-hint {
+        font-size: 12px;
+        color: var(--text-secondary);
+    }
+    .zone-canvas-section canvas {
+        flex: 1;
+        width: 100%;
+        height: auto;
+    }
+    .zone-panel-section {
+        width: 300px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        overflow-y: auto;
+    }
+    .zone-panel-block {
+        background: var(--bg-color);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 12px;
+    }
+    .zone-panel-block h4 {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+        color: var(--text-primary);
+    }
+    .zone-panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+        gap: 8px;
+    }
+    .zone-panel-header h4 {
+        margin: 0;
+    }
+    .zone-panel-actions {
+        display: flex;
+        gap: 6px;
+    }
+    .zone-redraw-btn {
+        width: 100%;
+        margin-top: 4px;
+    }
+    .zone-redraw-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+    .zone-list {
+        max-height: 240px;
+        overflow-y: auto;
+    }
+    .zone-list-empty {
+        text-align: center;
+        color: var(--text-secondary);
+        font-size: 12px;
+        padding: 16px 8px;
+    }
+    .zone-list-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background 0.2s;
+        margin-bottom: 4px;
+    }
+    .zone-list-item:hover {
+        background: rgba(0, 0, 0, 0.05);
+    }
+    .zone-list-item.active {
+        background: rgba(0, 122, 255, 0.1);
+        border: 1px solid var(--primary-color);
+    }
+    .zone-color-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        border: 1px solid rgba(0, 0, 0, 0.2);
+    }
+    .zone-name {
+        flex: 1;
+        font-size: 13px;
+        color: var(--text-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .zone-required-badge, .zone-loitering-badge {
+        font-size: 10px;
+        padding: 1px 5px;
+        border-radius: 3px;
+        flex-shrink: 0;
+    }
+    .zone-required-badge {
+        background: #fff3e0;
+        color: #f57c00;
+    }
+    .zone-loitering-badge {
+        background: #fce4ec;
+        color: #c62828;
+    }
+    .zone-undrawn-badge {
+        font-size: 10px;
+        padding: 1px 5px;
+        border-radius: 3px;
+        flex-shrink: 0;
+        background: #fff9c4;
+        color: #f9a825;
+    }
+    .zone-list-item.undrawn .zone-name {
+        color: var(--text-secondary);
+        font-style: italic;
+    }
+    .zone-delete-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 2px;
+        color: var(--text-secondary);
+        opacity: 0.5;
+        transition: opacity 0.2s;
+        flex-shrink: 0;
+    }
+    .zone-delete-btn:hover {
+        opacity: 1;
+        color: #f44336;
+    }
+    .zone-prop-form .form-group {
+        margin-bottom: 10px;
+    }
+    .zone-prop-form label {
+        display: block;
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin-bottom: 4px;
+    }
+    .zone-prop-form input, .zone-prop-form select {
+        width: 100%;
+        padding: 6px 8px;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        font-size: 13px;
+        background: var(--card-bg);
+        color: var(--text-primary);
+    }
+    .zone-prop-form input:disabled, .zone-prop-form select:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+</style>
 {% endblock %}
 
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/tasks.js') }}"></script>
 <script src="{{ url_for('static', filename='js/config_modal.js') }}"></script>
-<script src="{{ url_for('static', filename='js/channel_zone_config.js') }}"></script>
+<script src="{{ url_for('static', filename='js/zone_canvas_editor.js') }}?v=20260731a"></script>
+<script src="{{ url_for('static', filename='js/channel_zone_config.js') }}?v=20260731a"></script>
 {% endblock %}

@@ -642,9 +642,7 @@
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/ZLMRTCClient.js') }}"></script>
 <script src="{{ url_for('static', filename='js/jessibuca/jessibuca.js') }}"></script>
-<script src="{{ url_for('static', filename='js/frame_cache.js') }}?v=20260725"></script>
-<script src="{{ url_for('static', filename='js/ai_player.js') }}?v=20260725"></script>
-<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260704"></script>
+<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260731"></script>
 <script src="{{ url_for('static', filename='js/ptz_joystick.js') }}"></script>
 <script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}"></script>
 <script>
@@ -732,21 +730,36 @@ function renderMonitorEvents() {
 function createMonitorEventCard(event) {
     const card = document.createElement('div');
     card.className = 'monitor-event-card';
+    card.dataset.eventId = event.event_id;  // ✅ 用于 event_update/gif_ready 查找卡片
     card.onclick = () => showMonitorEventDetail(event);
 
     const imageContainer = document.createElement('div');
     imageContainer.className = 'event-image-container';
 
-    // 优先使用本地图片
+    // ✅ 优先使用 GIF 动画作为封面（如果有），其次使用图片
+    const gifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
     const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
-    if (imageUrl) {
+    const coverUrl = gifUrl || imageUrl;  // GIF 优先
+
+    if (coverUrl) {
         const img = document.createElement('img');
-        img.src = imageUrl;
-        img.alt = `事件 ${event.event_id}`;
+        img.src = coverUrl;
+        img.alt = gifUrl ? `事件GIF ${event.event_id}` : `事件 ${event.event_id}`;
+        img.style.objectFit = 'cover';
         img.onerror = () => {
             imageContainer.innerHTML = '<div class="event-no-image"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></div>';
         };
         imageContainer.appendChild(img);
+
+        // ✅ 如果有 GIF，添加 GIF 标识
+        if (gifUrl) {
+            const gifBadge = document.createElement('div');
+            gifBadge.className = 'gif-badge';
+            gifBadge.innerHTML = '🎬 GIF';
+            imageContainer.appendChild(gifBadge);
+            card._gifUrl = gifUrl;
+            card._hasGif = true;
+        }
     } else {
         imageContainer.innerHTML = '<div class="event-no-image"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></div>';
     }
@@ -755,6 +768,7 @@ function createMonitorEventCard(event) {
 
     const infoContainer = document.createElement('div');
     infoContainer.className = 'event-info-container';
+    const statusInfo = getStatusDisplay(event.status);
     infoContainer.innerHTML = `
         <div class="event-info-row">
             <span class="event-tag tag-type">${formatEventType(event.type)}</span>
@@ -763,6 +777,9 @@ function createMonitorEventCard(event) {
         <div class="event-info-row">
             <span class="event-tag tag-task">${getTaskNameById(event.task_id) || '-'}</span>
             <span class="event-tag tag-time">${formatEventTime(event.start_time || event.created_at)}</span>
+        </div>
+        <div class="event-info-row">
+            <span class="event-status ${statusInfo.className}">${statusInfo.text}</span>
         </div>
     `;
     card.appendChild(infoContainer);
@@ -928,6 +945,18 @@ function initEventWebSocket() {
             addNewEventToMonitor(event);
         });
 
+        // ✅ 新增：事件状态更新（跟踪结束）
+        eventWebSocket.on('event_update', (data) => {
+            console.log('收到事件更新:', data);
+            updateMonitorEventCard(data);
+        });
+
+        // ✅ 新增：GIF 生成完成
+        eventWebSocket.on('gif_ready', (data) => {
+            console.log('收到GIF完成:', data);
+            updateMonitorEventGif(data);
+        });
+
         eventWebSocket.on('connect', () => {
             console.log('事件WebSocket已连接');
         });
@@ -979,6 +1008,104 @@ function addNewEventToMonitor(event) {
     playEventNotificationSound();
 }
 
+// ✅ 新增：更新已显示事件卡片的状态（跟踪结束）
+function updateMonitorEventCard(data) {
+    const card = document.querySelector(`[data-event-id="${data.event_id}"]`);
+    if (!card) {
+        console.log(`未找到事件卡片: ${data.event_id}`);
+        return;
+    }
+
+    // ✅ 使用实际 status 值显示对应中文与样式（不再硬编码"已结束"）
+    const statusInfo = getStatusDisplay(data.status);
+    let statusBadge = card.querySelector('.event-status');
+    if (!statusBadge) {
+        // 卡片上没有状态标识，创建一个
+        statusBadge = document.createElement('span');
+        card.querySelector('.event-info-container').appendChild(statusBadge);
+    }
+    statusBadge.textContent = statusInfo.text;
+    statusBadge.className = `event-status ${statusInfo.className}`;
+
+    // 更新置信度（如果 data.data 中有）
+    if (data.data) {
+        if (data.data.confidence !== undefined) {
+            let confEl = card.querySelector('.event-confidence');
+            if (!confEl) {
+                confEl = document.createElement('div');
+                confEl.className = 'event-confidence';
+                card.querySelector('.event-info-container').appendChild(confEl);
+            }
+            confEl.textContent = `置信度: ${(data.data.confidence * 100).toFixed(0)}%`;
+        }
+    }
+
+    // 更新内存中事件对象（用于点击查看详情时显示最新数据）
+    const eventIdx = monitorEvents.findIndex(e => e.event_id === data.event_id);
+    if (eventIdx >= 0) {
+        if (data.status) monitorEvents[eventIdx].status = data.status;
+        if (data.data) {
+            if (data.data.confidence !== undefined) monitorEvents[eventIdx].confidence = data.data.confidence;
+            if (data.data.end_time) monitorEvents[eventIdx].end_time = data.data.end_time;
+        }
+    }
+}
+
+// ✅ 新增：更新已显示事件卡片的 GIF（GIF 生成完成）
+function updateMonitorEventGif(data) {
+    const card = document.querySelector(`[data-event-id="${data.event_id}"]`);
+    if (!card) {
+        console.log(`未找到事件卡片（GIF）: ${data.event_id}`);
+        return;
+    }
+
+    const gifUrl = data.local_gif_url || data.minio_gif_url || data.ftp_gif_url;
+    if (!gifUrl) return;
+
+    // 添加 GIF 标识
+    const imageContainer = card.querySelector('.event-image-container');
+    if (!imageContainer) return;
+
+    let gifBadge = imageContainer.querySelector('.gif-badge');
+    if (!gifBadge) {
+        gifBadge = document.createElement('div');
+        gifBadge.className = 'gif-badge';
+        gifBadge.innerHTML = '🎬 GIF';
+        imageContainer.appendChild(gifBadge);
+    }
+
+    // ✅ 封面图片替换为 GIF 动画
+    const coverImg = imageContainer.querySelector('img');
+    if (coverImg) {
+        coverImg.src = gifUrl;
+        coverImg.alt = '事件GIF动画';
+        coverImg.style.objectFit = 'cover';
+    }
+
+    // 存储 GIF URL 到卡片对象（点击查看详情时使用）
+    card._gifUrl = gifUrl;
+    // ✅ 标记卡片已有 GIF（防止重新渲染时丢失）
+    card._hasGif = true;
+    card._gifData = data;
+
+    // 更新内存中事件对象
+    const eventIdx = monitorEvents.findIndex(e => e.event_id === data.event_id);
+    if (eventIdx >= 0) {
+        monitorEvents[eventIdx].local_gif_url = data.local_gif_url || '';
+        monitorEvents[eventIdx].minio_gif_url = data.minio_gif_url || '';
+        monitorEvents[eventIdx].ftp_gif_url = data.ftp_gif_url || '';
+        monitorEvents[eventIdx].status = 'gif_ready';
+    }
+
+    // ✅ 同步刷新状态徽章为"GIF就绪"
+    const gifStatusInfo = getStatusDisplay('gif_ready');
+    const gifStatusBadge = card.querySelector('.event-status');
+    if (gifStatusBadge) {
+        gifStatusBadge.textContent = gifStatusInfo.text;
+        gifStatusBadge.className = `event-status ${gifStatusInfo.className}`;
+    }
+}
+
 // 更新事件计数
 function updateEventCount() {
     document.getElementById('eventCount').textContent = `事件: ${monitorEvents.length}`;
@@ -987,12 +1114,24 @@ function updateEventCount() {
 // 格式化事件类型
 function formatEventType(type) {
     const typeMap = {
+        'tracking': '目标跟踪',
         'track_start': '跟踪开始',
         'track_end': '跟踪结束',
         'track_update': '跟踪更新',
         'detection': '检测'
     };
     return typeMap[type] || type;
+}
+
+// ✅ 事件状态 -> 中文 + 样式类的统一映射
+function getStatusDisplay(status) {
+    const statusMap = {
+        'tracking_start':  { text: '跟踪开始', className: 'status-start' },
+        'tracking_update': { text: '跟踪更新', className: 'status-update' },
+        'tracking_end':    { text: '已结束',   className: 'status-ended' },
+        'gif_ready':       { text: 'GIF就绪',  className: 'status-gif' }
+    };
+    return statusMap[status] || { text: status || '未知', className: 'status-unknown' };
 }
 
 // 格式化事件时间
@@ -1106,6 +1245,39 @@ document.addEventListener('DOMContentLoaded', function() {
     width: 100%;
     height: 100%;
     object-fit: cover;
+}
+
+/* ✅ 新增：GIF 标识样式 */
+.gif-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* ✅ 新增：事件状态标识样式 */
+.event-status {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-top: 2px;
+}
+.event-status.status-start   { background: #e3f2fd; color: #1976d2; }  /* 跟踪开始：蓝 */
+.event-status.status-update  { background: #f3e5f5; color: #7b1fa2; }  /* 跟踪更新：紫 */
+.event-status.status-ended   { background: #6c757d; color: #fff; }     /* 已结束：灰 */
+.event-status.status-gif     { background: #e8f5e9; color: #2e7d32; }  /* GIF就绪：绿 */
+.event-status.status-unknown { background: #eee; color: #555; }
+.event-confidence {
+    font-size: 11px;
+    color: #555;
+    margin-top: 2px;
 }
 
 .event-no-image {

@@ -45,18 +45,23 @@ class MinIOOutputter:
             print(f"[MinIOOutputter] 初始化失败: {e}")
             raise
     
-    def upload(self, event_id: str, image_bytes: bytes) -> str:
+    def upload(self, event_id: str, image_bytes: bytes, content_type: str = 'image/jpeg') -> str:
         """
         上传图片到 MinIO
-        
+
         Args:
-            event_id: 事件 ID
+            event_id: 事件 ID（或文件名，如 "event_123.jpg" 或 "event_456.gif"）
             image_bytes: 图片字节数据
-        
+            content_type: 内容类型（默认 'image/jpeg'，GIF 为 'image/gif'）
+
         Returns:
             预签名访问 URL
         """
-        object_name = f"{event_id}.jpg"
+        # 如果 event_id 已包含扩展名，直接使用；否则添加 .jpg
+        if '.' not in event_id:
+            object_name = f"{event_id}.jpg"
+        else:
+            object_name = event_id
         
         # 上传对象（MinIO put_object 需要文件类对象，用 BytesIO 包装 bytes）
         self.client.put_object(
@@ -64,7 +69,7 @@ class MinIOOutputter:
             object_name,
             io.BytesIO(image_bytes),
             len(image_bytes),
-            content_type='image/jpeg'
+            content_type=content_type
         )
         
         # 生成预签名 URL（expires 需要 timedelta 类型）

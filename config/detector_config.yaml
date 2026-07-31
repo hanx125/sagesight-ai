@@ -2,12 +2,12 @@
 # YOLO 目标检测配置文件
 # ========================================
 # 硬件配置：NVIDIA RTX 2070 (8GB) | CUDA 12.9 | Python 3.11 | 32GB RAM
-# 
+#
 # 适用场景：
 # - 室内外场景（光照变化）
 # - 固定摄像头（背景稳定）
 # - 移动摄像头（背景变化）
-# 
+#
 # 优势：
 # - 高精度目标检测
 # - 支持多种目标类别
@@ -21,136 +21,172 @@ detector:
   # ========================================
   # 模型配置（从算法库获取）
   # ========================================
-  # 说明：模型路径、类型、输入尺寸、类别名称等参数由算法库提供
-  # 此处仅作为示例，实际运行时会从算法库动态获取
-  
-  # 模型路径（示例，从算法库获取）
-  # model_path: "models/yolov11n.onnx"
-  
-  # 模型类型（示例，从算法库获取）
-  # model_type: "yolo11n"
-  
-  # 模型输入尺寸（示例，从算法库获取）
-  # input_width: 640
-  # input_height: 640
-  
-  # 类别名称（示例，从算法库获取）
-  # class_names: ["person", "bicycle", "car", ...]
-  
+  # 说明：以下参数由算法库提供，实际运行时动态获取
+  # - model_path: 模型路径（必填）
+  # - model_type: 模型类型（yolov8n、yolov11n等）
+  # - input_width: 模型输入宽度（默认640）
+  # - input_height: 模型输入高度（默认640）
+  # - class_names: 类别名称列表
+
   # ========================================
   # 推理后端配置（用户配置）
   # ========================================
-  
+
   # 推理后端（必填，用户选择）
-  # 可选值：
-  # - onnx_cpu: ONNX Runtime CPU（纯CPU推理，无需GPU，适合无GPU环境）
-  # - onnx_cuda: ONNX Runtime + CUDA Execution Provider（CUDA加速，适合NVIDIA GPU）
-  # - onnx_tensorrt: ONNX Runtime + TensorRT Execution Provider（TensorRT EP，推荐，FP16加速）
-  # - tensorrt: 直接加载 TensorRT Engine（需要 cuda-python，高性能）
-  # - rknn: RKNN模型（RK3588/RK3566等瑞芯微平台NPU加速）
+  # 支持的后端（完整列表）：
+  #   ✅ NVIDIA GPU（推荐）：
+  #     - onnx_cuda: ONNX Runtime + CUDA EP（通用，推荐，兼容性好）
+  #     - onnx_tensorrt: ONNX Runtime + TensorRT EP（自动FP16转换，性能最优）
+  #     - tensorrt: 直接加载 TensorRT Engine（需要 cuda-python，最高性能）
+  #
+  #   ✅ CPU 通用：
+  #     - onnx_cpu: ONNX Runtime CPU（纯CPU推理，适合无GPU环境）
+  #
+  #   ✅ 嵌入式平台：
+  #     - rknn: RKNN 模型（RK3588/RK3566 等瑞芯微平台 NPU 加速）
+  #
+  # 性能对比（RTX 2070，640x640输入）：
+  #   - onnx_cpu: ~150ms/帧（CPU），兼容性最好
+  #   - onnx_cuda: ~15ms/帧（GPU），兼容性好，推荐生产环境
+  #   - onnx_tensorrt: ~8ms/帧（GPU+FP16），性能最优，推荐高性能场景
+  #   - tensorrt: ~6ms/帧（GPU+FP16），最高性能，需要手动编译Engine
+  #
+  # ⚠️ 根据您的硬件环境（NVIDIA RTX 2070 + CUDA 12.9），建议使用 "onnx_cuda"
+  # 如果追求极致性能，可以尝试 "onnx_tensorrt"（自动FP16转换）
   backend: "onnx_cuda"
-  
-  # TensorRT Engine 缓存路径（首次运行会自动编译）
-  # 说明：使用 backend="onnx_tensorrt" 时，ONNX 模型会自动编译为 TensorRT Engine 并缓存
-  tensorrt_engine_cache_path: "./trt_cache"
-  
-  # 使用 FP16 精度（推荐，性能提升约 2.5x）
-  # 说明：FP16 可以显著提升推理速度，精度损失极小
-  use_fp16: true
 
   # ========================================
-  # 预处理加速配置（新增）
+  # 检测参数（用户配置）
   # ========================================
 
-  # 使用 GPU 加速预处理（推荐，减少CPU占用约20-30%）
-  # 说明：使用 OpenCV CUDA 模块进行 NV12→RGB→Resize 等操作
-  # 要求：OpenCV 必须编译时启用 CUDA 支持（-DWITH_CUDA=ON）
-  # 效果：CPU占用从25%降低到5-8%，释放CPU资源
-  # 注意：如果GPU不可用，会自动回退到CPU预处理
-  use_gpu_preprocess: false
-
-  # TensorRT Engine 文件路径（backend="tensorrt" 时使用）
-  # 说明：如果使用 backend="onnx_tensorrt"，则不需要此配置（会自动生成）
-  tensorrt_engine_path: ""
-  
-  # TensorRT lib 目录路径（Windows 需要配置）
-  # 说明：如果已配置系统环境变量，则不需要此配置
-  # 支持空值，会自动检测常见路径
-  tensorrt_lib_path: ""
-
-  # RKNN 配置（仅 backend="rknn" 时使用）
-  # 目标平台：rk3588 | rk3566 | rk3568 | rv1103 | rv1106
-  rknn_target: "rk3588"
-
-  # RKNN 设备 ID（多设备时使用）
-  rknn_device_id: ""
-
-  # RKNN 核心掩码（0=自动，1=NPU0，2=NPU1，3=双核）
-  rknn_core_mask: 0
-  
   # 全局置信度阈值（用户配置）
-  # 推荐值：0.25（默认），0.15（更宽松），0.35（更严格）
+  # 说明：低于此阈值的检测框会被过滤
+  # 推荐值：
+  #   - 0.25（默认）：平衡精度和召回率
+  #   - 0.15（更宽松）：提高召回率，适合小目标或远距离目标
+  #   - 0.35（更严格）：提高精度，减少误检
   conf_threshold: 0.25
-  
+
   # NMS IoU 阈值（用户配置）
-  # 推荐值：0.35（默认），0.25（去除更多重叠），0.45（保留更多）
+  # 说明：非极大值抑制的IoU阈值，用于去除重叠的检测框
+  # 推荐值：
+  #   - 0.35（默认）：平衡去重和保留
+  #   - 0.25（去除更多重叠）：适合密集场景
+  #   - 0.45（保留更多）：适合稀疏场景
   iou_threshold: 0.35
-  
+
   # 最小检测框面积（像素）
   # 说明：过滤过小的检测框，减少噪声和误检
-  # 推荐值：10-500（小目标用小值，大目标用大值）
+  # 推荐值：
+  #   - 10-50：小目标检测（人脸、小动物）
+  #   - 50-200：中等目标检测（行人、车辆）
+  #   - 200-500：大目标检测（大型车辆、建筑）
   min_box_area: 50
-  
-  # ========================================
-  # 以下参数已从算法库获取（仅作为示例）
-  # ========================================
-  
-  # 模型输入尺寸（示例，从算法库获取）
-  # 说明：YOLO 模型期望的输入分辨率，通常为 640
-  # input_width: 640
-  # input_height: 640
-  
+
   # ========================================
   # GPU 配置（用户配置）
   # ========================================
-  
+
   # GPU 设备 ID（多GPU环境时选择）
+  # 说明：选择使用哪个 GPU（单GPU环境默认为0）
+  # 推荐值：0（第一个GPU），1（第二个GPU），以此类推
   device_id: 0
-  
+
   # GPU 显存限制（字节）
-  # 说明：限制显存使用，避免显存溢出
-  # 推荐值：GPU 显存的 60-80%（例如 RTX 2070 8GB -> 6GB = 6442450944）
+  # 说明：限制显存使用，避免显存溢出导致推理失败
+  # 推荐值：GPU 显存的 60-80%
+  # 计算示例：
+  #   - RTX 2070 8GB: 6GB = 6 * 1024^3 = 6442450944
+  #   - RTX 3080 10GB: 8GB = 8 * 1024^3 = 8589934592
+  #   - RTX 4090 24GB: 18GB = 18 * 1024^3 = 19327352832
   gpu_mem_limit: 6442450944
 
-# ========================================
-# 预处理配置
-# ========================================
+  # ========================================
+  # TensorRT 配置（backend="onnx_tensorrt" 或 "tensorrt" 时使用）
+  # ========================================
 
-preprocessor:
-  # 输入尺寸（解码器输出尺寸）
-  width: 640
-  height: 640
-  
-  # YOLO 模型输入尺寸（模型期望的输入分辨率）
-  # 说明：如果 width/height 与 model_input_size 不同，会在预处理时自动 resize
-  model_input_size: 640
-  
-  # 归一化配置
-  # 说明：YOLO 模型通常使用简单的 [0, 1] 归一化，不需要均值和标准差
-  # 如果需要自定义归一化，可以设置以下参数（代码会自动使用）
-  rgb_mean: [0.0, 0.0, 0.0]
-  rgb_std: [1.0, 1.0, 1.0]
+  # TensorRT Engine 缓存路径（首次运行会自动编译）
+  # 说明：使用 backend="onnx_tensorrt" 时，ONNX 模型会自动编译为 TensorRT Engine 并缓存
+  # 首次运行会花费较长时间（编译 Engine），后续运行会直接加载缓存的 Engine
+  tensorrt_engine_cache_path: "./trt_cache"
+
+  # TensorRT Engine 文件路径（backend="tensorrt" 时使用）
+  # 说明：如果使用 backend="tensorrt"，需要指定预编译的 Engine 文件路径
+  # 如果使用 backend="onnx_tensorrt"，则不需要此配置（会自动生成）
+  # 支持空值，表示不使用预编译的 Engine
+  tensorrt_engine_path: ""
+
+  # TensorRT lib 目录路径（Windows 需要配置）
+  # 说明：如果已配置系统环境变量，则不需要此配置
+  # 支持空值，会自动检测常见路径：
+  #   - Windows: C:\Program Files\NVIDIA GPU Computing Toolkit\TensorRT\lib
+  #   - Linux: /usr/lib/x86_64-linux-gnu
+  tensorrt_lib_path: ""
+
+  # 使用 FP16 精度（推荐，性能提升约 2.5x）
+  # 说明：FP16 可以显著提升推理速度，精度损失极小（<1%）
+  # 推荐值：true（推荐），false（仅CPU推理或不支持FP16的设备）
+  use_fp16: true
+
+  # ========================================
+  # RKNN 配置（仅 backend="rknn" 时使用）
+  # ========================================
+
+  # 目标平台（RKNN）
+  # 说明：指定 RKNN 模型的目标平台
+  # 支持的平台：
+  #   - rk3588: RK3588（8核NPU）
+  #   - rk3566: RK3566（双核NPU）
+  #   - rk3568: RK3568（双核NPU）
+  #   - rv1103: RV1103（单核NPU）
+  #   - rv1106: RV1106（单核NPU）
+  rknn_target: "rk3588"
+
+  # RKNN 设备 ID（多设备时使用）
+  # 说明：如果系统中有多个 RKNN 设备，可以指定设备 ID
+  # 支持空值，表示自动选择第一个设备
+  rknn_device_id: ""
+
+  # RKNN 核心掩码（NPU 核心选择）
+  # 说明：选择使用哪些 NPU 核心（仅部分平台支持）
+  # 支持的值：
+  #   - 0: 自动选择（推荐）
+  #   - 1: 仅使用 NPU0
+  #   - 2: 仅使用 NPU1
+  #   - 3: 双核并行（性能最优，仅 RK3588 支持）
+  rknn_core_mask: 0
 
 # ========================================
-# 检测进程池配置（高级功能）
+# 预处理说明
 # ========================================
+# 预处理（NV12/YUV → RGB → Resize 到模型输入尺寸）在检测器进程内由
+# region_utils.create_tensor_input 完成，针对每个 region 独立裁剪缩放，
+# 无需独立的 preprocessor 配置段。
+# 模型输入尺寸（input_width/input_height）从算法库获取，
+# 算法库未提供时使用 detector 段的兜底默认值（640）。
 
-detection_pool:
-  # 是否启用检测进程池（默认：false）
-  # 说明：
-  #   - false: 传统单线程模式（稳定，适合低配机器）
-  #   - true: 多进程模式（高并发，适合多核CPU）
-  # 推荐值：
-  #   - 单摄像机/低性能设备: false
-  #   - 多摄像机/高性能服务器: true
-  use_detection_pool: true
+# ========================================
+# 后端兼容性说明
+# ========================================
+# 1. onnx_cpu：纯CPU推理，无需GPU，适合无GPU环境或调试
+# 2. onnx_cuda：需要 NVIDIA GPU + CUDA + cuDNN，兼容性最好
+# 3. onnx_tensorrt：需要 NVIDIA GPU + CUDA + TensorRT，性能最优
+# 4. tensorrt：需要预编译的 TensorRT Engine，最高性能
+# 5. rknn：需要 RKNN-Toolkit2 + RK3588/RK3566 等平台
+
+# ========================================
+# 性能优化建议
+# ========================================
+# 1. GPU 显存优化：
+#    - 使用 gpu_mem_limit 限制显存使用，避免显存溢出
+#    - 推荐设置为 GPU 显存的 60-80%
+#
+# 2. 推理速度优化：
+#    - 使用 FP16 精度（use_fp16: true），性能提升约 2.5x
+#    - 使用 TensorRT（backend="onnx_tensorrt"），性能提升约 3x
+#    - 预编译 TensorRT Engine（backend="tensorrt"），性能提升约 3.5x
+#
+# 3. 检测精度优化：
+#    - 降低 conf_threshold（如 0.15），提高召回率，适合小目标检测
+#    - 增大 min_box_area（如 200），过滤噪声，减少误检
+#    - 调整 iou_threshold（如 0.25），优化密集场景检测

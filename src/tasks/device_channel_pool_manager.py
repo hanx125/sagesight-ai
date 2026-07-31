@@ -340,8 +340,12 @@ class DeviceChannelPoolManager:
             cursor = conn.cursor()
             
             # JOIN camera_device_channel_bindings 获取关联的摄像机 ID
+            # ✅ 修复：明确指定列名，避免dc.*与ccb.camera_id的歧义
+            # 注意：device_channel_pool表也有camera_id字段（存储'[]'），需要用ccb.camera_id覆盖
             cursor.execute('''
-                SELECT dc.*, ccb.camera_id 
+                SELECT dc.id, dc.channel_name, dc.rtsp_url, dc.channel_source, 
+                       dc.enabled, dc.created_at, dc.updated_at,
+                       ccb.camera_id
                 FROM device_channel_pool dc
                 INNER JOIN task_device_channel_bindings tcb ON dc.id = tcb.channel_id
                 LEFT JOIN camera_device_channel_bindings ccb ON dc.id = ccb.channel_id AND ccb.enabled = 1

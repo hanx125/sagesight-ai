@@ -1,503 +1,234 @@
 """
-Zone 区域管理模块
+Zone 区域检测管理器
 
-提供区域定义、检测和管理功能：
-- Zone 类：定义多边形区域
-- ZoneManager 类：管理多个区域
-- 区域进入/离开检测
-- 必需区域过滤
-- 徘徊检测（借鉴 Frigate）
+核心职责:
+- 管理多个 ZoneConfig 区域配置
+- 判断目标（边界框中心点或底边中心点）是否在某个区域内
+- 提供区域绘制方法（供 AI 视频流使用）
 
-使用场景：
-- 固定摄像头的区域监控
-- 入侵检测（进入/离开区域）
-- 事件过滤（必需区域）
-- 徘徊检测（区域停留）
-
-参考：
-- Frigate object_processing.py
+坐标体系:
+- 配置存储使用归一化坐标 [0-1]，polygon_type="normalized"
+- 运行时按帧尺寸转换为像素坐标进行计算
 """
 
-import cv2
-import numpy as np
+import logging
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, Dict, Set
-from enum import Enum
+from typing import List, Tuple, Optional
 
+import numpy as np
 
-class ZoneEventType(Enum):
-    """区域事件类型"""
-    ENTER = "enter"  # 进入区域
-    LEAVE = "leave"  # 离开区域
-    STAY = "stay"  # 停留在区域
-    LOITERING = "loitering"  # 徘徊（长时间停留）
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class ZoneConfig:
-    """区域配置"""
-    name: str  # 区域名称
-    polygon: List[Tuple[int, int]]  # 多边形顶点（顺时针或逆时针）
-    required: bool = False  # 是否为必需区域（用于事件过滤）
-    color: Tuple[int, int, int] = (255, 0, 0)  # 可视化颜色（BGR）
-    min_area: int = 0  # 最小区域面积（过滤小区域）
-    
-    # ========================================
-    # 新增：徘徊检测配置（借鉴 Frigate）
-    # ========================================
-    loitering_time: int = 30  # 徘徊判定时间（帧数，默认30帧≈1秒）
+    """单个 Zone 区域配置"""
+
+    name: str
+    polygon: List[List[float]]  # 归一化坐标 [[x1,y1], [x2,y2], ...]，范围 [0-1]
+    color: List[int] = field(default_factory=lambda: [0, 255, 0])  # RGB 颜色
+    required: bool = False  # 是否为必需区域
     enable_loitering_detection: bool = False  # 是否启用徘徊检测
-    
+    loitering_time: int = 30  # 徘徊阈值（秒）
+    polygon_type: str = "normalized"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ZoneConfig":
+        """从字典创建 ZoneConfig"""
+        return cls(
+            name=data.get("name", "未命名区域"),
+            polygon=data.get("polygon", []),
+            color=data.get("color", [0, 255, 0]),
+            required=data.get("required", False),
+            enable_loitering_detection=data.get("enable_loitering_detection", False),
+            loitering_time=data.get("loitering_time", 30),
+            polygon_type=data.get("polygon_type", "normalized"),
+        )
+
     def to_dict(self) -> dict:
         """转换为字典"""
         return {
             "name": self.name,
             "polygon": self.polygon,
-            "required": self.required,
             "color": self.color,
-            "min_area": self.min_area,
+            "required": self.required,
+            "enable_loitering_detection": self.enable_loitering_detection,
             "loitering_time": self.loitering_time,
-            "enable_loitering_detection": self.enable_loitering_detection
+            "polygon_type": self.polygon_type,
         }
-    
-    @classmethod
-    def from_dict(cls, data: dict) -> 'ZoneConfig':
-        """从字典创建"""
-        return cls(
-            name=data["name"],
-            polygon=[tuple(p) for p in data["polygon"]],
-            required=data.get("required", False),
-            color=tuple(data.get("color", (255, 0, 0))),
-            min_area=data.get("min_area", 0),
-            loitering_time=data.get("loitering_time", 30),
-            enable_loitering_detection=data.get("enable_loitering_detection", False)
-        )
 
+    def get_pixel_polygon(self, frame_width: int, frame_height: int) -> np.ndarray:
+        """将归一化坐标转换为像素坐标
 
-class Zone:
-    """
-    区域类（多边形区域）
-    
-    功能：
-    - 定义多边形区域
-    - 检测点是否在区域内
-    - 检测边界框是否在区域内
-    - 可视化区域
-    """
-    
-    def __init__(self, config: ZoneConfig):
-        """
-        初始化区域
-        
         Args:
-            config: 区域配置
-        """
-        self.config = config
-        self.name = config.name
-        self.polygon = np.array(config.polygon, dtype=np.int32)
-        self.required = config.required
-        self.color = config.color
-        self.min_area = config.min_area
-        
-        # ========================================
-        # 新增：徘徊检测配置（借鉴 Frigate）
-        # ========================================
-        self.loitering_time = config.loitering_time
-        self.enable_loitering_detection = config.enable_loitering_detection
-        
-        # 计算区域面积
-        self.area = cv2.contourArea(self.polygon)
-        
-        print(f"[Zone-{self.name}] 创建成功")
-        print(f"[Zone-{self.name}]   顶点数: {len(self.polygon)}")
-        print(f"[Zone-{self.name}]   面积: {self.area:.0f} 像素²")
-        print(f"[Zone-{self.name}]   必需区域: {self.required}")
-        print(f"[Zone-{self.name}]   徘徊检测: {self.enable_loitering_detection} (阈值: {self.loitering_time} 帧)")
-    
-    def contains_point(self, point: Tuple[float, float]) -> bool:
-        """
-        检测点是否在区域内
-        
-        Args:
-            point: 点坐标 (x, y)
-            
+            frame_width: 帧宽度（像素）
+            frame_height: 帧高度（像素）
+
         Returns:
-            bool: 点是否在区域内
+            像素坐标数组，shape=(N, 2)，dtype=int32
         """
-        # 使用 OpenCV 的 pointPolygonTest 函数
-        # 返回值：正数（内部）、0（边界）、负数（外部）
-        result = cv2.pointPolygonTest(self.polygon, point, False)
-        return result >= 0
-    
-    def contains_bbox(self, bbox: Tuple[int, int, int, int]) -> bool:
-        """
-        检测边界框是否在区域内（使用中心点）
-        
-        Args:
-            bbox: 边界框 (x1, y1, x2, y2)
-            
-        Returns:
-            bool: 边界框是否在区域内
-        """
-        # 计算边界框中心点
-        center_x = (bbox[0] + bbox[2]) / 2
-        center_y = (bbox[1] + bbox[3]) / 2
-        
-        return self.contains_point((center_x, center_y))
-    
-    def contains_bbox_any_corner(self, bbox: Tuple[int, int, int, int]) -> bool:
-        """
-        检测边界框任意角点是否在区域内（更严格的检测）
-        
-        Args:
-            bbox: 边界框 (x1, y1, x2, y2)
-            
-        Returns:
-            bool: 任意角点是否在区域内
-        """
-        # 检测四个角点
-        corners = [
-            (bbox[0], bbox[1]),  # 左上
-            (bbox[2], bbox[1]),  # 右上
-            (bbox[2], bbox[3]),  # 右下
-            (bbox[0], bbox[3])   # 左下
-        ]
-        
-        for corner in corners:
-            if self.contains_point(corner):
-                return True
-        
-        return False
-    
-    def contains_bbox_all_corners(self, bbox: Tuple[int, int, int, int]) -> bool:
-        """
-        检测边界框所有角点是否在区域内（最严格的检测）
-        
-        Args:
-            bbox: 边界框 (x1, y1, x2, y2)
-            
-        Returns:
-            bool: 所有角点是否在区域内
-        """
-        # 检测四个角点
-        corners = [
-            (bbox[0], bbox[1]),  # 左上
-            (bbox[2], bbox[1]),  # 右上
-            (bbox[2], bbox[3]),  # 右下
-            (bbox[0], bbox[3])   # 左下
-        ]
-        
-        for corner in corners:
-            if not self.contains_point(corner):
-                return False
-        
-        return True
-    
-    def draw(self, frame: np.ndarray, alpha: float = 0.3) -> np.ndarray:
-        """
-        在帧上绘制区域
-        
-        Args:
-            frame: 输入帧
-            alpha: 透明度 (0-1)
-            
-        Returns:
-            np.ndarray: 绘制后的帧
-        """
-        # 创建覆盖层
-        overlay = frame.copy()
-        
-        # 绘制填充的多边形
-        cv2.fillPoly(overlay, [self.polygon], self.color)
-        
-        # 绘制边框
-        cv2.polylines(overlay, [self.polygon], True, self.color, 2)
-        
-        # 添加文本标签
-        M = cv2.moments(self.polygon)
-        if M["m00"] != 0:
-            cX = int(M["m10"] / M["m00"])
-            cY = int(M["m01"] / M["m00"])
-            cv2.putText(overlay, self.name, (cX - 20, cY), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        
-        # 混合覆盖层和原始帧
-        result = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
-        
-        return result
+        pts = []
+        for p in self.polygon:
+            if self.polygon_type == "normalized":
+                px = int(p[0] * frame_width)
+                py = int(p[1] * frame_height)
+            else:
+                px = int(p[0])
+                py = int(p[1])
+            pts.append([px, py])
+        return np.array(pts, dtype=np.int32)
 
 
 class ZoneManager:
-    """
-    区域管理器
-    
-    功能：
-    - 管理多个区域
-    - 检测对象进入/离开区域
-    - 生成区域事件
-    - 必需区域过滤
-    """
-    
-    def __init__(self):
-        """初始化区域管理器"""
-        self.zones: Dict[str, Zone] = {}  # zone_name -> Zone
-        self.required_zones: Set[str] = set()  # 必需区域集合
-        
-        # 跟踪对象所在的区域
-        # track_id -> set(zone_names)
-        self.object_zones: Dict[int, Set[str]] = {}
-        
-        # ========================================
-        # 新增：徘徊检测（借鉴 Frigate）
-        # ========================================
-        # 对象在区域内的停留帧数
-        # track_id -> zone_name -> frame_count
-        self.object_zone_frames: Dict[int, Dict[str, int]] = {}
-        
-        # 已发送徘徊警报的对象
-        # track_id -> set(zone_names)
-        self.loitering_objects: Dict[int, Set[str]] = {}
-        
-        print("[ZoneManager] 初始化完成")
-    
-    def add_zone(self, config: ZoneConfig):
-        """
-        添加区域
-        
-        Args:
-            config: 区域配置
-        """
-        zone = Zone(config)
-        self.zones[config.name] = zone
-        
-        if config.required:
-            self.required_zones.add(config.name)
-        
-        print(f"[ZoneManager] 添加区域: {config.name} (必需: {config.required})")
-    
-    def add_zones_from_config(self, zones_config: List[dict]):
-        """
-        从配置批量添加区域
-        
-        Args:
-            zones_config: 区域配置列表
-        """
-        for zone_data in zones_config:
-            config = ZoneConfig.from_dict(zone_data)
-            self.add_zone(config)
-        
-        print(f"[ZoneManager] 共添加 {len(self.zones)} 个区域")
-        print(f"[ZoneManager] 必需区域: {self.required_zones}")
-    
-    def check_object_zones(self, track_id: int, bbox: Tuple[int, int, int, int]) -> Dict[str, ZoneEventType]:
-        """
-        检查对象所在的区域（包含徘徊检测）
-        
-        参考 Frigate 的 zone_loitering 逻辑：
-        - 对象在区域内停留超过阈值帧数，触发徘徊事件
-        
-        Args:
-            track_id: 跟踪 ID
-            bbox: 边界框 (x1, y1, x2, y2)
-            
-        Returns:
-            Dict[str, ZoneEventType]: 区域事件 {zone_name: event_type}
-        """
-        events = {}
-        
-        # 获取对象当前所在的区域
-        current_zones = set()
-        for zone_name, zone in self.zones.items():
-            if zone.contains_bbox(bbox):
-                current_zones.add(zone_name)
-        
-        # 获取对象之前所在的区域
-        previous_zones = self.object_zones.get(track_id, set())
-        
-        # 检测进入区域
-        entered_zones = current_zones - previous_zones
-        for zone_name in entered_zones:
-            events[zone_name] = ZoneEventType.ENTER
-        
-        # 检测离开区域
-        left_zones = previous_zones - current_zones
-        for zone_name in left_zones:
-            events[zone_name] = ZoneEventType.LEAVE
-            
-            # 清除徘徊计数（离开区域）
-            if track_id in self.object_zone_frames:
-                if zone_name in self.object_zone_frames[track_id]:
-                    del self.object_zone_frames[track_id][zone_name]
-            
-            # 清除徘徊标记
-            if track_id in self.loitering_objects:
-                self.loitering_objects[track_id].discard(zone_name)
-        
-        # 检测停留在区域
-        stayed_zones = current_zones & previous_zones
-        for zone_name in stayed_zones:
-            events[zone_name] = ZoneEventType.STAY
-            
-            # ========================================
-            # 新增：徘徊检测（借鉴 Frigate）
-            # ========================================
-            zone = self.zones[zone_name]
-            
-            # 检查是否启用徘徊检测
-            if zone.enable_loitering_detection:
-                # 更新停留帧数
-                if track_id not in self.object_zone_frames:
-                    self.object_zone_frames[track_id] = {}
-                
-                if zone_name not in self.object_zone_frames[track_id]:
-                    self.object_zone_frames[track_id][zone_name] = 0
-                
-                self.object_zone_frames[track_id][zone_name] += 1
-                
-                # 检查是否达到徘徊阈值
-                frame_count = self.object_zone_frames[track_id][zone_name]
-                
-                if frame_count >= zone.loitering_time:
-                    # 初始化徘徊对象集合
-                    if track_id not in self.loitering_objects:
-                        self.loitering_objects[track_id] = set()
-                    
-                    # 如果还没有发送过徘徊警报
-                    if zone_name not in self.loitering_objects[track_id]:
-                        events[zone_name] = ZoneEventType.LOITERING
-                        self.loitering_objects[track_id].add(zone_name)
-                        
-                        print(f"[ZoneManager] 对象 {track_id} 在区域 {zone_name} 徘徊 (帧数: {frame_count})")
-        
-        # 更新对象所在的区域
-        self.object_zones[track_id] = current_zones
-        
-        return events
-    
-    def get_object_zones(self, track_id: int) -> Set[str]:
-        """
-        获取对象当前所在的区域
-        
-        Args:
-            track_id: 跟踪 ID
-            
-        Returns:
-            Set[str]: 区域名称集合
-        """
-        return self.object_zones.get(track_id, set())
-    
-    def is_in_required_zones(self, track_id: int) -> bool:
-        """
-        检测对象是否在必需区域内（用于事件过滤）
-        
-        Args:
-            track_id: 跟踪 ID
-            
-        Returns:
-            bool: 是否在必需区域内
-        """
-        if not self.required_zones:
-            # 没有定义必需区域，总是返回 True
-            return True
-        
-        object_zones = self.get_object_zones(track_id)
-        
-        # 对象必须至少在一个必需区域内
-        return len(object_zones & self.required_zones) > 0
-    
-    def should_emit_event(self, track_id: int, bbox: Tuple[int, int, int, int]) -> bool:
-        """
-        判断是否应该发送事件（基于必需区域）
-        
-        参考 Frigate 的 should_save_snapshot 逻辑：
-        - 如果定义了必需区域，对象必须至少进入一个必需区域
-        - 否则，总是发送事件
-        
-        Args:
-            track_id: 跟踪 ID
-            bbox: 边界框 (x1, y1, x2, y2)
-            
-        Returns:
-            bool: 是否应该发送事件
-        """
-        if not self.required_zones:
-            # 没有定义必需区域，总是发送事件
-            return True
-        
-        # 检查对象是否在必需区域内
-        return self.is_in_required_zones(track_id)
-    
-    def remove_object(self, track_id: int):
-        """
-        移除对象（跟踪结束时调用）
-        
-        Args:
-            track_id: 跟踪 ID
-        """
-        if track_id in self.object_zones:
-            del self.object_zones[track_id]
-    
-    def clear_all_objects(self):
-        """清除所有对象"""
-        self.object_zones.clear()
-    
-    def draw_zones(self, frame: np.ndarray, alpha: float = 0.3) -> np.ndarray:
-        """
-        在帧上绘制所有区域
-        
-        Args:
-            frame: 输入帧
-            alpha: 透明度 (0-1)
-            
-        Returns:
-            np.ndarray: 绘制后的帧
-        """
-        result = frame.copy()
-        
-        for zone in self.zones.values():
-            result = zone.draw(result, alpha)
-        
-        return result
-    
-    def get_stats(self) -> dict:
-        """
-        获取统计信息
-        
-        Returns:
-            dict: 统计信息
-        """
-        return {
-            "total_zones": len(self.zones),
-            "required_zones": len(self.required_zones),
-            "tracked_objects": len(self.object_zones),
-            "zones": list(self.zones.keys()),
-            "required_zones_list": list(self.required_zones)
-        }
+    """Zone 区域检测管理器
 
+    管理多个 ZoneConfig，提供目标与区域的关系判断。
+    在 CameraState 中使用，每帧检查跟踪目标与区域的关系。
+    """
 
-def create_default_zones() -> ZoneManager:
-    """
-    创建默认区域管理器（示例）
-    
-    Returns:
-        ZoneManager: 区域管理器实例
-    """
-    manager = ZoneManager()
-    
-    # 示例：创建入口区域
-    entrance_config = ZoneConfig(
-        name="entrance",
-        polygon=[(100, 100), (200, 100), (200, 200), (100, 200)],
-        required=True
-    )
-    manager.add_zone(entrance_config)
-    
-    # 示例：创建停车区域
-    parking_config = ZoneConfig(
-        name="parking",
-        polygon=[(300, 100), (400, 100), (400, 200), (300, 200)],
-        required=False
-    )
-    manager.add_zone(parking_config)
-    
-    return manager
+    def __init__(self, zones_config: list, frame_shape: tuple = (640, 640)):
+        """
+        Args:
+            zones_config: Zone 配置列表（字典格式）
+            frame_shape: 帧形状 (height, width)，用于坐标转换
+        """
+        self.frame_shape = frame_shape
+        self.frame_height, self.frame_width = frame_shape[:2]
+
+        self.zones: List[ZoneConfig] = []
+        for zc in zones_config or []:
+            try:
+                self.zones.append(ZoneConfig.from_dict(zc))
+            except Exception as e:
+                logger.warning(f"解析 ZoneConfig 失败: {e}, data={zc}")
+
+        logger.debug(f"[ZoneManager] 初始化: {len(self.zones)} 个区域")
+
+    def _point_in_polygon(self, point: Tuple[float, float], polygon: np.ndarray) -> bool:
+        """射线法判断点是否在多边形内部
+
+        Args:
+            point: (x, y) 像素坐标
+            polygon: 像素坐标数组 shape=(N, 2)
+
+        Returns:
+            是否在多边形内部
+        """
+        x, y = point
+        n = len(polygon)
+        inside = False
+
+        j = n - 1
+        for i in range(n):
+            xi, yi = polygon[i][0], polygon[i][1]
+            xj, yj = polygon[j][0], polygon[j][1]
+
+            if ((yi > y) != (yj > y)) and (
+                x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi
+            ):
+                inside = not inside
+            j = i
+
+        return inside
+
+    def get_object_zones(self, bbox: list) -> List[str]:
+        """判断目标所在的区域
+
+        使用边界框底边中心点（脚步位置）作为判断依据，
+        因为目标的脚通常接触地面，更能反映其真实位置。
+
+        Args:
+            bbox: 边界框 [x1, y1, x2, y2]（像素坐标）
+
+        Returns:
+            区域名称列表（可能为空）
+        """
+        if not self.zones or len(bbox) < 4:
+            return []
+
+        # 使用底边中心点作为目标位置
+        foot_x = (bbox[0] + bbox[2]) / 2.0
+        foot_y = bbox[3]  # 底边 y 坐标
+        point = (foot_x, foot_y)
+
+        zones_in = []
+        for zone in self.zones:
+            pixel_polygon = zone.get_pixel_polygon(self.frame_width, self.frame_height)
+            if len(pixel_polygon) < 3:
+                continue
+            if self._point_in_polygon(point, pixel_polygon):
+                zones_in.append(zone.name)
+
+        return zones_in
+
+    def draw_zones(self, frame: np.ndarray, active_zones: set = None) -> np.ndarray:
+        """在帧上绘制区域框（供 AI 视频流使用）
+
+        Args:
+            frame: RGB 帧
+            active_zones: 当前有目标的区域名称集合（用于高亮）
+
+        Returns:
+            绘制后的帧
+        """
+        import cv2
+
+        active_zones = active_zones or set()
+        frame_h, frame_w = frame.shape[:2]
+
+        for zone in self.zones:
+            pixel_polygon = zone.get_pixel_polygon(frame_w, frame_h)
+            if len(pixel_polygon) < 3:
+                continue
+
+            # 颜色（配置中为 RGB，OpenCV 使用 BGR）
+            color_rgb = zone.color if zone.color else [0, 255, 0]
+            color_bgr = tuple(reversed(color_rgb))
+
+            # 活跃区域高亮（提高填充透明度）
+            is_active = zone.name in active_zones
+            fill_alpha = 0.4 if is_active else 0.2
+            border_thickness = 3 if is_active else 2
+
+            # 半透明填充
+            overlay = frame.copy()
+            cv2.fillPoly(overlay, [pixel_polygon], color_bgr)
+            frame = cv2.addWeighted(overlay, fill_alpha, frame, 1 - fill_alpha, 0)
+
+            # 边框
+            cv2.polylines(frame, [pixel_polygon], True, color_bgr, border_thickness)
+
+            # 区域名称（绘制在重心位置）
+            moments = cv2.moments(pixel_polygon)
+            if moments["m00"] != 0:
+                cx = int(moments["m10"] / moments["m00"])
+                cy = int(moments["m01"] / moments["m00"])
+                # 中文文字支持
+                try:
+                    from src.utils.font_utils import draw_utf8_label_on_rgb
+
+                    label = zone.name
+                    if is_active:
+                        label = f"[活跃] {zone.name}"
+                    draw_utf8_label_on_rgb(
+                        frame, label, (cx - 30, cy - 10),
+                        font_size=14, text_color_rgb=(255, 255, 255)
+                    )
+                except ImportError:
+                    cv2.putText(
+                        frame, zone.name, (cx - 30, cy),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1
+                    )
+
+        return frame
+
+    def get_zone(self, name: str) -> Optional[ZoneConfig]:
+        """按名称获取 ZoneConfig"""
+        for zone in self.zones:
+            if zone.name == name:
+                return zone
+        return None
+
+    def get_loitering_zones(self) -> List[ZoneConfig]:
+        """获取所有启用了徘徊检测的区域"""
+        return [z for z in self.zones if z.enable_loitering_detection]
