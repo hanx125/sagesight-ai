@@ -141,12 +141,11 @@ trt_cache/
 *.engine
 *.plan
 
-# 模型文件（太大，不上传）
-models/*.onnx
-models/*.engine
-models/*.rknn
-models/*.pt
-models/*.pth
+# 模型文件（太大，不上传，全局忽略所有目录）
+*.onnx
+*.rknn
+*.pt
+*.pth
 
 # 配置备份文件
 config/*.bak
