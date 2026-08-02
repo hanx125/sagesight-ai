@@ -102,6 +102,7 @@ class LocalObjectDetector:
             class_names: 类别名称列表 ["person", "car", ...]
         """
         self.class_names = class_names
+        self.detector_config = detector_config
         self.input_width = detector_config.get("input_width", 640)
         self.input_height = detector_config.get("input_height", 640)
 
@@ -159,14 +160,22 @@ class LocalObjectDetector:
             (20, 6) float32: 每行 [class_id, score, x1, y1, x2, y2]
             不足 20 个检测的剩余行全为 0
         """
-        # 输入转换: (1, H, W, 3) uint8 → (1, 3, H, W) float32 [0,1]
-        # NHWC → NCHW
-        input_nchw = np.transpose(tensor_input, (0, 3, 1, 2)).astype(np.float32)
-        # 归一化到 [0, 1]
-        input_nchw /= 255.0
+        # 输入格式按后端区分：
+        # - RKNN 后端：归一化已烘焙进 .rknn 模型，直接传 uint8 NHWC [0,255]
+        # - 其他后端（ONNX/TensorRT）：传 float32 NCHW [0,1]（需 /255 归一化）
+        # 之前对所有后端统一 /255 归一化，导致 RKNN 收到 [0,1] float32，
+        # 模型内部再 /255 变成 [0,0.004]，画面几乎全黑 → 无检测结果。
+        backend = self.detector_config.get("backend", "onnx_cuda")
+        if backend == "rknn":
+            # RKNN：uint8 NHWC，不归一化
+            infer_input = tensor_input
+        else:
+            # 其他后端：float32 NCHW [0,1]
+            infer_input = np.transpose(tensor_input, (0, 3, 1, 2)).astype(np.float32)
+            infer_input /= 255.0
 
         # 调用后端推理
-        detections = self.detector.infer(input_nchw)
+        detections = self.detector.infer(infer_input)
 
         # 转换为 (20, 6) float32 格式
         output = np.zeros((MAX_DETECTIONS, OUTPUT_FIELDS), dtype=np.float32)

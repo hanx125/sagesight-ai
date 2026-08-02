@@ -359,7 +359,8 @@ def create_tensor_input_hw(yuv_frame, region, model_size=(640, 640), use_rga=Fal
         (1, model_h, model_w, 3) uint8 RGB tensor
     """
     # RGA 路径（RK3588）：单次硬件完成裁剪+缩放+YUV→RGB
-    if use_rga:
+    # 设置环境变量 SAGESIGHT_DISABLE_RGA=1 可临时禁用 RGA 回退 cv2，用于对比验证
+    if use_rga and not os.environ.get('SAGESIGHT_DISABLE_RGA'):
         try:
             from src.utils.rga_processor import get_rga_processor
 
@@ -368,6 +369,15 @@ def create_tensor_input_hw(yuv_frame, region, model_size=(640, 640), use_rga=Fal
                 rgb = processor.crop_resize_yuv420p_to_rgb(
                     yuv_frame, region, model_size[1], model_size[0]
                 )
+                # 调试：前 3 次调用打印 RGB 输出统计，确认数据有效
+                if not hasattr(create_tensor_input_hw, '_dbg_cnt'):
+                    create_tensor_input_hw._dbg_cnt = 0
+                if create_tensor_input_hw._dbg_cnt < 3:
+                    create_tensor_input_hw._dbg_cnt += 1
+                    logger.info(
+                        f"[RGA调试] rgb shape={rgb.shape}, "
+                        f"min={rgb.min()}, max={rgb.max()}, mean={rgb.mean():.1f}"
+                    )
                 # (model_h, model_w, 3) → (1, model_h, model_w, 3)
                 return np.expand_dims(rgb, axis=0)
         except Exception as e:
