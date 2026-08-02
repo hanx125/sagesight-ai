@@ -167,12 +167,13 @@ class RKNNDetector(BaseDetector):
         try:
             start_time = time.time()
 
-            # RKNN YOLO 模型输入通常为 (H, W, 3) uint8（无 batch 维，与 SDK 示例一致）
-            # create_tensor_input_hw 输出为 (1, H, W, 3)，这里去除 batch 维
+            # RKNN YOLO 模型输入为 4 维 (1, H, W, 3) uint8 NHWC（RGB）
+            # create_tensor_input_hw 输出为 (1, H, W, 3)，直接使用；
+            # 若调用方传入 3 维 (H, W, 3)，则补 batch 维。
             if input_tensor.ndim == 4 and input_tensor.shape[0] == 1:
-                rknn_input = input_tensor[0]
-            elif input_tensor.ndim == 3:
                 rknn_input = input_tensor
+            elif input_tensor.ndim == 3:
+                rknn_input = np.expand_dims(input_tensor, axis=0)
             else:
                 raise ValueError(
                     f"输入张量格式错误：期望 (1, H, W, 3) 或 (H, W, 3)，得到 {input_tensor.shape}"
@@ -182,8 +183,9 @@ class RKNNDetector(BaseDetector):
             outputs = self._rknn_executor.run(rknn_input)
 
             # YOLO11 RKNN 专用后处理（DFL 解码 + NMS）
-            img_height = rknn_input.shape[0]
-            img_width = rknn_input.shape[1]
+            # rknn_input 为 4 维 (1, H, W, 3)，H/W 在 axis 1/2
+            img_height = rknn_input.shape[1]
+            img_width = rknn_input.shape[2]
             detections = self._postprocess_yolo11_rknn(
                 outputs,
                 conf_threshold=self.config.conf_threshold,
