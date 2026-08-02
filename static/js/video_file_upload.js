@@ -180,7 +180,10 @@ function clearSelectedFiles() {
 async function loadDirectoriesForVideoFile() {
     try {
         const response = await fetch('/api/directories');
-        const directories = await response.json();
+        const data = await response.json();
+
+        // API 返回 { success, directories } 结构，兼容直接返回数组的情况
+        const directories = Array.isArray(data) ? data : (data.directories || []);
 
         const select = document.getElementById('videoFileDirectory');
         select.innerHTML = '<option value="">无目录</option>';
