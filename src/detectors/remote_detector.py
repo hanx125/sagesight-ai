@@ -64,6 +64,7 @@ class RemoteObjectDetector:
         event: mp.Event,
         input_shape: tuple,
         stop_event: Optional[mp.Event] = None,
+        task_id: str = "",
     ):
         """
         Args:
@@ -74,6 +75,7 @@ class RemoteObjectDetector:
             event: 输出就绪事件（检测器进程完成后 set）
             input_shape: 输入共享内存形状 (1, H, W, 3)
             stop_event: 停止事件（可选,用于优雅退出）
+            task_id: 任务ID（参与共享内存命名，确保同 camera 多任务各自独立 SHM）
         """
         self.camera_id = camera_id
         self.model_type = model_type
@@ -81,14 +83,15 @@ class RemoteObjectDetector:
         self.detection_queue = detection_queue
         self.event = event
         self.stop_event = stop_event
+        self.task_id = task_id
 
         # 连接输入共享内存 (1, H, W, 3) uint8
-        in_shm_name = get_input_shm_name(model_type, camera_id)
+        in_shm_name = get_input_shm_name(model_type, camera_id, task_id)
         self.in_shm = shared_memory.SharedMemory(name=in_shm_name, create=False)
         self.np_shm = np.ndarray(input_shape, dtype=np.uint8, buffer=self.in_shm.buf)
 
         # 连接输出共享内存 (20, 6) float32
-        out_shm_name = get_output_shm_name(model_type, camera_id)
+        out_shm_name = get_output_shm_name(model_type, camera_id, task_id)
         self.out_shm = shared_memory.SharedMemory(name=out_shm_name, create=False)
         self.out_np_shm = np.ndarray(
             (MAX_DETECTIONS, OUTPUT_FIELDS), dtype=np.float32, buffer=self.out_shm.buf

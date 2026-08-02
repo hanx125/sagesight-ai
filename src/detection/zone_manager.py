@@ -31,6 +31,9 @@ class ZoneConfig:
     enable_loitering_detection: bool = False  # 是否启用徘徊检测
     loitering_time: int = 30  # 徘徊阈值（秒）
     polygon_type: str = "normalized"
+    inertia: int = 3  # 进入惯性：连续 N 帧确认进入区域，过滤边缘抖动
+    objects: List[str] = field(default_factory=list)  # 对象类型白名单，空表示不限
+    _contour: Optional[np.ndarray] = field(default=None, repr=False, compare=False)  # 预计算像素轮廓缓存
 
     @classmethod
     def from_dict(cls, data: dict) -> "ZoneConfig":
@@ -43,10 +46,12 @@ class ZoneConfig:
             enable_loitering_detection=data.get("enable_loitering_detection", False),
             loitering_time=data.get("loitering_time", 30),
             polygon_type=data.get("polygon_type", "normalized"),
+            inertia=data.get("inertia", 3),
+            objects=data.get("objects", []),
         )
 
     def to_dict(self) -> dict:
-        """转换为字典"""
+        """转换为字典（不输出 _contour 缓存）"""
         return {
             "name": self.name,
             "polygon": self.polygon,
@@ -55,7 +60,21 @@ class ZoneConfig:
             "enable_loitering_detection": self.enable_loitering_detection,
             "loitering_time": self.loitering_time,
             "polygon_type": self.polygon_type,
+            "inertia": self.inertia,
+            "objects": self.objects,
         }
+
+    def compute_contour(self, frame_width: int, frame_height: int) -> None:
+        """预计算像素轮廓并缓存
+
+        在 ZoneManager 初始化时调用一次，后续运行期间直接通过 get_contour() 读取，
+        避免每帧重复坐标转换。
+        """
+        self._contour = self.get_pixel_polygon(frame_width, frame_height)
+
+    def get_contour(self) -> Optional[np.ndarray]:
+        """获取预计算的像素轮廓（未预计算时返回 None）"""
+        return self._contour
 
     def get_pixel_polygon(self, frame_width: int, frame_height: int) -> np.ndarray:
         """将归一化坐标转换为像素坐标
@@ -101,6 +120,10 @@ class ZoneManager:
                 self.zones.append(ZoneConfig.from_dict(zc))
             except Exception as e:
                 logger.warning(f"解析 ZoneConfig 失败: {e}, data={zc}")
+
+        # 预计算每个 zone 的像素轮廓，运行期间直接读取，避免每帧重复坐标转换
+        for zone in self.zones:
+            zone.compute_contour(self.frame_width, self.frame_height)
 
         logger.debug(f"[ZoneManager] 初始化: {len(self.zones)} 个区域")
 
@@ -153,7 +176,10 @@ class ZoneManager:
 
         zones_in = []
         for zone in self.zones:
-            pixel_polygon = zone.get_pixel_polygon(self.frame_width, self.frame_height)
+            # 优先读取预计算的轮廓，未预计算时回退到实时转换（防御性）
+            pixel_polygon = zone.get_contour()
+            if pixel_polygon is None:
+                pixel_polygon = zone.get_pixel_polygon(self.frame_width, self.frame_height)
             if len(pixel_polygon) < 3:
                 continue
             if self._point_in_polygon(point, pixel_polygon):

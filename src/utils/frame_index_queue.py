@@ -19,6 +19,9 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional, Deque
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -82,8 +85,8 @@ class FrameIndexQueue:
         # 统计信息
         self.stats = FrameIndexQueueStats(max_size=max_size)
         
-        print(f"[FrameIndexQueue] 初始化完成")
-        print(f"[FrameIndexQueue]   最大容量: {max_size} 个索引")
+        logger.debug(f"[FrameIndexQueue] 初始化完成")
+        logger.debug(f"[FrameIndexQueue]   最大容量: {max_size} 个索引")
     
     def enqueue_index(self, sequence_num: int, shm_block_id: int, timestamp_ns: int) -> bool:
         """
@@ -174,7 +177,7 @@ class FrameIndexQueue:
     def print_stats(self):
         """打印统计信息"""
         stats = self.get_stats()
-        print(f"[FrameIndexQueue] 统计信息:")
-        print(f"  总索引数: {stats.total_indices}")
-        print(f"  当前大小: {stats.current_size}")
-        print(f"  最大容量: {stats.max_size}")
+        logger.debug(f"[FrameIndexQueue] 统计信息:")
+        logger.debug(f"  总索引数: {stats.total_indices}")
+        logger.debug(f"  当前大小: {stats.current_size}")
+        logger.debug(f"  最大容量: {stats.max_size}")

@@ -1,4 +1,4 @@
-knife
-people
-gun
-cudgel
+刀具
+人员
+枪支
+棍棒

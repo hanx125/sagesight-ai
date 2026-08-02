@@ -60,6 +60,7 @@ class DetectorPool:
         class_names: list,
         num_detectors: int = 3,
         input_shape: tuple = (1, 640, 640, 3),
+        task_id: str = "",
     ):
         """
         Args:
@@ -68,12 +69,14 @@ class DetectorPool:
             class_names: 类别名称列表
             num_detectors: 检测器进程数量（默认3）
             input_shape: 输入共享内存形状 (1, H, W, 3)
+            task_id: 任务ID（参与共享内存命名，确保同 camera 多任务各自独立 SHM）
         """
         self.model_type = model_type
         self.detector_config = detector_config
         self.class_names = class_names
         self.num_detectors = num_detectors
         self.input_shape = input_shape
+        self.task_id = task_id
 
         # 共享队列: 所有检测器进程从同一个队列获取任务
         self.detection_queue: mp.Queue = mp.Queue()
@@ -139,7 +142,7 @@ class DetectorPool:
             self.out_events[cam_id] = mp.Event()
 
             # 创建输入共享内存 (1, H, W, 3) uint8
-            in_shm_name = get_input_shm_name(self.model_type, cam_id)
+            in_shm_name = get_input_shm_name(self.model_type, cam_id, self.task_id)
             input_size = int(np.prod(self.input_shape))  # uint8 每元素1字节
 
             # Windows 上共享内存可能已存在（异常退出未清理）,尝试复用或重建
@@ -158,7 +161,7 @@ class DetectorPool:
             self.input_shms[cam_id] = in_shm
 
             # 创建输出共享内存 (20, 6) float32
-            out_shm_name = get_output_shm_name(self.model_type, cam_id)
+            out_shm_name = get_output_shm_name(self.model_type, cam_id, self.task_id)
             output_size = MAX_DETECTIONS * OUTPUT_FIELDS * 4  # float32 = 4字节
 
             try:
@@ -199,6 +202,7 @@ class DetectorPool:
                 detection_queue=self.detection_queue,
                 event=self.out_events[cam_id],
                 input_shape=self.input_shape,
+                task_id=self.task_id,
             )
             self.remote_detectors[cam_id] = remote_detector
             result[cam_id] = remote_detector
@@ -239,6 +243,7 @@ class DetectorPool:
                 detector_config=self.detector_config,
                 class_names=self.class_names,
                 input_shape=self.input_shape,
+                task_id=self.task_id,
             )
             self.detectors.append(proc)
 
@@ -376,6 +381,7 @@ class DetectorPoolManager:
                 class_names=class_names,
                 num_detectors=num_detectors,
                 input_shape=input_shape,
+                task_id=task_id,
             )
         else:
             logger.info(

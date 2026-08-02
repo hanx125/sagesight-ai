@@ -99,6 +99,7 @@ class TrackedObject:
         threshold: float = 0.5,
         stationary_threshold: int = 10,
         zones_config: Optional[list] = None,
+        fps: int = 25,
     ):
         """
         Args:
@@ -121,7 +122,11 @@ class TrackedObject:
             threshold: false_positive 判断分数阈值
             stationary_threshold: 静止判断阈值（motionless_count 超过此值认为静止）
             zones_config: Zone 配置列表，每个 zone 是 dict:
-                {"name": str, "contour": np.ndarray, "objects": list, "inertia": int}
+                {"name": str, "contour": np.ndarray, "objects": list[str],
+                 "inertia": int, "enable_loitering_detection": bool,
+                 "loitering_time": int}
+                contour 应为预计算的像素轮廓（np.ndarray），多个 TrackedObject 共享同一引用。
+            fps: 检测帧率，用于将 loitering_time（秒）换算为帧数阈值
         """
         # 分离 score_history（不属于持久状态）
         self.score_history = obj_data["score_history"]
@@ -133,11 +138,18 @@ class TrackedObject:
         self.threshold = threshold
         self.stationary_threshold = stationary_threshold
         self.zones_config = zones_config or []
+        self.fps = fps
 
         # Zone 状态
-        self.zone_presence: dict[str, int] = {}
-        self.current_zones: list[str] = []
-        self.entered_zones: list[str] = []
+        self.zone_presence: dict[str, int] = {}  # 进入惯性计数器（连续 N 帧确认进入）
+        self.zone_loitering: dict[str, int] = {}  # 徘徊帧计数器（累计停留帧数）
+        self.current_zones: list[str] = []  # 当前确认所在的区域
+        self.entered_zones: list[str] = []  # 历史上曾进入的区域（只增不减）
+        self.pending_loitering: list[str] = []  # 当前帧已达到徘徊阈值的区域（瞬时，每帧重建）
+        self.loitered_zones: list[str] = []  # 生命周期内累计曾徘徊的区域（只增不减，用于事件落库）
+
+        # 更新计数器（用于低频调试日志，每 60 帧 print 一次 zone 检测状态）
+        self._update_count = 0
 
         # 状态标记
         self.false_positive = True
@@ -188,6 +200,7 @@ class TrackedObject:
         """
         thumb_update = False
         significant_change = False
+        self._update_count += 1
 
         # 如果目标不在当前帧，添加 0.0 分数；否则添加实际分数
         if obj_data["frame_time"] != current_frame_time:
@@ -222,17 +235,20 @@ class TrackedObject:
                 }
                 thumb_update = True
 
-        # 检查 Zone（简化版：只检测进出，不做 loitering）
+        # Zone 检测：inertia 去抖 + loitering 帧计数
         current_zones = []
         bottom_center = (obj_data["centroid"][0], obj_data["box"][3])
+        new_pending_loitering = []
 
         for zone in self.zones_config:
             name = zone.get("name", "")
             contour = zone.get("contour")
             zone_objects = zone.get("objects", [])
             inertia = zone.get("inertia", 3)
+            enable_loitering = zone.get("enable_loitering_detection", False)
+            loitering_time = zone.get("loitering_time", 0)
 
-            # 如果 zone 限定了对象类型且不包含当前目标，跳过
+            # 白名单过滤：zone 限定对象类型且不含当前目标，跳过该 zone
             if zone_objects and obj_data["label"] not in zone_objects:
                 continue
 
@@ -240,20 +256,55 @@ class TrackedObject:
                 continue
 
             zone_score = self.zone_presence.get(name, 0) + 1
+            in_zone = cv2.pointPolygonTest(contour, bottom_center, False) >= 0
 
-            # 检查目标是否在 zone 内
-            if cv2.pointPolygonTest(contour, bottom_center, False) >= 0:
-                # 达到 inertia 惯性阈值后，确认进入 zone
+            # 调试日志：启用徘徊检测时，每 60 帧打印一次 zone 检测状态，便于排查徘徊不触发问题
+            if enable_loitering and self._update_count % 60 == 0:
+                threshold = loitering_time * self.fps
+                cx, cy = bottom_center
+                logger.debug(
+                    f"[TrackedObject-{self.obj_data['id']}] zone={name} "
+                    f"in_zone={in_zone} pos=({cx:.0f},{cy:.0f}) "
+                    f"contour=[{contour[:,0].min():.0f},{contour[:,1].min():.0f}]-[{contour[:,0].max():.0f},{contour[:,1].max():.0f}] "
+                    f"zone_score={zone_score}/{inertia} "
+                    f"loitering={self.zone_loitering.get(name, 0)}/{threshold} "
+                    f"(time={loitering_time}s*fps={self.fps})"
+                )
+
+            if in_zone:
+                # 惯性去抖：连续 inertia 帧才算"确认在 zone 内"
                 if zone_score >= inertia:
                     current_zones.append(name)
                     if name not in self.entered_zones:
                         self.entered_zones.append(name)
+                    # 徘徊帧计数：仅当启用且阈值>0时累计
+                    if enable_loitering and loitering_time > 0:
+                        loitering_score = self.zone_loitering.get(name, 0) + 1
+                        self.zone_loitering[name] = loitering_score
+                        threshold = loitering_time * self.fps
+                        # 达到 loitering_time * fps 帧阈值，标记为已徘徊
+                        if loitering_score >= threshold:
+                            if name not in new_pending_loitering:
+                                new_pending_loitering.append(name)
+                            # 累计历史徘徊区域（只增不减，用于事件落库与前端展示）
+                            if name not in self.loitered_zones:
+                                self.loitered_zones.append(name)
+                                logger.info(
+                                    f"[TrackedObject-{self.obj_data['id']}] ✅ 徘徊触发 "
+                                    f"zone={name} score={loitering_score}/{threshold}"
+                                )
+                    else:
+                        self.zone_loitering[name] = 0
                 else:
                     self.zone_presence[name] = zone_score
             else:
-                # 未达到 inertia 的话，逐步减少计数
+                # 离开 zone：惯性未达阈值则递减
                 if 0 < zone_score < inertia:
                     self.zone_presence[name] = zone_score - 1
+                # 离开 zone 重置徘徊计数
+                self.zone_loitering[name] = 0
+
+        self.pending_loitering = new_pending_loitering
 
         # 检测显著变化
         if not self.false_positive:
@@ -311,6 +362,8 @@ class TrackedObject:
             "position_changes": self.obj_data["position_changes"],
             "current_zones": self.current_zones.copy(),
             "entered_zones": self.entered_zones.copy(),
+            "pending_loitering": self.pending_loitering.copy(),
+            "loitered_zones": self.loitered_zones.copy(),
         }
 
         return event

@@ -89,6 +89,11 @@ track_box:
   # ID标签颜色（BGR格式）
   label_color: [255, 0, 0]  # 蓝色
 
+  # 徘徊告警高亮配置（目标达到 loitering 阈值时边框变红+闪烁）
+  loitering_color: [0, 0, 255]  # 红色（BGR格式）
+  loitering_thickness: 3  # 徘徊边框线宽（比正常跟踪框更粗）
+  loitering_blink: true  # 是否闪烁（0.5秒交替，吸引注意力）
+
 # ========================================
 # 轨迹绘制配置（后端绘制参数）
 # ========================================
@@ -123,6 +128,36 @@ motion_region:
   fill_alpha: 50
 
 # ========================================
+# 屏幕闪烁报警配置（实时监控页 monitor.html）
+# ========================================
+# 当目标进入区域或检测到徘徊时，在实时监控页触发屏幕闪烁 + 顶部横幅报警。
+# 独立开关，便于按需启用/禁用某类报警。
+alarm:
+  # 进入区域报警（红色闪烁）
+  # 触发条件：new_event 事件中 entered_zones 非空
+  zone_enter_enabled: true
+
+  # 徘徊报警（橙色闪烁）
+  # 触发条件：new_event 事件中 loitered_zones 非空
+  loitering_enabled: true
+
+  # 闪烁持续时间（秒）
+  # 说明：单次报警触发后闪烁持续的秒数，超时自动停止
+  duration: 3
+
+  # 闪烁间隔（毫秒）
+  # 说明：边框闪烁的切换周期，值越小闪烁越快
+  blink_interval: 500
+
+  # 是否显示顶部报警横幅
+  # 说明：横幅显示报警类型与区域名称，与边框闪烁配合
+  show_banner: true
+
+  # 同类型报警节流间隔（毫秒）
+  # 说明：同类型报警在此间隔内不重复触发，避免高频事件刷屏
+  throttle_interval: 3000
+
+# ========================================
 # 性能优化建议
 # ========================================
 # 1. GUI 性能优化：
@@ -145,19 +180,11 @@ motion_region:
 #   display:
 #     target_fps: 0
 #     ai_stream_interval: 3
-#   debug_info:
-#     show_fps: false
-#     show_frame_id: false
 #
 # 场景2：调试环境（开启所有显示）
 #   display:
 #     target_fps: 25
 #     ai_stream_interval: 1
-#   debug_info:
-#     show_fps: true
-#     show_detection_count: true
-#     show_track_count: true
-#     show_frame_id: true
 #
 # 场景3：RTSP流（使用ZLM原始流）
 #   display:

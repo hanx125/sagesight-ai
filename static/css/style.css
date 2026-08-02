@@ -307,6 +307,16 @@ a:hover {
     border-bottom: 1px solid var(--border-color) !important;
 }
 
+/* 子段标题（display 页签内运动区域/报警/调试信息等分组） */
+.task-config-column .form-subsection-title {
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    margin: 14px 0 8px 0 !important;
+    padding-bottom: 4px !important;
+    border-bottom: 1px dashed var(--border-color) !important;
+    color: var(--text-secondary, #555);
+}
+
 /* 两列布局核心样式 */
 .task-config-column .form-row {
     display: flex !important;
@@ -906,6 +916,111 @@ body.theme-light {
     align-items: center;
     justify-content: center;
     padding: 0 4px;
+}
+
+/* 通知下拉面板 */
+.notify-panel {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 360px;
+    max-height: 480px;
+    background: var(--card-bg, #fff);
+    border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+    border: 1px solid var(--border-color, #e8e8e8);
+    z-index: 10000;
+    overflow: hidden;
+    flex-direction: column;
+}
+
+.notify-panel.show {
+    display: flex;
+}
+
+.notify-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-color, #e8e8e8);
+}
+
+.notify-panel-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.notify-clear-btn {
+    background: none;
+    border: none;
+    color: var(--primary-color);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0;
+}
+
+.notify-clear-btn:hover {
+    text-decoration: underline;
+}
+
+.notify-panel-list {
+    flex: 1;
+    overflow-y: auto;
+    max-height: 400px;
+}
+
+.notify-empty {
+    padding: 40px 16px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.notify-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-color, #f0f0f0);
+    transition: background 0.2s;
+}
+
+.notify-item:hover {
+    background: rgba(0, 105, 92, 0.04);
+}
+
+.notify-item-icon {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-top: 6px;
+}
+
+.notify-item-icon.success { background: var(--success-color, #4caf50); }
+.notify-item-icon.warning { background: var(--warning-color, #ff9800); }
+.notify-item-icon.error { background: var(--danger-color, #f44336); }
+.notify-item-icon.info { background: var(--info-color, #2196f3); }
+
+.notify-item-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.notify-item-message {
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.notify-item-time {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
 }
 
 /* 用户登录组件 */
@@ -2844,6 +2959,69 @@ body.theme-light {
 .notification-close:hover {
     background: #f0f0f0;
     color: #333;
+}
+
+/* ========================================
+   屏幕闪烁报警样式（实时监控页）
+   进入区域 → 红色闪烁；徘徊 → 橙色闪烁
+   ======================================== */
+.alarm-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9998;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.alarm-overlay.alarm-zone-enter.active {
+    opacity: 1;
+    box-shadow: inset 0 0 80px 8px rgba(255, 0, 0, 0.7);
+}
+
+.alarm-overlay.alarm-loitering.active {
+    opacity: 1;
+    box-shadow: inset 0 0 80px 8px rgba(255, 140, 0, 0.7);
+}
+
+.alarm-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 9999;
+    padding: 12px 20px;
+    color: #fff;
+    font-weight: bold;
+    font-size: 15px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    animation: alarmBannerPulse 1s ease-in-out infinite;
+}
+
+.alarm-banner.alarm-zone-enter {
+    background: rgba(220, 0, 0, 0.92);
+}
+
+.alarm-banner.alarm-loitering {
+    background: rgba(230, 110, 0, 0.92);
+}
+
+.alarm-banner-icon {
+    font-size: 18px;
+}
+
+.alarm-banner-text {
+    line-height: 1.4;
+}
+
+@keyframes alarmBannerPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.75; }
 }
 
 .notification-dismiss {

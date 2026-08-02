@@ -79,39 +79,22 @@ async function startAudioTalk() {
         console.log('开始ONVIF语音对讲: camera_id=', currentSingleCamera.id);
         updateAudioTalkInfo('正在初始化...');
         
-        // 步骤1: 检查麦克风设备
-        console.log('检查音频设备...');
-        updateAudioTalkInfo('检查音频设备...');
-        
-        try {
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const audioInputDevices = devices.filter(device => device.kind === 'audioinput');
-            
-            console.log('发现音频输入设备:', audioInputDevices.length);
-            
-            if (audioInputDevices.length === 0) {
-                console.error('没有发现麦克风设备');
-                updateAudioTalkInfo('✗ 未发现麦克风设备，请检查设备连接');
-                showAudioTalkTip('未发现麦克风设备，请检查设备是否正确连接', 'error');
-                return;
-            }
-            
-            // 显示设备信息
-            audioInputDevices.forEach((device, index) => {
-                console.log(`  麦克风 #${index + 1}: ${device.label || '未命名设备'} (deviceId: ${device.deviceId})`);
-            });
-            
-        } catch (enumerateError) {
-            console.error('枚举设备失败:', enumerateError);
-            updateAudioTalkInfo('✗ 无法检测音频设备');
-            showAudioTalkTip('无法检测音频设备，请检查浏览器权限设置', 'error');
+        // 环境检查：getUserMedia 需要 HTTPS 或 localhost
+        if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            console.error('浏览器不支持媒体设备或非安全上下文');
+            const hint = window.isSecureContext
+                ? '浏览器不支持 getUserMedia，请使用 Chrome/Edge'
+                : '需要 HTTPS 或 localhost 才能访问麦克风';
+            updateAudioTalkInfo('✗ ' + hint);
+            showAudioTalkTip(hint, 'error');
             return;
         }
         
-        // 步骤2: 请求麦克风权限
+        // 步骤1: 请求麦克风权限（getUserMedia 自身会处理无设备/拒绝权限等错误）
         console.log('请求麦克风权限...');
         updateAudioTalkInfo('请求麦克风权限...');
         
+        let audioTalkLocalStream;
         try {
             audioTalkLocalStream = await navigator.mediaDevices.getUserMedia({
                 audio: {

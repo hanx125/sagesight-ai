@@ -44,15 +44,23 @@ detector:
   #
   #   ✅ 嵌入式平台：
   #     - rknn: RKNN 模型（RK3588/RK3566 等瑞芯微平台 NPU 加速）
+  #            选择 rknn 后启用：
+  #              · 预处理：RGA（region 裁剪+缩放+YUV→RGB，失败自动回退 cv2）
+  #              · 推理：NPU（RKNNLite + librknnrt.so）
+  #            注意：backend 只管"预处理+推理"，解码独立配置。
+  #              解码硬件加速请在 decoder_config.yaml 的 hwaccel_preset 中设置
+  #              （RK3588 用 preset-rk-h264/h265，RKMPP），与本配置互不干预。
   #
   # 性能对比（RTX 2070，640x640输入）：
   #   - onnx_cpu: ~150ms/帧（CPU），兼容性最好
   #   - onnx_cuda: ~15ms/帧（GPU），兼容性好，推荐生产环境
   #   - onnx_tensorrt: ~8ms/帧（GPU+FP16），性能最优，推荐高性能场景
   #   - tensorrt: ~6ms/帧（GPU+FP16），最高性能，需要手动编译Engine
+  #   - rknn: ~10-20ms/帧（RK3588 NPU），边缘设备低功耗加速
   #
   # ⚠️ 根据您的硬件环境（NVIDIA RTX 2070 + CUDA 12.9），建议使用 "onnx_cuda"
   # 如果追求极致性能，可以尝试 "onnx_tensorrt"（自动FP16转换）
+  # ⚠️ 部署到 RK3588 盒子时改为 "rknn"，解码 preset 在 decoder_config.yaml 设置，详见 docs/rk3588_setup.md
   backend: "onnx_cuda"
 
   # ========================================
@@ -131,6 +139,13 @@ detector:
   # ========================================
   # RKNN 配置（仅 backend="rknn" 时使用）
   # ========================================
+  # 部署前置条件（RK3588 盒子）：
+  #   1. 模型文件：model_path 必须指向 .rknn 文件（由 rknn-toolkit2 在 PC 上
+  #      从 ONNX 转换得到，归一化/量化已烘焙进 .rknn，详见 docs/rk3588_setup.md）
+  #   2. RKNNLite 运行时：盒子执行 `pip install rknn-toolkit-lite2`
+  #      （SDK 内不含 wheel，需自行获取与板端 Python 版本匹配的包）
+  #   3. 运行时库：src/lib/rk3588/librknnrt.so、librga.so 项目已自带，
+  #      无需系统安装（rknnlite 加载前会预加载兜底）
 
   # 目标平台（RKNN）
   # 说明：指定 RKNN 模型的目标平台
@@ -173,6 +188,12 @@ detector:
 # 3. onnx_tensorrt：需要 NVIDIA GPU + CUDA + TensorRT，性能最优
 # 4. tensorrt：需要预编译的 TensorRT Engine，最高性能
 # 5. rknn：需要 RKNN-Toolkit2 + RK3588/RK3566 等平台
+#    选 backend=rknn 时启用：
+#      - 预处理走 RGA 硬件（region 裁剪+缩放+YUV→RGB），失败回退 cv2
+#      - 推理走 NPU（RKNNLite）
+#    职责分离：本配置（detector_config）只管"预处理+推理"，
+#    解码硬件加速在 decoder_config.yaml 的 hwaccel_preset 独立设置
+#    （RK3588 选 preset-rk-h264/h265 启用 RKMPP），两者互不干预。
 
 # ========================================
 # 性能优化建议

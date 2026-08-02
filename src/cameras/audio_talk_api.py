@@ -129,13 +129,35 @@ def get_audio_talk_capabilities():
         
         logger.info(f"检测Audio Back Channel支持: {camera_ip}:{rtsp_port}")
         
-        # 测试ONVIF Audio Back Channel
-        result = test_onvif_audio_backchannel(
-            camera_ip=camera_ip,
-            camera_port=rtsp_port,
-            username=username,
-            password=password
-        )
+        # 只做 DESCRIBE 检测（轻量级，不做 SETUP/PLAY/TEARDOWN）
+        # 避免阻塞 Flask 线程和资源浪费
+        from .onvif_audio_backchannel import ONVIFAudioBackchannel
+        result = {
+            'audio_backchannel_supported': False,
+            'audio_tracks': [],
+            'success': False,
+        }
+        try:
+            client = ONVIFAudioBackchannel(
+                camera_ip=camera_ip,
+                camera_port=rtsp_port,
+                username=username,
+                password=password,
+                audio_codec="PCMU",
+                sample_rate=8000
+            )
+            if client.connect():
+                sdp_info = client.describe_audio_backchannel(audio_path="/audio")
+                result['audio_backchannel_supported'] = sdp_info.get('audio_backchannel_supported', False)
+                result['audio_tracks'] = sdp_info.get('audio_tracks', [])
+                result['success'] = result['audio_backchannel_supported']
+                # 只做 DESCRIBE，不 SETUP/PLAY，直接关闭 RTSP 连接
+                client.teardown()
+            else:
+                result['error'] = 'RTSP连接失败'
+        except Exception as e:
+            logger.error(f"检测Audio Back Channel失败: {e}")
+            result['error'] = str(e)
         
         # 构建能力响应
         capabilities = {

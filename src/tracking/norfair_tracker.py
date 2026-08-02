@@ -29,6 +29,7 @@ from norfair import (
 
 from src.tracking.ptz_metrics import PTZMetrics
 from src.tracking.tracked_object import TrackedObject, area
+from src.detection.zone_manager import ZoneManager
 
 logger = logging.getLogger(__name__)
 
@@ -175,14 +176,18 @@ class NorfairTracker:
                 - stationary_threshold: 静止判断阈值（motionless_count 超过此值认为静止,默认 10）
                 - threshold: false_positive 分数阈值（默认 0.5）
                 - max_frames: 静止对象最大帧数 dict {label: frames} 或 {"default": frames}
+                - fps: 检测帧率（默认 25），用于 zone 徘徊帧阈值换算
             ptz_metrics: PTZ 共享状态（可选,启用 autotrack 时传入）
-            zones_config: Zone 配置列表（可选）
+            zones_config: Zone 配置列表（可选,原始 dict 格式）
         """
         self.camera_id = camera_id
         self.frame_shape = frame_shape
         self.detect_config = detect_config
         self.ptz_metrics = ptz_metrics
         self.zones_config = zones_config
+        self.fps = detect_config.get("fps", 25)
+        # 预构建 TrackedObject 期望的 zone 配置（含预计算 contour），多个对象共享只读引用
+        self._tracked_zones_config = self._build_tracked_zones_config()
 
         # 检测配置参数
         self.min_initialized = detect_config.get("min_initialized", 3)
@@ -211,6 +216,30 @@ class NorfairTracker:
         # PTZ 运动估计器（后续实现完整 autotrack 时补充）
         self.ptz_motion_estimator = None
 
+        # Zone 级持久化 loitering 计数器（跨跟踪 ID 生命周期持久化）
+        # 结构: {zone_name: {"count": int, "threshold": int, "triggered": bool}}
+        # 只要有人持续在 zone 内，count 持续累加；所有人离开 zone 后 count 清零
+        # 达到 threshold 后标记 triggered，注入到当前 zone 内所有 TrackedObject 的 loitered_zones
+        self._zone_loitering_state = {}
+        for z in self._tracked_zones_config:
+            name = z.get("name", "")
+            if name and z.get("enable_loitering_detection", False) and z.get("loitering_time", 0) > 0:
+                self._zone_loitering_state[name] = {
+                    "count": 0,
+                    "threshold": int(z["loitering_time"] * self.fps),
+                    "triggered": False,
+                    "enable_loitering": True,
+                    "loitering_time": z["loitering_time"],
+                }
+        if self._zone_loitering_state:
+            logger.info(
+                f"[NorfairTracker-{self.camera_id}] Zone级持久化loitering: "
+                + ", ".join(
+                    f"{k}(阈值={v['threshold']}帧={v['loitering_time']}s)"
+                    for k, v in self._zone_loitering_state.items()
+                )
+            )
+
         # 初始化 norfair Tracker
         # 使用 "iou" 向量化距离函数（Norfair 内置，自动按label分组匹配）
         # IoU 距离阈值：1 - IoU，越小表示要求匹配越严格
@@ -230,6 +259,49 @@ class NorfairTracker:
             f"stationary_threshold={self.stationary_threshold}, "
             f"ptz_autotrack={ptz_metrics.is_autotracker_enabled() if ptz_metrics else False}"
         )
+
+    def _build_tracked_zones_config(self) -> list:
+        """构建 TrackedObject 期望的 zone 配置列表
+
+        借助 ZoneManager 一次性预计算每个 zone 的像素轮廓（contour），
+        然后抽取 TrackedObject 需要的字段组装成 dict 列表。
+        多个 TrackedObject 共享同一份 contour 引用（只读），节省内存。
+        """
+        if not self.zones_config:
+            return []
+
+        try:
+            zone_manager = ZoneManager(self.zones_config, self.frame_shape)
+        except Exception as e:
+            logger.warning(
+                f"[NorfairTracker-{self.camera_id}] ZoneManager 初始化失败，"
+                f"zone 检测将不可用: {e}"
+            )
+            return []
+
+        tracked_zones = []
+        for zone in zone_manager.zones:
+            tracked_zones.append(
+                {
+                    "name": zone.name,
+                    "contour": zone.get_contour(),
+                    "objects": zone.objects,
+                    "inertia": zone.inertia,
+                    "enable_loitering_detection": zone.enable_loitering_detection,
+                    "loitering_time": zone.loitering_time,
+                }
+            )
+
+        zones_detail = ", ".join(
+            f"{z['name']}(loiter={z['enable_loitering_detection']}/{z['loitering_time']}s,"
+            f"inertia={z['inertia']},objects={z['objects']})"
+            for z in tracked_zones
+        ) if tracked_zones else "无"
+        logger.info(
+            f"[NorfairTracker-{self.camera_id}] 预构建 {len(tracked_zones)} 个 zone 配置 "
+            f"(fps={self.fps}, 徘徊阈值=loitering_time*fps): {zones_detail}"
+        )
+        return tracked_zones
 
     def register(self, track_id, obj: dict):
         """注册新跟踪对象"""
@@ -261,7 +333,8 @@ class NorfairTracker:
             obj_data=obj,
             threshold=self.threshold,
             stationary_threshold=self.stationary_threshold,
-            zones_config=self.zones_config,
+            zones_config=self._tracked_zones_config,
+            fps=self.fps,
         )
         self.disappeared[obj_id] = 0
         self.positions[obj_id] = {
@@ -410,8 +483,14 @@ class NorfairTracker:
 
         return False
 
-    def update(self, track_id, obj: dict):
-        """更新已有跟踪对象的状态"""
+    def update(self, track_id, obj: dict, frame_time: float = 0.0):
+        """更新已有跟踪对象的状态
+
+        Args:
+            track_id: norfair 全局跟踪 ID
+            obj: 当前帧检测数据字典
+            frame_time: 当前帧时间戳（用于 TrackedObject.update 的 zone 检测）
+        """
         obj_id = self.track_id_map[track_id]
         if obj_id not in self.tracked_objects:
             return
@@ -452,6 +531,20 @@ class NorfairTracker:
         # 限制轨迹长度
         if len(self.trajectory_history[obj_id]) > self.max_trajectory_length:
             self.trajectory_history[obj_id] = self.trajectory_history[obj_id][-self.max_trajectory_length:]
+
+        # 调用 TrackedObject.update() 执行 zone 检测和 loitering 计数
+        # 必须在 obj_data 更新后调用，zone 检测依赖 centroid/box 等最新字段
+        try:
+            tracked_obj.update(
+                current_frame_time=frame_time,
+                obj_data=tracked_obj.obj_data,
+                has_valid_frame=True,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[NorfairTracker-{self.camera_id}] TrackedObject.update() 失败 "
+                f"obj_id={obj_id}: {e}"
+            )
 
     def update_frame_times(self, frame_name: str, frame_time: float):
         """
@@ -570,10 +663,10 @@ class NorfairTracker:
                 self.disappeared[obj_id] += 1
                 # 仅当估计框有效时更新
                 if estimate[0] < estimate[2] and estimate[1] < estimate[3]:
-                    self.update(t.global_id, obj)
+                    self.update(t.global_id, obj, frame_time)
             else:
                 # 已有目标,本帧检测到,正常更新
-                self.update(t.global_id, obj)
+                self.update(t.global_id, obj, frame_time)
 
         # 清理过期跟踪对象
         expired_ids = [k for k in self.track_id_map.keys() if k not in active_ids]
@@ -586,6 +679,54 @@ class NorfairTracker:
         self.untracked_object_boxes = [
             o[2] for o in detections if o[2] not in tracked_object_boxes
         ]
+
+        # Zone 级持久化 loitering 聚合（在所有 TrackedObject 更新后执行）
+        if self._zone_loitering_state:
+            self._update_zone_loitering(frame_time)
+
+    def _update_zone_loitering(self, frame_time: float):
+        """Zone 级持久化 loitering 计数：跨跟踪 ID 生命周期持久化
+
+        每帧检查每个启用 loitering 的 zone：
+        - 有任意 TrackedObject 在 zone 内 → count++
+        - 无人 zone 内 → count 清零（triggered 也重置，允许再次触发）
+        - count >= threshold → 注入 loitered_zones 到当前 zone 内所有 TrackedObject
+        """
+        for zone_name, state in self._zone_loitering_state.items():
+            # 收集当前在此 zone 内的 TrackedObject
+            objects_in_zone = [
+                obj for obj in self.tracked_objects.values()
+                if zone_name in obj.current_zones
+            ]
+
+            if objects_in_zone:
+                state["count"] += 1
+                # 达到阈值：注入 loitered_zones 到当前 zone 内所有对象
+                if state["count"] >= state["threshold"]:
+                    for obj in objects_in_zone:
+                        if zone_name not in obj.loitered_zones:
+                            obj.loitered_zones.append(zone_name)
+                            logger.info(
+                                f"[NorfairTracker-{self.camera_id}] ✅ Zone级徘徊触发 "
+                                f"zone={zone_name} count={state['count']}/{state['threshold']} "
+                                f"obj={obj.obj_data['id']}"
+                            )
+                        if zone_name not in obj.pending_loitering:
+                            obj.pending_loitering.append(zone_name)
+                    state["triggered"] = True
+
+                # 诊断日志（每 60 帧）
+                if state["count"] % 60 == 0:
+                    logger.debug(
+                        f"[NorfairTracker-{self.camera_id}] Zone级loitering "
+                        f"zone={zone_name} count={state['count']}/{state['threshold']} "
+                        f"objects_in_zone={len(objects_in_zone)}"
+                    )
+            else:
+                # 无人 zone 内：重置计数（允许下次有人时重新触发）
+                if state["count"] > 0:
+                    state["count"] = 0
+                    state["triggered"] = False
 
     def get_tracked_objects_dict(self) -> dict:
         """获取所有跟踪对象的字典表示（用于跨进程传递，包含轨迹历史）"""

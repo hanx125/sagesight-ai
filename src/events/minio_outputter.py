@@ -8,6 +8,9 @@ from typing import Dict
 from minio import Minio
 from datetime import timedelta
 import io
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class MinIOOutputter:
@@ -39,10 +42,10 @@ class MinIOOutputter:
         try:
             if not self.client.bucket_exists(self.bucket):
                 self.client.make_bucket(self.bucket)
-                print(f"[MinIOOutputter] 创建 Bucket: {self.bucket}")
-            print(f"[MinIOOutputter] 已连接到 {self.endpoint}")
+                logger.debug(f"[MinIOOutputter] 创建 Bucket: {self.bucket}")
+            logger.debug(f"[MinIOOutputter] 已连接到 {self.endpoint}")
         except Exception as e:
-            print(f"[MinIOOutputter] 初始化失败: {e}")
+            logger.debug(f"[MinIOOutputter] 初始化失败: {e}")
             raise
     
     def upload(self, event_id: str, image_bytes: bytes, content_type: str = 'image/jpeg') -> str:
@@ -79,9 +82,9 @@ class MinIOOutputter:
             expires=timedelta(seconds=self.presigned_expires)
         )
         
-        print(f"[MinIOOutputter] 图片已上传: {object_name}")
+        logger.debug(f"[MinIOOutputter] 图片已上传: {object_name}")
         return url
     
     def close(self):
         """关闭连接（MinIO 客户端不需要显式关闭）"""
-        print(f"[MinIOOutputter] 已关闭")
+        logger.debug(f"[MinIOOutputter] 已关闭")

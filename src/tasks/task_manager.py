@@ -328,7 +328,7 @@ def get_default_display_config() -> Dict:
         'track_box': config.get('track_box', {}),
         'trajectory': config.get('trajectory', {}),
         'motion_region': config.get('motion_region', {}),
-        'debug_info': config.get('debug_info', {})
+        'alarm': config.get('alarm', {})
     }
 
     return display_config
@@ -429,8 +429,9 @@ class DetectionTask:
     # 检测算法配置
     algorithm: str = "yolov11"
     model_path: str = "models/yolov11n.onnx"
-    model_type: str = "yolov11n"  # 新增：模型类型字段（如 yolov11n, yolov8n, yolo11n）
-    target_classes: List[str] = field(default_factory=lambda: ["person", "car"])
+    model_type: str = "yolov11n"  # 模型类型字段（如 yolov11n, yolov8n, yolo11n）
+    labels_file: str = ""  # 标签文件路径（创建任务时从算法库 labels_file 拷贝，独立字段避免嵌套 JSON）
+    target_classes: List[str] = field(default_factory=list)  # 空列表表示不限制检测类别
 
     # 功能开关（独立字段，便于任务管理）
     motion_detection_enabled: bool = True  # 是否启用运动检测（默认启用）
@@ -477,7 +478,8 @@ class DetectionTask:
             'detection_type': self.detection_type,  # 检测类型（新增）
             'algorithm': self.algorithm,
             'model_path': self.model_path,
-            'model_type': self.model_type,  # 新增：模型类型字段
+            'model_type': self.model_type,  # 模型类型字段
+            'labels_file': self.labels_file,  # 标签文件路径
             'target_classes': self.target_classes,
             'motion_detection_enabled': self.motion_detection_enabled,
             'tracking_enabled': self.tracking_enabled,
@@ -502,8 +504,9 @@ class DetectionTask:
             detection_type=data.get('detection_type', 'realtime'),  # 检测类型（新增）
             algorithm=data.get('algorithm', 'yolov11'),
             model_path=data.get('model_path', 'models/yolov11n.onnx'),
-            model_type=data.get('model_type', 'yolov11n'),  # 新增：模型类型字段
-            target_classes=data.get('target_classes', ['person', 'car']),
+            model_type=data.get('model_type', 'yolov11n'),  # 模型类型字段
+            labels_file=data.get('labels_file', ''),  # 标签文件路径
+            target_classes=data.get('target_classes', []),  # 空列表表示不限制检测类别
             motion_detection_enabled=data.get('motion_detection_enabled', True),  # 默认启用
             tracking_enabled=data.get('tracking_enabled', True),
             decoder_config=data.get('decoder_config', get_default_decoder_config()),
@@ -523,7 +526,8 @@ class DetectionTask:
             'task_name': self.task_name,
             'algorithm': self.algorithm,
             'model_path': self.model_path,
-            'model_type': self.model_type,  # 新增：模型类型字段
+            'model_type': self.model_type,  # 模型类型字段
+            'labels_file': self.labels_file,  # 标签文件路径（task_executor 经 task_config 取此值）
             'target_classes': self.target_classes,
             'motion_detection_enabled': self.motion_detection_enabled,
             'tracking_enabled': self.tracking_enabled,
@@ -582,6 +586,9 @@ class EventRecord:
     start_time: Optional[datetime] = None  # 跟踪起始时间
     end_time: Optional[datetime] = None    # 跟踪终止时间
     status: str = "tracking_start"  # 事件状态：tracking_start/tracking_update/tracking_end/gif_ready
+    entered_zones: List[str] = field(default_factory=list)  # 目标进入过的区域（只增不减）
+    zone_name: str = ""  # 当前所在区域（多个用逗号分隔）
+    loitered_zones: List[str] = field(default_factory=list)  # 生命周期内累计曾徘徊的区域（只增不减）
     created_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
@@ -615,6 +622,9 @@ class EventRecord:
             'start_time': format_datetime(self.start_time),
             'end_time': format_datetime(self.end_time),
             'status': self.status,
+            'entered_zones': self.entered_zones,
+            'zone_name': self.zone_name,
+            'loitered_zones': self.loitered_zones,
             'created_at': format_datetime(self.created_at)
         }
 
@@ -658,8 +668,9 @@ class TaskManager:
                     -- 检测算法配置
                     algorithm VARCHAR(50) DEFAULT 'yolov11',
                     model_path VARCHAR(200) DEFAULT 'models/yolov11n.onnx',
-                    model_type VARCHAR(50) DEFAULT 'yolov11n',  -- 新增：模型类型字段
-                    target_classes TEXT DEFAULT '["person", "car"]',
+                    model_type VARCHAR(50) DEFAULT 'yolov11n',  -- 模型类型字段
+                    labels_file VARCHAR(500) DEFAULT '',  -- 标签文件路径（创建任务时从算法库拷贝）
+                    target_classes TEXT DEFAULT '[]',  -- 空数组表示不限制检测类别
 
                     -- 功能开关
                     motion_detection_enabled BOOLEAN DEFAULT 1,  -- 默认启用运动检测
@@ -805,6 +816,9 @@ class TaskManager:
                     start_time DATETIME,
                     end_time DATETIME,
                     status VARCHAR(20) DEFAULT 'tracking_start',
+                    entered_zones TEXT,
+                    zone_name VARCHAR(200),
+                    loitered_zones TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (task_id) REFERENCES detection_tasks(id)
                 )
@@ -817,21 +831,21 @@ class TaskManager:
             # 迁移：添加GIF存储路径字段
             if 'local_gif_url' not in columns:
                 cursor.execute("ALTER TABLE events ADD COLUMN local_gif_url VARCHAR(500)")
-                print("[TaskManager] events 表添加 local_gif_url 字段")
+                logger.debug("[TaskManager] events 表添加 local_gif_url 字段")
             if 'minio_gif_url' not in columns:
                 cursor.execute("ALTER TABLE events ADD COLUMN minio_gif_url VARCHAR(500)")
-                print("[TaskManager] events 表添加 minio_gif_url 字段")
+                logger.debug("[TaskManager] events 表添加 minio_gif_url 字段")
             if 'ftp_gif_url' not in columns:
                 cursor.execute("ALTER TABLE events ADD COLUMN ftp_gif_url VARCHAR(500)")
-                print("[TaskManager] events 表添加 ftp_gif_url 字段")
+                logger.debug("[TaskManager] events 表添加 ftp_gif_url 字段")
             
             # 迁移：添加 start_time 和 end_time 字段
             if 'start_time' not in columns:
                 cursor.execute("ALTER TABLE events ADD COLUMN start_time DATETIME")
-                print("[TaskManager] events 表添加 start_time 字段")
+                logger.debug("[TaskManager] events 表添加 start_time 字段")
             if 'end_time' not in columns:
                 cursor.execute("ALTER TABLE events ADD COLUMN end_time DATETIME")
-                print("[TaskManager] events 表添加 end_time 字段")
+                logger.debug("[TaskManager] events 表添加 end_time 字段")
 
             # ========================================
             # 迁移：统一 status 为独立列（废弃 metadata.status）
@@ -839,7 +853,7 @@ class TaskManager:
             # ========================================
             if 'status' not in columns:
                 cursor.execute("ALTER TABLE events ADD COLUMN status VARCHAR(20) DEFAULT 'tracking_start'")
-                print("[TaskManager] events 表添加 status 字段")
+                logger.debug("[TaskManager] events 表添加 status 字段")
 
             # 回填：从 metadata.status 复制到独立 status 列
             try:
@@ -850,7 +864,7 @@ class TaskManager:
                       AND json_extract(metadata, '$.status') != ''
                 ''')
                 if cursor.rowcount > 0:
-                    print(f"[TaskManager] 已从 metadata.status 回填 {cursor.rowcount} 条事件的 status 列")
+                    logger.debug(f"[TaskManager] 已从 metadata.status 回填 {cursor.rowcount} 条事件的 status 列")
             except Exception as e:
                 logger.warning(f"json_extract 回填 status 失败，跳过: {e}")
 
@@ -880,10 +894,24 @@ class TaskManager:
                     except (json.JSONDecodeError, TypeError):
                         continue
                 if rows_to_clean:
-                    print(f"[TaskManager] 已从 {len(rows_to_clean)} 条事件的 metadata 中清理 status 键")
+                    logger.debug(f"[TaskManager] 已从 {len(rows_to_clean)} 条事件的 metadata 中清理 status 键")
             except Exception as e:
                 logger.warning(f"清理 metadata.status 失败: {e}")
-            
+
+            # 迁移：添加 entered_zones 和 zone_name 字段（zone 检测独立列）
+            if 'entered_zones' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN entered_zones TEXT")
+                logger.debug("[TaskManager] events 表添加 entered_zones 字段")
+            if 'zone_name' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN zone_name VARCHAR(200)")
+                logger.debug("[TaskManager] events 表添加 zone_name 字段")
+
+            # 迁移：添加 loitered_zones 字段（徘徊区域历史记录独立列）
+            # 只增不减的累计集合，区别于瞬时 pending_loitering（后者塞在 metadata JSON 中）
+            if 'loitered_zones' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN loitered_zones TEXT")
+                logger.debug("[TaskManager] events 表添加 loitered_zones 字段")
+
             # ========================================
             # 算法注册表（保留表结构，避免旧触发器/外键引用失败）
             # 实际使用 algorithm_configs 表，此表仅作兼容性保留
@@ -924,12 +952,17 @@ class TaskManager:
             if 'model_type' not in columns:
                 cursor.execute("ALTER TABLE detection_tasks ADD COLUMN model_type VARCHAR(50) DEFAULT 'yolov11n'")
                 logger.info("数据库迁移: 添加model_type字段到detection_tasks表")
+
+            # 添加 labels_file 字段到 detection_tasks 表（标签文件路径，创建任务时从算法库拷贝）
+            if 'labels_file' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN labels_file VARCHAR(500) DEFAULT ''")
+                logger.info("数据库迁移: 添加 labels_file 字段到 detection_tasks 表")
             
             # algorithms 表保留（不删除），避免旧触发器/外键引用失败
             # 实际算法配置已迁移到 algorithm_configs 表
             
             conn.commit()
-            print(f"[TaskManager] 数据库初始化完成: {self.db_path}")
+            logger.debug(f"[TaskManager] 数据库初始化完成: {self.db_path}")
     
     # ========================================
     # 任务管理
@@ -951,12 +984,12 @@ class TaskManager:
 
             cursor.execute('''
                 INSERT INTO detection_tasks
-                (task_name, enabled, status, detection_type, algorithm, model_path, model_type, target_classes,
+                (task_name, enabled, status, detection_type, algorithm, model_path, model_type, labels_file, target_classes,
                  motion_detection_enabled, tracking_enabled,
                  decoder_config, detector_config,
                  tracker_config, motion_config, event_config, display_config,
                  created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 task.task_name,
                 task.enabled,
@@ -964,7 +997,8 @@ class TaskManager:
                 task.detection_type,
                 task.algorithm,
                 task.model_path,
-                task.model_type,  # 新增：model_type字段
+                task.model_type,  # 模型类型字段
+                task.labels_file,  # 标签文件路径
                 json.dumps(task.target_classes),
                 task.motion_detection_enabled,
                 task.tracking_enabled,
@@ -980,7 +1014,7 @@ class TaskManager:
 
             conn.commit()
             task_id = cursor.lastrowid
-            print(f"[TaskManager] 添加任务成功: ID={task_id}, Name={task.task_name}")
+            logger.debug(f"[TaskManager] 添加任务成功: ID={task_id}, Name={task.task_name}")
             return task_id
     
     def get_task(self, task_id: int) -> Optional[DetectionTask]:
@@ -989,7 +1023,7 @@ class TaskManager:
             cursor = conn.cursor()
             # 明确指定列名查询，避免ALTER TABLE导致的列顺序问题
             cursor.execute('''SELECT id, task_name, enabled, status, detection_type,
-                              algorithm, model_path, model_type, target_classes,
+                              algorithm, model_path, model_type, labels_file, target_classes,
                               motion_detection_enabled, tracking_enabled,
                               decoder_config, detector_config, tracker_config,
                               motion_config, event_config, display_config,
@@ -1017,7 +1051,7 @@ class TaskManager:
 
             # 明确指定列名查询，避免ALTER TABLE导致的列顺序问题
             query = '''SELECT id, task_name, enabled, status, detection_type,
-                       algorithm, model_path, model_type, target_classes,
+                       algorithm, model_path, model_type, labels_file, target_classes,
                        motion_detection_enabled, tracking_enabled,
                        decoder_config, detector_config, tracker_config,
                        motion_config, event_config, display_config,
@@ -1043,10 +1077,10 @@ class TaskManager:
     def update_task(self, task_id: int, updates: Dict) -> bool:
         """更新任务"""
         # 调试日志：打印接收到的更新数据
-        print(f"[TaskManager] 更新任务: ID={task_id}")
-        print(f"[TaskManager] 接收到的更新字段: {list(updates.keys())}")
+        logger.debug(f"[TaskManager] 更新任务: ID={task_id}")
+        logger.debug(f"[TaskManager] 接收到的更新字段: {list(updates.keys())}")
         if 'event_config' in updates:
-            print(f"[TaskManager] event_config 内容: {json.dumps(updates['event_config'], ensure_ascii=False, indent=2)}")
+            logger.debug(f"[TaskManager] event_config 内容: {json.dumps(updates['event_config'], ensure_ascii=False, indent=2)}")
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -1062,7 +1096,8 @@ class TaskManager:
                 'detection_type': 'detection_type',
                 'algorithm': 'algorithm',
                 'model_path': 'model_path',
-                'model_type': 'model_type',  # 新增：model_type字段支持更新
+                'model_type': 'model_type',  # 模型类型字段支持更新
+                'labels_file': 'labels_file',  # 标签文件路径支持更新
                 'target_classes': 'target_classes',
                 'motion_detection_enabled': 'motion_detection_enabled',
                 'tracking_enabled': 'tracking_enabled',
@@ -1101,19 +1136,16 @@ class TaskManager:
             success = cursor.rowcount > 0
             
             if success:
-                print(f"[TaskManager] 更新任务成功: ID={task_id}")
+                logger.debug(f"[TaskManager] 更新任务成功: ID={task_id}")
             else:
-                print(f"[TaskManager] 更新任务失败: ID={task_id}")
+                logger.debug(f"[TaskManager] 更新任务失败: ID={task_id}")
             
             return success
     
     def delete_task(self, task_id: int) -> bool:
-        """删除任务"""
+        """删除任务（保留关联的事件记录）"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
-            # 先删除关联的事件
-            cursor.execute('DELETE FROM events WHERE task_id = ?', (task_id,))
             
             # 删除任务-设备通道关联
             cursor.execute('DELETE FROM task_device_channel_bindings WHERE task_id = ?', (task_id,))
@@ -1123,7 +1155,7 @@ class TaskManager:
             
             success = cursor.rowcount > 0
             if success:
-                print(f"[TaskManager] 删除任务成功: ID={task_id}")
+                logger.debug(f"[TaskManager] 删除任务成功: ID={task_id}")
             
             return success
     
@@ -1179,18 +1211,19 @@ class TaskManager:
             detection_type=row[4] if len(row) > 4 else 'realtime',  # 检测类型字段
             algorithm=row[5] if len(row) > 5 else 'yolov11',
             model_path=row[6] if len(row) > 6 else 'models/yolov11n.onnx',
-            model_type=row[7] if len(row) > 7 and row[7] else 'yolov11n',  # 新增：model_type字段（索引调整）
-            target_classes=safe_json_loads_list(row[8] if len(row) > 8 else None, ['person', 'car']),  # 索引调整：7 → 8
-            motion_detection_enabled=row[9] if len(row) > 9 else True,  # 索引调整：8 → 9，默认启用
-            tracking_enabled=row[10] if len(row) > 10 else True,  # 索引调整：9 → 10
-            decoder_config=safe_json_loads_with_defaults(row[11] if len(row) > 11 else None, get_default_decoder_config()),  # 索引调整：10 → 11
-            detector_config=safe_json_loads_with_defaults(row[12] if len(row) > 12 else None, get_default_detector_config()),  # 索引调整：11 → 12
-            tracker_config=safe_json_loads_with_defaults(row[13] if len(row) > 13 else None, get_default_tracker_config()),  # 索引调整：12 → 13
-            motion_config=safe_json_loads_with_defaults(row[14] if len(row) > 14 else None, get_default_motion_config()),  # 索引调整：13 → 14
-            event_config=safe_json_loads_with_defaults(row[15] if len(row) > 15 else None, get_default_event_config()),  # 索引调整：14 → 15
-            display_config=safe_json_loads(row[16] if len(row) > 16 else None, get_default_display_config()),  # ✅ 完全使用数据库配置
-            created_at=parse_datetime(row[17] if len(row) > 17 else None),  # 索引调整：16 → 17
-            updated_at=parse_datetime(row[18] if len(row) > 18 else None)  # 索引调整：17 → 18
+            model_type=row[7] if len(row) > 7 and row[7] else 'yolov11n',  # 模型类型字段
+            labels_file=row[8] if len(row) > 8 and row[8] else '',  # 标签文件路径（索引 8）
+            target_classes=safe_json_loads_list(row[9] if len(row) > 9 else None, []),  # 索引 9，空列表表示不限制
+            motion_detection_enabled=row[10] if len(row) > 10 else True,  # 索引 10，默认启用
+            tracking_enabled=row[11] if len(row) > 11 else True,  # 索引 11
+            decoder_config=safe_json_loads_with_defaults(row[12] if len(row) > 12 else None, get_default_decoder_config()),  # 索引 12
+            detector_config=safe_json_loads_with_defaults(row[13] if len(row) > 13 else None, get_default_detector_config()),  # 索引 13
+            tracker_config=safe_json_loads_with_defaults(row[14] if len(row) > 14 else None, get_default_tracker_config()),  # 索引 14
+            motion_config=safe_json_loads_with_defaults(row[15] if len(row) > 15 else None, get_default_motion_config()),  # 索引 15
+            event_config=safe_json_loads_with_defaults(row[16] if len(row) > 16 else None, get_default_event_config()),  # 索引 16
+            display_config=safe_json_loads(row[17] if len(row) > 17 else None, get_default_display_config()),  # 索引 17
+            created_at=parse_datetime(row[18] if len(row) > 18 else None),  # 索引 18
+            updated_at=parse_datetime(row[19] if len(row) > 19 else None)  # 索引 19
         )
     
     # ========================================
@@ -1207,8 +1240,8 @@ class TaskManager:
                 (event_id, task_id, camera_id, algorithm, type, class_name,
                  confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
                  local_gif_url, minio_gif_url, ftp_gif_url,
-                 metadata, start_time, end_time, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 event.event_id,
                 event.task_id,
@@ -1228,6 +1261,9 @@ class TaskManager:
                 event.start_time,
                 event.end_time,
                 event.status,
+                json.dumps(event.entered_zones),
+                event.zone_name,
+                json.dumps(event.loitered_zones),
                 datetime.now()
             ))
             
@@ -1239,7 +1275,10 @@ class TaskManager:
                      gif_urls: Dict = None, start_time=None, end_time=None,
                      bbox: List[float] = None, confidence: float = None,
                      class_name: str = None,
-                     status: str = None) -> bool:
+                     status: str = None,
+                     entered_zones: List[str] = None,
+                     zone_name: str = None,
+                     loitered_zones: List[str] = None) -> bool:
         """更新事件记录
 
         支持部分更新：仅更新提供的字段，未提供的字段保持不变。
@@ -1256,6 +1295,9 @@ class TaskManager:
             confidence: 置信度
             class_name: 类别名称
             status: 事件状态（tracking_start/tracking_update/tracking_end/gif_ready），写入独立 status 列
+            entered_zones: 目标进入过的区域列表（只增不减）
+            zone_name: 当前所在区域（多个用逗号分隔）
+            loitered_zones: 生命周期内累计曾徘徊的区域列表（只增不减，写入独立列）
 
         Returns:
             是否更新成功
@@ -1270,6 +1312,18 @@ class TaskManager:
         if status is not None:
             updates.append('status = ?')
             params.append(status)
+
+        if entered_zones is not None:
+            updates.append('entered_zones = ?')
+            params.append(json.dumps(entered_zones))
+
+        if zone_name is not None:
+            updates.append('zone_name = ?')
+            params.append(zone_name)
+
+        if loitered_zones is not None:
+            updates.append('loitered_zones = ?')
+            params.append(json.dumps(loitered_zones))
 
         if start_time is not None:
             updates.append('start_time = ?')
@@ -1358,7 +1412,7 @@ class TaskManager:
             query = '''SELECT id, event_id, task_id, camera_id, algorithm, type, class_name,
                        confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
                        local_gif_url, minio_gif_url, ftp_gif_url,
-                       metadata, start_time, end_time, status, created_at FROM events WHERE 1=1'''
+                       metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones, created_at FROM events WHERE 1=1'''
             params = []
             
             if task_id:
@@ -1417,7 +1471,7 @@ class TaskManager:
             
             conn.commit()
             deleted = cursor.rowcount
-            print(f"[TaskManager] 清理了 {deleted} 条超过 {days} 天的事件")
+            logger.debug(f"[TaskManager] 清理了 {deleted} 条超过 {days} 天的事件")
             return deleted
     
     def _row_to_event(self, row: tuple) -> EventRecord:
@@ -1445,7 +1499,7 @@ class TaskManager:
                 except (ValueError, TypeError):
                     return value  # 保持原字符串
         
-        created_at = parse_datetime(row[19])  # created_at 在 index 19
+        created_at = parse_datetime(row[22])  # created_at 在 index 22（loitered_zones=21, zone_name=20）
         start_time = parse_datetime(row[16])  # start_time 在 index 16
         end_time = parse_datetime(row[17])    # end_time 在 index 17
 
@@ -1469,6 +1523,9 @@ class TaskManager:
             start_time=start_time,
             end_time=end_time,
             status=row[18] or 'tracking_start',
+            entered_zones=safe_json_loads(row[19], []),
+            zone_name=row[20] or '',
+            loitered_zones=safe_json_loads(row[21], []),
             created_at=created_at
         )
     
@@ -1528,7 +1585,7 @@ class TaskManager:
             total_cameras = camera_stats.get('total', 0)
             enabled_cameras = camera_stats.get('enabled', 0)
         except Exception as e:
-            print(f"[TaskManager] 获取摄像机统计失败: {e}")
+            logger.debug(f"[TaskManager] 获取摄像机统计失败: {e}")
             total_cameras = 0
             enabled_cameras = 0
         
@@ -1558,6 +1615,11 @@ class TaskManager:
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            # 强制 WAL checkpoint，确保读到其他进程（如 Flask API）的最新写入
+            try:
+                cursor.execute("PRAGMA wal_checkpoint(FULL)")
+            except Exception:
+                pass
 
             cursor.execute(
                 "SELECT zones_config FROM device_channel_pool WHERE id = ?",
@@ -1607,6 +1669,11 @@ class TaskManager:
                 )
 
                 conn.commit()
+                # 强制 WAL checkpoint，确保其他进程（任务子进程）能立即读到最新配置
+                try:
+                    cursor.execute("PRAGMA wal_checkpoint(FULL)")
+                except Exception:
+                    pass
                 logger.info(f"Zone配置已保存: channel_id={channel_id}, zones_count={len(zones_config)}")
                 return True
 

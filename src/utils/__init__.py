@@ -8,7 +8,7 @@
 from .process import BaseProcess, Process, create_process, run_in_process
 
 # 日志管理
-from .log_manager import LogManager, LogListener, log_listener, setup_logging, get_logger
+from .log_manager import LogManager, log_listener
 
 # 共享内存
 from .shared_memory import (
@@ -19,9 +19,6 @@ from .shared_memory import (
 
 # 帧索引队列
 from .frame_index_queue import FrameIndexQueue
-
-# 进程间通信
-from .inter_process import InterProcessCommunicator
 
 # YUV 图像处理
 from .image import (
@@ -40,10 +37,7 @@ __all__ = [
     
     # 日志管理
     'LogManager',
-    'LogListener',
     'log_listener',
-    'setup_logging',
-    'get_logger',
     
     # 共享内存
     'FrameHeader',
@@ -52,10 +46,7 @@ __all__ = [
     
     # 帧索引队列
     'FrameIndexQueue',
-    
-    # 进程间通信
-    'InterProcessCommunicator',
-    
+
     # YUV 图像处理
     'yuv_region_2_rgb',
     'yuv_region_2_bgr',

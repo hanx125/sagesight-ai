@@ -17,12 +17,13 @@ URL格式：
 
 import os
 import sqlite3
+import threading
 from typing import Dict, List, Optional
 from urllib.parse import urlparse, unquote
 
-from ..utils.log_manager import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class EventCleanupService:
@@ -315,3 +316,97 @@ def get_cleanup_service() -> EventCleanupService:
     if _cleanup_service is None:
         _cleanup_service = EventCleanupService()
     return _cleanup_service
+
+
+# ========================================
+# 后台清理调度器
+# ========================================
+# 由 run.py 在应用启动时调用 start_event_cleanup_scheduler()，
+# 按 system_config.yaml 的 events_cleanup 配置定期清理过期事件及其存储文件。
+
+# 模块级停止事件（供 stop_event_cleanup_scheduler() 优雅退出）
+_cleanup_stop_event: Optional[threading.Event] = None
+_cleanup_thread: Optional[threading.Thread] = None
+
+
+def start_event_cleanup_scheduler(stop_event: Optional[threading.Event] = None) -> Optional[threading.Thread]:
+    """启动事件清理后台调度线程
+
+    从 system_config.yaml 的 events_cleanup 段读取配置（单一真相源）：
+    - enabled: false 时不启动后台线程（直接返回 None），仍可通过 API 手动清理
+    - retention_days: 事件保留天数
+    - cleanup_interval_hours: 清理间隔（小时）
+
+    线程行为：
+    - 启动时立即执行一次清理（清理启动前积累的过期事件）
+    - 之后每 cleanup_interval_hours 小时执行一次 cleanup_events_by_days()
+    - 使用 stop_event 实现优雅退出（未提供时使用模块级 _cleanup_stop_event）
+
+    Args:
+        stop_event: 外部停止事件（可选）。应用退出时 set 该事件可让清理线程优雅退出。
+
+    Returns:
+        启动的线程对象（enabled=false 时返回 None）
+    """
+    global _cleanup_stop_event, _cleanup_thread
+
+    # 延迟导入避免循环依赖
+    from src.system.system_config_loader import get_events_cleanup_config
+
+    cfg = get_events_cleanup_config()
+    if not cfg['enabled']:
+        logger.info(
+            "[EventCleanup] 自动清理未启用（events_cleanup.enabled=false），"
+            "跳过后台线程启动（仍可通过 POST /api/events/clear 手动清理）"
+        )
+        return None
+
+    retention_days = cfg['retention_days']
+    interval_hours = cfg['cleanup_interval_hours']
+
+    # 使用外部 stop_event 或创建模块级 stop_event
+    if stop_event is None:
+        _cleanup_stop_event = threading.Event()
+        stop_event = _cleanup_stop_event
+    else:
+        _cleanup_stop_event = stop_event
+
+    def _cleanup_loop():
+        logger.info(
+            f"[EventCleanup] 后台清理线程启动: "
+            f"retention_days={retention_days}, interval_hours={interval_hours}"
+        )
+
+        # 启动时立即执行一次清理（清理积累的过期事件）
+        try:
+            get_cleanup_service().cleanup_events_by_days(retention_days)
+        except Exception as e:
+            logger.error(f"[EventCleanup] 启动时清理失败: {e}")
+
+        # 定期清理循环：等待 interval 后执行，可被 stop_event 唤醒提前退出
+        while not stop_event.is_set():
+            # stop_event.wait 返回 True 表示被 set（应退出），False 表示超时
+            if stop_event.wait(interval_hours * 3600):
+                break
+            try:
+                get_cleanup_service().cleanup_events_by_days(retention_days)
+            except Exception as e:
+                logger.error(f"[EventCleanup] 定期清理失败: {e}")
+
+        logger.info("[EventCleanup] 后台清理线程已退出")
+
+    _cleanup_thread = threading.Thread(
+        target=_cleanup_loop, daemon=True, name="EventCleanup"
+    )
+    _cleanup_thread.start()
+    logger.info("[EventCleanup] 后台清理调度线程已启动")
+    return _cleanup_thread
+
+
+def stop_event_cleanup_scheduler():
+    """停止事件清理后台调度线程（优雅退出）"""
+    global _cleanup_stop_event
+    if _cleanup_stop_event is not None:
+        _cleanup_stop_event.set()
+        logger.info("[EventCleanup] 已通知后台清理线程退出")
+

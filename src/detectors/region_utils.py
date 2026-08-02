@@ -316,6 +316,8 @@ def create_tensor_input(yuv_frame, region, model_size=(640, 640)):
         yuv_frame: (H*3//2, W) 标准 I420 帧（由 merge_yuv_planes 生成）
         region: (x1, y1, x2, y2) 原图坐标
         model_size: (height, width) 模型输入尺寸
+            注：(640, 640) 仅为兜底默认值，实际调用（camera_pipeline.run_pipeline）均显式传入
+            model_size，其真实值来源于算法库 input_size（创建任务时写入 detector_config）。
 
     Returns:
         (1, model_h, model_w, 3) uint8 RGB tensor
@@ -332,6 +334,62 @@ def create_tensor_input(yuv_frame, region, model_size=(640, 640)):
 
     # 扩展维度：模型期望 [1, H, W, 3]
     return np.expand_dims(cropped_frame, axis=0)
+
+
+def create_tensor_input_hw(yuv_frame, region, model_size=(640, 640), use_rga=False, use_cuda=False):
+    """
+    硬件加速预处理入口，失败自动回退到 cv2 (create_tensor_input)
+
+    支持两条硬件加速路径（互斥，use_rga 优先于 use_cuda）：
+    - RGA（RK3588）：use_rga=True，单次硬件完成 region 裁剪+缩放+YUV→RGB
+    - OpenCV CUDA（Linux + NVIDIA GPU）：use_cuda=True，GPU 做 resize
+      （裁剪+YUV→RGB 复用 CPU 实现，保证与 CPU 路径像素级一致）
+
+    任一硬件路径不可用、region 越界、或调用异常时回退到现有 cv2 路径，
+    保证检测始终可用。
+
+    Args:
+        yuv_frame: (H*3//2, W) 标准 I420 帧（由 merge_yuv_planes 生成）
+        region: (x1, y1, x2, y2) 原图坐标
+        model_size: (height, width) 模型输入尺寸
+        use_rga: 是否尝试 RGA 硬件加速（仅 RKNN 后端在 RK3588 上启用）
+        use_cuda: 是否尝试 OpenCV CUDA 加速（Linux + NVIDIA GPU，仅 resize 上 GPU）
+
+    Returns:
+        (1, model_h, model_w, 3) uint8 RGB tensor
+    """
+    # RGA 路径（RK3588）：单次硬件完成裁剪+缩放+YUV→RGB
+    if use_rga:
+        try:
+            from src.utils.rga_processor import get_rga_processor
+
+            processor = get_rga_processor()
+            if processor is not None and processor.is_available():
+                rgb = processor.crop_resize_yuv420p_to_rgb(
+                    yuv_frame, region, model_size[1], model_size[0]
+                )
+                # (model_h, model_w, 3) → (1, model_h, model_w, 3)
+                return np.expand_dims(rgb, axis=0)
+        except Exception as e:
+            logger.warning(f"[RGA] 预处理失败，回退 cv2: {e}")
+
+    # OpenCV CUDA 路径（Linux + NVIDIA GPU）：裁剪+YUV→RGB 在 CPU，resize 在 GPU
+    if use_cuda:
+        try:
+            from src.utils.cuda_processor import get_cuda_processor
+
+            processor = get_cuda_processor()
+            if processor is not None and processor.is_available():
+                rgb = processor.crop_resize_yuv420p_to_rgb(
+                    yuv_frame, region, model_size[1], model_size[0]
+                )
+                # (model_h, model_w, 3) → (1, model_h, model_w, 3)
+                return np.expand_dims(rgb, axis=0)
+        except Exception as e:
+            logger.warning(f"[CUDA] 预处理失败，回退 cv2: {e}")
+
+    # cv2 CPU 回退路径
+    return create_tensor_input(yuv_frame, region, model_size)
 
 
 # ========================================

@@ -28,10 +28,10 @@ let singleScreenAIMode = false;  // 单画面是否使用 AI 模式
 let aiStreamSubscriptions = {};  // {cameraId: {screenIndexes: Set, image: Image}} AI 流订阅记录
 let aiFrameCanvases = {};  // {cameraId: canvasElement} 单画面 AI Canvas
 
-// 全局消息限流（防止浏览器卡死）
-let _globalMessageCounter = 0;
-let _globalMessageLimit = 10;
-let _globalMessageResetTime = Date.now();
+// AI 流渲染合并：每帧 WS 消息只缓存最新帧，requestAnimationFrame 合批渲染
+// （浏览器刷新率 60Hz 已天然限流，无需全局限流丢帧）
+let _pendingAIFrames = {};   // {cameraId: frameBase64} 待渲染的最新帧
+let _rafScheduled = false;   // 是否已安排 rAF 任务
 
 // 统计信息
 let aiStats = {
@@ -49,7 +49,146 @@ document.addEventListener('DOMContentLoaded', function() {
     setLayout(1);
     initWebSocket();
     initDragDrop();
+    fetchAlarmConfig();
+    loadAlarmConfigCache();
 });
+
+// ========================================
+// 屏幕闪烁报警（进入区域红色 / 徘徊橙色）
+// ========================================
+
+// 报警配置：全局兜底值（从 display_config.yaml 的 alarm 段拉取）
+// 真正生效的是每任务独立配置（见 _alarmConfigByTask），此处仅作兜底
+let _alarmConfig = {
+    zone_enter_enabled: true,
+    loitering_enabled: true,
+    duration: 3,
+    blink_interval: 500,
+    show_banner: true,
+    throttle_interval: 3000
+};
+
+// 每任务报警配置缓存：{task_id: alarm 配置}
+// 单一真相源为任务表 display_config.alarm，此处仅缓存运行中任务的配置
+let _alarmConfigByTask = {};
+
+// 报警运行时状态
+let _alarmBlinkTimer = null;     // 闪烁切换定时器
+let _alarmStopTimer = null;     // 闪烁停止定时器
+let _alarmLastTrigger = {};     // {type: timestamp} 节流记录
+
+// 归一化 alarm 配置（补全缺失字段为默认值）
+function normalizeAlarmConfig(alarm) {
+    alarm = alarm || {};
+    return {
+        zone_enter_enabled: alarm.zone_enter_enabled !== undefined ? alarm.zone_enter_enabled : true,
+        loitering_enabled: alarm.loitering_enabled !== undefined ? alarm.loitering_enabled : true,
+        duration: alarm.duration !== undefined ? alarm.duration : 3,
+        blink_interval: alarm.blink_interval !== undefined ? alarm.blink_interval : 500,
+        show_banner: alarm.show_banner !== undefined ? alarm.show_banner : true,
+        throttle_interval: alarm.throttle_interval !== undefined ? alarm.throttle_interval : 3000
+    };
+}
+
+// 拉取全局报警配置（兜底用，配置文件为默认值来源）
+async function fetchAlarmConfig() {
+    try {
+        const resp = await fetch('/api/display/config');
+        const cfg = await resp.json();
+        _alarmConfig = normalizeAlarmConfig(cfg.alarm || {});
+    } catch (e) {
+        console.warn('[Alarm] 拉取全局报警配置失败，使用默认值:', e);
+    }
+}
+
+// 加载运行中任务的报警配置缓存（每任务独立，单一真相源为任务表 display_config.alarm）
+async function loadAlarmConfigCache() {
+    try {
+        const resp = await fetch('/api/tasks?status=running&per_page=1000');
+        const data = await resp.json();
+        const tasks = (data && data.tasks) || [];
+        const cache = {};
+        for (const t of tasks) {
+            const alarm = t.display_config && t.display_config.alarm;
+            if (alarm) {
+                cache[t.id] = normalizeAlarmConfig(alarm);
+            }
+        }
+        _alarmConfigByTask = cache;
+    } catch (e) {
+        console.warn('[Alarm] 加载任务报警配置缓存失败，使用全局兜底:', e);
+    }
+}
+
+// 获取生效的报警配置：优先每任务独立配置，缺失时回退全局兜底
+function getAlarmConfig(taskId) {
+    if (taskId && _alarmConfigByTask[taskId]) {
+        return _alarmConfigByTask[taskId];
+    }
+    return _alarmConfig;
+}
+
+// 摄像机 ID → 名称映射（用于横幅显示）
+function _cameraDisplayName(cameraId) {
+    if (!cameraId) return '';
+    const cam = (typeof cameras !== 'undefined' ? cameras : []).find(c => c.id === cameraId);
+    return (cam && (cam.name || cam.camera_name)) || cameraId;
+}
+
+// 触发屏幕闪烁报警
+// type: 'zone_enter'（红色） 或 'loitering'（橙色）
+// eventData: new_event/event_update payload（需含 task_id 以便按任务读取报警配置）
+function triggerAlarm(type, eventData) {
+    // 按任务读取报警配置（每任务独立，缺失时回退全局兜底）
+    const alarmCfg = getAlarmConfig(eventData && eventData.task_id);
+    const enabled = (type === 'zone_enter') ? alarmCfg.zone_enter_enabled : alarmCfg.loitering_enabled;
+    if (!enabled) return;
+
+    // 节流：同类型报警在 throttle_interval 内不重复触发
+    const now = Date.now();
+    const last = _alarmLastTrigger[type] || 0;
+    if (now - last < alarmCfg.throttle_interval) return;
+    _alarmLastTrigger[type] = now;
+
+    const overlay = document.getElementById('alarmOverlay');
+    const banner = document.getElementById('alarmBanner');
+    const bannerText = document.getElementById('alarmBannerText');
+    const cameraName = _cameraDisplayName(eventData && eventData.camera_id);
+
+    // 清除上一次闪烁定时器（避免叠加）
+    if (_alarmBlinkTimer) { clearInterval(_alarmBlinkTimer); _alarmBlinkTimer = null; }
+    if (_alarmStopTimer) { clearTimeout(_alarmStopTimer); _alarmStopTimer = null; }
+
+    // 设置报警类型样式（红/橙）
+    overlay.className = 'alarm-overlay alarm-' + type;
+    banner.className = 'alarm-banner alarm-' + type;
+
+    // 横幅文本
+    if (alarmCfg.show_banner && bannerText) {
+        const zones = (type === 'zone_enter'
+            ? (eventData.entered_zones || [])
+            : (eventData.loitered_zones || []));
+        const zoneText = zones.length ? zones.join('、') : '未知区域';
+        const label = (type === 'zone_enter') ? '区域入侵' : '徘徊报警';
+        bannerText.textContent = `${label}：${zoneText}${cameraName ? '（' + cameraName + '）' : ''}`;
+        banner.style.display = 'flex';
+    }
+
+    // 闪烁切换：每 blink_interval 毫秒切换 .active 类
+    let visible = true;
+    overlay.classList.add('active');
+    _alarmBlinkTimer = setInterval(() => {
+        visible = !visible;
+        overlay.classList.toggle('active', visible);
+    }, alarmCfg.blink_interval);
+
+    // duration 秒后停止闪烁并隐藏横幅
+    _alarmStopTimer = setTimeout(() => {
+        if (_alarmBlinkTimer) { clearInterval(_alarmBlinkTimer); _alarmBlinkTimer = null; }
+        overlay.classList.remove('active');
+        banner.style.display = 'none';
+    }, alarmCfg.duration * 1000);
+}
 
 // ========================================
 // WebSocket 初始化
@@ -86,7 +225,8 @@ function initWebSocket() {
         // AI 视频流帧监听（后端画框，前端只显示）
         // ========================================
         // 后端在 ai_stream_enabled_state[camera_id]=True 时推送带检测框的 JPEG 帧
-        // 前端接收后直接在 Canvas 上 drawImage 显示
+        // 前端只缓存最新帧，requestAnimationFrame 合批渲染（浏览器刷新率天然限流，
+        // 不再使用全局限流丢帧，保证最新帧总能及时显示）
         socket.on('ai_stream_frame', function(data) {
             const {camera_id, frame} = data;
 
@@ -100,22 +240,16 @@ function initWebSocket() {
                 PerfMonitor.monitorWebSocket('ai_stream_frame', data);
             }
 
-            // 全局消息限流：超过限制则丢弃
-            const now = Date.now();
-            if (now - _globalMessageResetTime > 1000) {
-                _globalMessageCounter = 0;
-                _globalMessageResetTime = now;
-            }
-            _globalMessageCounter++;
-            if (_globalMessageCounter > _globalMessageLimit) {
-                aiStats.droppedFrames++;
-                return;
-            }
-
-            // 渲染后端推送的带框 JPEG 帧到 Canvas
-            renderAIStreamFrame(camera_id, frame);
             aiStats.totalFrames++;
-            aiStats.renderedFrames++;
+
+            // 只缓存最新帧（同一 camera 多帧到达时旧的直接被覆盖，等价于丢旧帧）
+            _pendingAIFrames[camera_id] = frame;
+
+            // 安排一次 rAF 渲染（已安排则跳过，保证一帧只渲染一次）
+            if (!_rafScheduled) {
+                _rafScheduled = true;
+                requestAnimationFrame(_flushPendingAIFrames);
+            }
         });
 
         // 监听任务启动事件：任务重启后自动恢复AI流
@@ -123,6 +257,9 @@ function initWebSocket() {
         //       此处根据 screen.ai_mode 重新创建 Canvas、订阅并启用 AI 流
         socket.on('task_started', function(data) {
             console.log('[WebSocket] 收到task_started事件:', data);
+
+            // 刷新每任务报警配置缓存（任务可能新建/编辑后重启，alarm 配置已更新）
+            loadAlarmConfigCache();
 
             let hasAIStreamPlaying = false;
 
@@ -157,6 +294,9 @@ function initWebSocket() {
         socket.on('task_stopped', function(data) {
             console.log('[WebSocket] 收到task_stopped事件:', data);
 
+            // 刷新每任务报警配置缓存（任务停止后不再产生该任务的报警事件）
+            loadAlarmConfigCache();
+
             // 电视墙模式：清理 AI 流状态
             screens.forEach((screen, index) => {
                 if (screen && screen.camera_id && aiStreamMode[index]) {
@@ -174,6 +314,39 @@ function initWebSocket() {
                 unsubscribeAIStream(currentSingleCamera.id, 'single');
                 singleScreenAIMode = false;
                 console.log(`[任务停止] 清理单画面 AI流: camera_id=${currentSingleCamera.id}`);
+            }
+        });
+
+        // ========================================
+        // 区域检测屏幕闪烁报警
+        // ========================================
+        // new_event（跟踪开始）：目标进入区域 → 红闪；徘徊 → 橙闪
+        // 两者同时存在时红闪优先（区域入侵更严重）
+        socket.on('new_event', function(event) {
+            try {
+                const enteredZones = (event.entered_zones || []);
+                const loiteredZones = (event.loitered_zones || []);
+
+                if (enteredZones.length > 0) {
+                    triggerAlarm('zone_enter', event);
+                }
+                if (loiteredZones.length > 0) {
+                    triggerAlarm('loitering', event);
+                }
+            } catch (e) {
+                console.warn('[Alarm] new_event 处理失败:', e);
+            }
+        });
+
+        // event_update（跟踪结束）：徘徊区域非空时补一次橙闪提示
+        socket.on('event_update', function(data) {
+            try {
+                const loiteredZones = (data.loitered_zones || []);
+                if (loiteredZones.length > 0 && data.status === 'tracking_end') {
+                    triggerAlarm('loitering', data);
+                }
+            } catch (e) {
+                console.warn('[Alarm] event_update 处理失败:', e);
             }
         });
     }
@@ -1043,6 +1216,27 @@ function unsubscribeAIStream(cameraId, screenIndex) {
         if (aiStreamSubscriptions[cameraId].screenIndexes.size === 0) {
             delete aiStreamSubscriptions[cameraId];
         }
+    }
+}
+
+/**
+ * requestAnimationFrame 回调：批量渲染 _pendingAIFrames 中缓存的最新帧
+ *
+ * 设计要点：
+ * - 一个 rAF 周期内多个 WS 消息到达时，_pendingAIFrames 只保留每个 camera 的最新帧
+ * - 本回调一次性把所有 camera 的最新帧渲染到对应 Canvas，避免重复 drawImage
+ * - 浏览器刷新率（通常 60Hz）天然限流，WS 消息再多也不会超过屏幕刷新能力
+ * - 渲染完成后清空 _pendingAIFrames 并重置 _rafScheduled，允许下一轮调度
+ */
+function _flushPendingAIFrames() {
+    // 取出本周期内待渲染的帧（快照后立即清空，便于下一轮 WS 消息继续累积）
+    const framesToRender = _pendingAIFrames;
+    _pendingAIFrames = {};
+    _rafScheduled = false;
+
+    for (const cameraId in framesToRender) {
+        renderAIStreamFrame(cameraId, framesToRender[cameraId]);
+        aiStats.renderedFrames++;
     }
 }
 

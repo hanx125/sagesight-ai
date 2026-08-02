@@ -7,6 +7,9 @@ FTP 输出器
 import ftplib
 import io
 from typing import Dict
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class FTPOutputter:
@@ -26,7 +29,7 @@ class FTPOutputter:
         self.remote_dir = config.get('remote_dir', '/sagesight/images')
         self.passive_mode = config.get('passive_mode', True)
         
-        print(f"[FTPOutputter] 配置完成 - 服务器: {self.host}:{self.port}")
+        logger.debug(f"[FTPOutputter] 配置完成 - 服务器: {self.host}:{self.port}")
     
     def _ensure_directory(self, ftp: ftplib.FTP):
         """
@@ -85,10 +88,10 @@ class FTPOutputter:
         
         # 构建 FTP 访问路径
         ftp_url = f"ftp://{self.username}:{self.password}@{self.host}:{self.port}{self.remote_dir}/{filename}"
-        print(f"[FTPOutputter] 图片已上传: {filename}")
+        logger.debug(f"[FTPOutputter] 图片已上传: {filename}")
         
         return ftp_url
     
     def close(self):
         """关闭连接（FTP 在 with 语句中自动关闭）"""
-        print(f"[FTPOutputter] 已关闭")
+        logger.debug(f"[FTPOutputter] 已关闭")

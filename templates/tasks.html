@@ -514,7 +514,8 @@
                     <div class="form-row">
                         <div class="form-group">
                             <label for="detectorGpuMemLimit">显存限制(MB)</label>
-                            <input type="number" id="detectorGpuMemLimit" name="detector_gpu_mem_limit" placeholder="6144">
+                            <input type="number" id="detectorGpuMemLimit" name="detector_gpu_mem_limit" placeholder="6144" min="512" step="256">
+                            <small style="color:var(--text-secondary);font-size:12px;">6144 = 6GB，最小 512MB</small>
                         </div>
                         <div class="form-group">
                             <label for="detectorRknnTarget">RKNN目标平台</label>
@@ -905,6 +906,72 @@
                             <!-- 占位，保持布局对齐 -->
                         </div>
                     </div>
+
+                    <h5 class="form-subsection-title">运动区域绘制</h5>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayMotionRegionColor">区域边界颜色(BGR)</label>
+                            <input type="text" id="displayMotionRegionColor" name="display_motion_region_color" placeholder="255,255,0">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayMotionRegionThickness">区域边界线宽</label>
+                            <input type="number" id="displayMotionRegionThickness" name="display_motion_region_thickness" placeholder="1">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayMotionRegionFillColor">区域填充颜色(BGR)</label>
+                            <input type="text" id="displayMotionRegionFillColor" name="display_motion_region_fill_color" placeholder="255,255,0">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayMotionRegionFillAlpha">填充透明度(0-255)</label>
+                            <input type="number" id="displayMotionRegionFillAlpha" name="display_motion_region_fill_alpha" placeholder="50">
+                        </div>
+                    </div>
+
+                    <h5 class="form-subsection-title">屏幕闪烁报警</h5>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="alarmZoneEnterEnabled">进入区域报警</label>
+                            <select id="alarmZoneEnterEnabled" name="alarm_zone_enter_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                            <small style="color: #999;">红色闪烁</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="alarmLoiteringEnabled">徘徊报警</label>
+                            <select id="alarmLoiteringEnabled" name="alarm_loitering_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                            <small style="color: #999;">橙色闪烁</small>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="alarmDuration">闪烁持续时间(秒)</label>
+                            <input type="number" id="alarmDuration" name="alarm_duration" placeholder="3">
+                        </div>
+                        <div class="form-group">
+                            <label for="alarmBlinkInterval">闪烁间隔(毫秒)</label>
+                            <input type="number" id="alarmBlinkInterval" name="alarm_blink_interval" placeholder="500">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="alarmShowBanner">显示报警横幅</label>
+                            <select id="alarmShowBanner" name="alarm_show_banner">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="alarmThrottleInterval">节流间隔(毫秒)</label>
+                            <input type="number" id="alarmThrottleInterval" name="alarm_throttle_interval" placeholder="3000">
+                            <small style="color: #999;">同类型报警去重间隔</small>
+                        </div>
+                    </div>
                 </div>
 
                 </div><!-- config-tab-content -->
@@ -959,17 +1026,16 @@
 
 <!-- Zone 区域配置模态框 -->
 <div id="channelZoneConfigModal" class="modal">
-    <div class="modal-content modal-large" style="max-width: 1000px;">
+    <div class="modal-content modal-large" style="max-width: 1080px;">
         <div class="modal-header">
             <h3>Zone区域配置 - <span id="zoneConfigChannelName"></span></h3>
             <button class="modal-close" onclick="closeChannelZoneConfig()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="zone-config-layout">
-                <!-- 左侧：区域列表 + 属性面板（先设置区域，再绘制多边形） -->
+                <!-- 左侧：区域列表 -->
                 <div class="zone-panel-section">
-                    <!-- 区域列表 -->
-                    <div class="zone-panel-block">
+                    <div class="zone-panel-block zone-panel-block-fill">
                         <div class="zone-panel-header">
                             <h4>区域列表</h4>
                             <div class="zone-panel-actions">
@@ -981,9 +1047,20 @@
                             <div class="zone-list-empty">暂无区域，请点击“添加区域”</div>
                         </div>
                     </div>
+                </div>
 
-                    <!-- 区域属性 -->
-                    <div class="zone-panel-block">
+                <!-- 中间：Canvas 画布 -->
+                <div class="zone-canvas-section">
+                    <div class="zone-canvas-toolbar">
+                        <span class="zone-canvas-hint">先点“添加区域”新建区域，再在画布上左键添加顶点 | 双击/点击首顶点闭合 | 拖拽移动 | 右键删除顶点</span>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="cancelDrawing()">取消绘制</button>
+                    </div>
+                    <canvas id="zoneCanvas" width="640" height="480" style="border: 1px solid var(--border-color); background: #2a2a2a; cursor: crosshair; max-width: 100%;"></canvas>
+                </div>
+
+                <!-- 右侧：区域属性 -->
+                <div class="zone-panel-section">
+                    <div class="zone-panel-block zone-panel-block-fill">
                         <h4>区域属性</h4>
                         <div class="zone-prop-form">
                             <div class="form-group">
@@ -1008,18 +1085,13 @@
                                 <label for="zonePropLoiteringTime">徘徊阈值（秒）</label>
                                 <input type="number" id="zonePropLoiteringTime" min="5" max="3600" value="30" disabled onchange="onZonePropChange()">
                             </div>
+                            <div class="form-group">
+                                <label for="zonePropInertia">进入惯性（帧）</label>
+                                <input type="number" id="zonePropInertia" min="1" max="60" value="3" onchange="onZonePropChange()">
+                            </div>
                             <button type="button" class="btn btn-sm btn-secondary zone-redraw-btn" id="redrawZoneBtn" onclick="redrawActiveZone()" disabled>重新绘制多边形</button>
                         </div>
                     </div>
-                </div>
-
-                <!-- 右侧：Canvas 画布 -->
-                <div class="zone-canvas-section">
-                    <div class="zone-canvas-toolbar">
-                        <span class="zone-canvas-hint">先点“添加区域”新建区域，再在画布上左键添加顶点 | 双击/点击首顶点闭合 | 拖拽移动 | 右键删除顶点</span>
-                        <button type="button" class="btn btn-sm btn-secondary" onclick="cancelDrawing()">取消绘制</button>
-                    </div>
-                    <canvas id="zoneCanvas" width="640" height="480" style="border: 1px solid var(--border-color); background: #2a2a2a; cursor: crosshair; max-width: 100%;"></canvas>
                 </div>
             </div>
         </div>
@@ -1047,6 +1119,7 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
+        min-width: 0;
     }
     .zone-canvas-toolbar {
         display: flex;
@@ -1062,14 +1135,22 @@
         flex: 1;
         width: 100%;
         height: auto;
+        min-height: 0;
     }
     .zone-panel-section {
-        width: 300px;
+        width: 260px;
         flex-shrink: 0;
         display: flex;
         flex-direction: column;
         gap: 12px;
-        overflow-y: auto;
+        min-height: 0;
+    }
+    /* 左右两栏的 block 撑满整列高度，保证两边高度对称 */
+    .zone-panel-block.zone-panel-block-fill {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
     }
     .zone-panel-block {
         background: var(--bg-color);
@@ -1105,8 +1186,9 @@
         cursor: not-allowed;
     }
     .zone-list {
-        max-height: 240px;
+        flex: 1;
         overflow-y: auto;
+        min-height: 0;
     }
     .zone-list-empty {
         text-align: center;
@@ -1214,6 +1296,6 @@
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/tasks.js') }}"></script>
 <script src="{{ url_for('static', filename='js/config_modal.js') }}"></script>
-<script src="{{ url_for('static', filename='js/zone_canvas_editor.js') }}?v=20260731a"></script>
-<script src="{{ url_for('static', filename='js/channel_zone_config.js') }}?v=20260731a"></script>
+<script src="{{ url_for('static', filename='js/zone_canvas_editor.js') }}?v=20260801a"></script>
+<script src="{{ url_for('static', filename='js/channel_zone_config.js') }}?v=20260801a"></script>
 {% endblock %}

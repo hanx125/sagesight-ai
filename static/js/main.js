@@ -94,8 +94,6 @@ function initSocketIO() {
 // 通知系统
 // ========================================
 
-const notifications = [];
-
 // ✅ 新增：通知节流（防止通知堆积导致卡死）
 let _notificationCounter = 0;
 let _notificationLimit = 1;  // ✅ 修复：从3改为1，每秒最多1个通知（更激进）
@@ -107,8 +105,10 @@ let _lastNotificationTime = 0;
 let _notificationQueue = [];
 let _isProcessingNotifications = false;
 
-// ✅ 紧急修复：禁用定时器监控，防止递归调用导致卡死
-// 定时器监控本身导致了性能问题，已移除
+// ✅ 标题栏通知中心：未读列表 + 历史记录
+let _notifyUnread = [];       // 未读通知列表（{message, type, time}）
+let _notifyHistory = [];      // 全部历史（最多保留 50 条）
+const _NOTIFY_HISTORY_MAX = 50;
 
 function showNotification(message, type = 'info', duration = 2000) {
     // ✅ 节流：每秒最多1个通知
@@ -132,206 +132,95 @@ function showNotification(message, type = 'info', duration = 2000) {
     _lastNotificationMessage = message;
     _lastNotificationTime = now;
 
-    // ✅ 新增：将通知放入队列，使用 requestIdleCallback 异步处理
-    _notificationQueue.push({ message, type, duration });
+    // ✅ 只加入标题栏通知中心，不再弹出右上角 toast
+    _addNotifyToCenter(message, type);
+}
 
-    // 如果没有在处理通知，启动处理
-    if (!_isProcessingNotifications) {
-        processNotificationsAsync();
+// ✅ 标题栏通知中心：添加一条未读通知
+function _addNotifyToCenter(message, type) {
+    const item = { message, type, time: Date.now() };
+    _notifyUnread.unshift(item);
+    _notifyHistory.unshift(item);
+    if (_notifyHistory.length > _NOTIFY_HISTORY_MAX) {
+        _notifyHistory.length = _NOTIFY_HISTORY_MAX;
+    }
+    _updateNotifyBadge();
+    _renderNotifyList();
+}
+
+// ✅ 更新铃铛未读数 badge
+function _updateNotifyBadge() {
+    const badge = document.getElementById('notifyBadge');
+    if (!badge) return;
+    const count = _notifyUnread.length;
+    if (count > 0) {
+        badge.textContent = count > 99 ? '99+' : count;
+        badge.style.display = 'flex';
+    } else {
+        badge.style.display = 'none';
     }
 }
 
-// ✅ 新增：异步处理通知（不阻塞主线程）
-function processNotificationsAsync() {
-    if (_notificationQueue.length === 0) {
-        _isProcessingNotifications = false;
+// ✅ 渲染通知下拉列表（未读优先，空时显示历史）
+function _renderNotifyList() {
+    const list = document.getElementById('notifyPanelList');
+    if (!list) return;
+
+    const items = _notifyUnread.length > 0 ? _notifyUnread : _notifyHistory;
+    if (items.length === 0) {
+        list.innerHTML = '<div class="notify-empty">暂无通知</div>';
         return;
     }
 
-    _isProcessingNotifications = true;
+    list.innerHTML = items.map(item => `
+        <div class="notify-item">
+            <div class="notify-item-icon ${item.type}"></div>
+            <div class="notify-item-content">
+                <div class="notify-item-message">${_escapeHtml(item.message)}</div>
+                <div class="notify-item-time">${_formatNotifyTime(item.time)}</div>
+            </div>
+        </div>
+    `).join('');
+}
 
-    // 使用 requestIdleCallback 在浏览器空闲时处理
-    if (typeof requestIdleCallback !== 'undefined') {
-        requestIdleCallback((deadline) => {
-            // 只在浏览器空闲时处理通知
-            while (_notificationQueue.length > 0 && deadline.timeRemaining() > 0) {
-                const { message, type, duration } = _notificationQueue.shift();
-                _renderNotification(message, type, duration);
-            }
+// ✅ HTML 转义（防止通知内容注入）
+function _escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
 
-            // 如果还有通知，继续处理
-            if (_notificationQueue.length > 0) {
-                processNotificationsAsync();
-            } else {
-                _isProcessingNotifications = false;
-            }
-        }, { timeout: 1000 });  // 最多1秒后必须处理
-    } else {
-        // 备用方案：使用 setTimeout
-        setTimeout(() => {
-            if (_notificationQueue.length > 0) {
-                const { message, type, duration } = _notificationQueue.shift();
-                _renderNotification(message, type, duration);
-            }
-            processNotificationsAsync();
-        }, 100);  // 100ms延迟
+// ✅ 格式化通知时间
+function _formatNotifyTime(ts) {
+    const diff = Date.now() - ts;
+    if (diff < 60000) return '刚刚';
+    if (diff < 3600000) return Math.floor(diff / 60000) + '分钟前';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前';
+    const d = new Date(ts);
+    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// ✅ 切换通知下拉面板
+function toggleNotifyPanel() {
+    const panel = document.getElementById('notifyPanel');
+    if (!panel) return;
+    const isVisible = panel.classList.contains('show');
+    panel.classList.toggle('show', !isVisible);
+    // 打开面板时标记已读（清除未读数，但保留历史显示）
+    if (!isVisible) {
+        _notifyUnread = [];
+        _updateNotifyBadge();
+        _renderNotifyList();
     }
 }
 
-// ✅ 新增：实际渲染通知（优化DOM操作）
-function _renderNotification(message, type, duration) {
-    const container = getNotificationContainer();
-
-    // ✅ 优化：先批量删除超出的通知，减少DOM操作
-    const maxNotifications = 3;
-    while (notifications.length >= maxNotifications) {
-        const oldestNotification = notifications.shift();
-        if (oldestNotification && oldestNotification.parentElement) {
-            // ✅ 使用 remove() 方法，比 removeChild 更高效
-            oldestNotification.remove();
-        }
-    }
-
-    // ✅ 使用文档片段批量插入（减少重排）
-    const notification = document.createElement('div');
-    notification.className = `notification notification-${type}`;
-    notification.innerHTML = `
-        <span class="notification-message">${message}</span>
-        <button class="notification-close" onclick="dismissNotification(this.parentElement)">&times;</button>
-    `;
-
-    container.appendChild(notification);
-    notifications.push(notification);
-
-    if (duration > 0) {
-        setTimeout(() => {
-            dismissNotification(notification);
-        }, duration);
-    }
+// ✅ 全部已读（清空未读 + 历史）
+function clearAllNotifications() {
+    _notifyUnread = [];
+    _notifyHistory = [];
+    _updateNotifyBadge();
+    _renderNotifyList();
 }
-
-function dismissNotification(element) {
-    if (!element) return;
-    
-    element.classList.add('notification-dismiss');
-    setTimeout(() => {
-        if (element.parentNode) {
-            element.parentNode.removeChild(element);
-        }
-        const index = notifications.indexOf(element);
-        if (index > -1) {
-            notifications.splice(index, 1);
-        }
-    }, 300);
-}
-
-function getNotificationContainer() {
-    let container = document.querySelector('.notification-container');
-    if (!container) {
-        container = document.createElement('div');
-        container.className = 'notification-container';
-        container.style.position = 'fixed';
-        container.style.top = '80px';
-        container.style.right = '20px';
-        container.style.zIndex = '999999';
-        container.style.display = 'flex';
-        container.style.flexDirection = 'column';
-        container.style.gap = '10px';
-        container.style.pointerEvents = 'none';
-        container.style.alignItems = 'flex-end';
-        container.style.background = 'transparent';
-        document.body.appendChild(container);
-    }
-    return container;
-}
-
-// 添加通知样式
-const notificationStyles = document.createElement('style');
-notificationStyles.textContent = `
-    .notification {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 12px 16px;
-        background: var(--card-bg, #ffffff);
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-        border-left: 4px solid var(--primary-color, #4a90e2);
-        min-width: 280px;
-        max-width: 400px;
-        animation: slideIn 0.3s ease;
-        pointer-events: auto;
-        z-index: 999999 !important;
-        position: relative;
-    }
-    
-    .notification-success {
-        border-left-color: var(--success-color, #4caf50);
-        background: #f0f9eb;
-    }
-    
-    .notification-warning {
-        border-left-color: var(--warning-color, #ff9800);
-        background: #fdf6ec;
-    }
-    
-    .notification-error {
-        border-left-color: var(--danger-color, #f44336);
-        background: #fef0f0;
-    }
-    
-    .notification-info {
-        border-left-color: var(--info-color, #2196f3);
-        background: #f0f7ff;
-    }
-    
-    .notification-message {
-        flex: 1;
-        font-size: 14px;
-        color: var(--text-primary, #333333);
-    }
-    
-    .notification-close {
-        background: none;
-        border: none;
-        color: var(--text-secondary, #666666);
-        font-size: 20px;
-        cursor: pointer;
-        padding: 0;
-        line-height: 1;
-    }
-    
-    .notification-close:hover {
-        color: var(--text-primary, #333333);
-    }
-    
-    .notification-dismiss {
-        animation: slideOut 0.3s ease forwards;
-    }
-    
-    @keyframes slideIn {
-        from {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
-    }
-    
-    @keyframes slideOut {
-        from {
-            transform: translateX(0);
-            opacity: 1;
-        }
-        to {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-    }
-`;
-document.head.appendChild(notificationStyles);
 
 // ========================================
 // 工具函数
@@ -621,6 +510,12 @@ document.addEventListener('click', function(e) {
         menu.style.display = 'none';
         header.classList.remove('active');
     }
+    // 关闭通知面板
+    const notifyWrap = document.getElementById('headerNotify');
+    const notifyPanel = document.getElementById('notifyPanel');
+    if (notifyWrap && notifyPanel && !notifyWrap.contains(e.target)) {
+        notifyPanel.classList.remove('show');
+    }
 });
 
 /**
@@ -657,7 +552,8 @@ window.fetch = function(...args) {
 window.SageSight = {
     socket: () => socket,
     showNotification,
-    dismissNotification,
+    toggleNotifyPanel,
+    clearAllNotifications,
     deepClone,
     debounce,
     throttle,

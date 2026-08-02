@@ -6,15 +6,15 @@ SageSight AI - 系统管理模块
 import os
 import json
 import sqlite3
+import yaml
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from pathlib import Path
 
-# 使用统一的日志管理器
-from ..utils.log_manager import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # ========================================
 # 数据模型
@@ -113,6 +113,20 @@ DEFAULT_STREAMING_SERVERS = [
 ]
 
 
+def _get_web_base_url() -> str:
+    """从 system_config.yaml 读取 Web 服务地址，构造 hook_url_prefix。"""
+    try:
+        cfg_path = Path(__file__).resolve().parents[2] / 'config' / 'system_config.yaml'
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            cfg = yaml.safe_load(f) or {}
+        web = cfg.get('web_server', {})
+        host = web.get('host', '127.0.0.1')
+        port = web.get('port', 5555)
+        return f'http://{host}:{port}'
+    except Exception:
+        return 'http://127.0.0.1:5555'
+
+
 # ========================================
 # 系统管理器
 # ========================================
@@ -209,7 +223,7 @@ class SystemManager:
                     server['rtc_port'],
                     server['secret'],
                     server['media_server_id'],
-                    server['hook_url_prefix'],
+                    server.get('hook_url_prefix') or _get_web_base_url(),
                     server['enabled'],
                     server['is_default'],
                     server['protocol'],

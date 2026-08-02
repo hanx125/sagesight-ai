@@ -47,25 +47,25 @@ MAX_DETECTIONS = 20
 OUTPUT_FIELDS = 6
 
 
-def get_input_shm_name(model_type: str, camera_id: str) -> str:
+def get_input_shm_name(model_type: str, camera_id: str, task_id: str = "") -> str:
     """输入共享内存名称
-    
-    注意：Windows共享内存名称不支持中文和特殊字符，需要使用hash编码
+
+    注意：Windows共享内存名称不支持中文和特殊字符，需要使用hash编码。
+    task_id 参与命名，确保同一 camera_id 被多个任务使用时各自拥有独立 SHM。
     """
     import hashlib
-    # 使用hash确保名称唯一且只包含ASCII字符
-    name_hash = hashlib.md5(f"{model_type}_{camera_id}".encode('utf-8')).hexdigest()[:16]
+    name_hash = hashlib.md5(f"{model_type}_{task_id}_{camera_id}".encode('utf-8')).hexdigest()[:16]
     return f"sagesight_det_inp_{name_hash}"
 
 
-def get_output_shm_name(model_type: str, camera_id: str) -> str:
+def get_output_shm_name(model_type: str, camera_id: str, task_id: str = "") -> str:
     """输出共享内存名称
-    
-    注意：Windows共享内存名称不支持中文和特殊字符，需要使用hash编码
+
+    注意：Windows共享内存名称不支持中文和特殊字符，需要使用hash编码。
+    task_id 参与命名，确保同一 camera_id 被多个任务使用时各自拥有独立 SHM。
     """
     import hashlib
-    # 使用hash确保名称唯一且只包含ASCII字符
-    name_hash = hashlib.md5(f"{model_type}_{camera_id}".encode('utf-8')).hexdigest()[:16]
+    name_hash = hashlib.md5(f"{model_type}_{task_id}_{camera_id}".encode('utf-8')).hexdigest()[:16]
     return f"sagesight_det_out_{name_hash}"
 
 
@@ -205,6 +205,7 @@ def run_detector(
     detector_config: dict,
     class_names: list,
     input_shape: tuple,
+    task_id: str = "",
 ):
     """
     检测器进程主函数
@@ -222,6 +223,7 @@ def run_detector(
         detector_config: 检测器配置 dict
         class_names: 类别名称列表
         input_shape: 输入共享内存形状 (1, H, W, 3)
+        task_id: 任务ID（参与共享内存命名，确保同 camera 多任务各自独立 SHM）
     """
     threading.current_thread().name = f"detector:{name}"
     proc_logger = logging.getLogger(f"detector.{name}")
@@ -260,13 +262,13 @@ def run_detector(
     for cam_id in out_events.keys():
         try:
             # 输入共享内存 (1, H, W, 3) uint8
-            in_shm_name = get_input_shm_name(model_type, cam_id)
+            in_shm_name = get_input_shm_name(model_type, cam_id, task_id)
             in_shm = shared_memory.SharedMemory(name=in_shm_name, create=False)
             in_np = np.ndarray(input_shape, dtype=np.uint8, buffer=in_shm.buf)
             inputs[cam_id] = {"shm": in_shm, "np": in_np}
 
             # 输出共享内存 (20, 6) float32
-            out_shm_name = get_output_shm_name(model_type, cam_id)
+            out_shm_name = get_output_shm_name(model_type, cam_id, task_id)
             out_shm = shared_memory.SharedMemory(name=out_shm_name, create=False)
             out_np = np.ndarray(
                 (MAX_DETECTIONS, OUTPUT_FIELDS), dtype=np.float32, buffer=out_shm.buf
@@ -318,7 +320,7 @@ def run_detector(
             # 定期日志（每 100 次或每 60 秒）
             now = datetime.datetime.now()
             if detection_count % 100 == 0 or (now - last_log_time).total_seconds() > 60:
-                proc_logger.info(
+                proc_logger.debug(
                     f"已处理 {detection_count} 次检测 (model_type={model_type})"
                 )
                 last_log_time = now
@@ -370,6 +372,7 @@ class ObjectDetectProcess:
         detector_config: dict,
         class_names: list,
         input_shape: tuple,
+        task_id: str = "",
     ):
         """
         Args:
@@ -380,6 +383,7 @@ class ObjectDetectProcess:
             detector_config: 检测器配置
             class_names: 类别名称列表
             input_shape: 输入共享内存形状 (1, H, W, 3)
+            task_id: 任务ID（参与共享内存命名，确保同 camera 多任务各自独立 SHM）
         """
         self.name = name
         self.model_type = model_type
@@ -388,6 +392,7 @@ class ObjectDetectProcess:
         self.detector_config = detector_config
         self.class_names = class_names
         self.input_shape = input_shape
+        self.task_id = task_id
 
         self.detect_process: Optional[mp.Process] = None
         self.start_or_restart()
@@ -428,6 +433,7 @@ class ObjectDetectProcess:
                 self.detector_config,
                 self.class_names,
                 self.input_shape,
+                self.task_id,
             ),
         )
         self.detect_process.daemon = True

@@ -7,6 +7,9 @@
 import os
 from typing import Union, Dict
 from .base import BaseDetector, Detection, DetectorConfig
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def create_detector(
@@ -205,14 +208,14 @@ def benchmark_backends(model_path: str, input_shape: tuple = (1, 3, 640, 640)):
     results = {}
     available_backends = get_available_backends()
     
-    print(f"[Benchmark] 可用后端: {available_backends}")
+    logger.debug(f"[Benchmark] 可用后端: {available_backends}")
     
     # 创建测试输入
     input_tensor = np.random.rand(*input_shape).astype(np.float32)
     
     for backend in available_backends:
         try:
-            print(f"\n[Benchmark] 测试后端: {backend}")
+            logger.debug(f"\n[Benchmark] 测试后端: {backend}")
             
             # 创建检测器
             detector = create_detector(
@@ -239,14 +242,14 @@ def benchmark_backends(model_path: str, input_shape: tuple = (1, 3, 640, 640)):
                 'total_objects': 0
             }
             
-            print(f"  平均推理时间: {stats['avg_inference_time_ms']:.2f}ms")
-            print(f"  FPS: {stats['fps']:.1f}")
+            logger.debug(f"  平均推理时间: {stats['avg_inference_time_ms']:.2f}ms")
+            logger.debug(f"  FPS: {stats['fps']:.1f}")
             
             # 卸载模型
             detector.unload_model()
             
         except Exception as e:
-            print(f"  [错误] {backend} 测试失败: {e}")
+            logger.debug(f"  [错误] {backend} 测试失败: {e}")
             results[backend] = {'error': str(e)}
     
     return results

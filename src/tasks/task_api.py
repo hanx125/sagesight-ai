@@ -23,6 +23,31 @@ _process_manager = None
 _socketio = None
 
 
+def _normalize_detector_gpu_mem_limit(detector_config: dict) -> dict:
+    """归一化 detector_config.gpu_mem_limit 为字节单位（入库前调用）。
+
+    前端表单以 MB 为单位输入，后端入库时统一转字节存储（单源真相）。
+    启发式：< 1GB（1024^3 字节）的值视为 MB，乘以 1024*1024 转字节；
+    >= 1GB 的值视为已是字节（配置文件默认值或已转换），保持不变；
+    0 或空值保持不变（ONNX 用 0 表示不限制）。
+    """
+    if not isinstance(detector_config, dict):
+        return detector_config
+    if 'gpu_mem_limit' not in detector_config:
+        return detector_config
+    val = detector_config['gpu_mem_limit']
+    if val is None:
+        return detector_config
+    try:
+        val = int(val)
+    except (TypeError, ValueError):
+        return detector_config
+    ONE_GB = 1024 * 1024 * 1024
+    if 0 < val < ONE_GB:
+        detector_config['gpu_mem_limit'] = val * 1024 * 1024
+    return detector_config
+
+
 def get_task_manager():
     """获取任务管理器实例"""
     global _task_manager
@@ -215,15 +240,49 @@ def create_task():
     # 合并前端配置（如果有）
     decoder_config = merge_config(default_decoder_config, data.get('decoder_config'))
     detector_config = merge_config(default_detector_config, data.get('detector_config'))
+    # gpu_mem_limit 入库前 MB→字节（前端表单单位为 MB，后端统一转字节存储）
+    detector_config = _normalize_detector_gpu_mem_limit(detector_config)
     tracker_config = merge_config(default_tracker_config, data.get('tracker_config'))
     motion_config = merge_config(default_motion_config, data.get('motion_config'))
     event_config = merge_config(default_event_config, data.get('event_config'))
     display_config = merge_config(default_display_config, data.get('display_config'))
 
-    # target_classes：如果前端传空数组，使用默认值
-    target_classes = data.get('target_classes')
-    if not target_classes:  # 空数组或None都使用默认值
-        target_classes = ['person', 'car']
+    # 校验 event_config.capture.required_zones（可选字段，配错直接拒绝创建）
+    capture_cfg = event_config.get('capture', {}) if isinstance(event_config, dict) else {}
+    if 'required_zones' in capture_cfg:
+        required_zones = capture_cfg['required_zones']
+        if not isinstance(required_zones, list) or not all(isinstance(z, str) for z in required_zones):
+            return jsonify({'error': 'event_config.capture.required_zones 必须是字符串列表'}), 400
+
+    # target_classes：空数组表示不限制检测类别（检测所有类别）
+    target_classes = data.get('target_classes', [])
+
+    # ========================================
+    # 从算法库获取标签路径和模型输入尺寸（算法库为单一真相源）
+    # ========================================
+    algorithm_name = data.get('algorithm', 'yolov11')
+    labels_file = ''
+    try:
+        from src.algorithms.algorithm_manager import get_algorithm_manager
+        algo_config = get_algorithm_manager().get_algorithm_by_name(algorithm_name)
+        if algo_config:
+            # 标签路径：从算法库 labels_file 拷贝到任务表（独立字段）
+            labels_file = algo_config.labels_file or ''
+            # 模型输入尺寸：解析算法库 input_size（如 '640x640'）写入 detector_config
+            # 算法库为模型尺寸单一真相源，覆盖 merge_config 中的默认 640
+            input_size_str = algo_config.input_size or '640x640'
+            try:
+                # 兼容 '640x640' 和 '640*640' 两种分隔符写法
+                parts = input_size_str.lower().replace('*', 'x').split('x')
+                if len(parts) == 2:
+                    detector_config['input_width'] = int(parts[0])
+                    detector_config['input_height'] = int(parts[1])
+            except Exception as e:
+                logger.warning(f"解析算法库 input_size 失败: {input_size_str}, 错误: {e}")
+        else:
+            logger.warning(f"算法库中未找到算法: {algorithm_name}, labels_file/模型尺寸使用默认值")
+    except Exception as e:
+        logger.error(f"查询算法库失败: {e}, labels_file/模型尺寸使用默认值")
 
     task = DetectionTask(
         task_name=data.get('task_name', ''),
@@ -231,7 +290,8 @@ def create_task():
         detection_type=data.get('detection_type', 'realtime'),
         algorithm=data.get('algorithm', 'yolov11'),
         model_path=data.get('model_path', 'models/yolov11n.onnx'),
-        model_type=data.get('model_type', 'yolov11n'),  # 新增：模型类型字段
+        model_type=data.get('model_type', 'yolov11n'),  # 模型类型字段
+        labels_file=labels_file,  # 标签文件路径（从算法库拷贝）
         target_classes=target_classes,
         motion_detection_enabled=data.get('motion_detection_enabled', True),
         tracking_enabled=data.get('tracking_enabled', True),
@@ -383,6 +443,19 @@ def update_task(task_id: int):
             merged_config = merge_config_for_update(existing_config, update_data[config_field])
             # 更新到待更新数据
             update_data[config_field] = merged_config
+
+    # gpu_mem_limit 入库前 MB→字节（前端表单单位为 MB，后端统一转字节存储）
+    if 'detector_config' in update_data:
+        update_data['detector_config'] = _normalize_detector_gpu_mem_limit(update_data['detector_config'])
+
+    # 校验 event_config.capture.required_zones（可选字段，配错直接拒绝更新）
+    merged_event_config = update_data.get('event_config')
+    if isinstance(merged_event_config, dict):
+        capture_cfg = merged_event_config.get('capture', {})
+        if isinstance(capture_cfg, dict) and 'required_zones' in capture_cfg:
+            required_zones = capture_cfg['required_zones']
+            if not isinstance(required_zones, list) or not all(isinstance(z, str) for z in required_zones):
+                return jsonify({'error': 'event_config.capture.required_zones 必须是字符串列表'}), 400
 
     # 1. 更新任务本身的配置
     success = task_manager.update_task(task_id, update_data)
@@ -881,13 +954,38 @@ def get_event_count():
 
 @task_bp.route('/events/clear', methods=['POST'])
 def clear_old_events():
-    """清理旧事件"""
-    days = request.args.get('days', 7, type=int)
-    
-    task_manager = get_task_manager()
-    deleted = task_manager.clear_old_events(days=days)
-    
-    return jsonify({'deleted': deleted, 'message': f'清理了 {deleted} 条超过 {days} 天的事件'})
+    """清理过期事件（含存储文件）
+
+    调用 EventCleanupService 统一清理：
+    - 数据库事件记录
+    - 对应的存储文件（本地图片/GIF、MinIO 对象、FTP 文件）
+
+    查询参数（query string）:
+        days: 保留天数（可选，未指定时从 system_config.yaml 的
+              events_cleanup.retention_days 读取，单一真相源）
+    """
+    from src.events.event_cleanup_service import get_cleanup_service
+    from src.system.system_config_loader import get_events_cleanup_config
+
+    # days 优先从请求参数读取，未指定时回退到配置文件默认值
+    cfg = get_events_cleanup_config()
+    days = request.args.get('days', cfg['retention_days'], type=int)
+
+    cleanup_service = get_cleanup_service()
+    result = cleanup_service.cleanup_events_by_days(days)
+
+    return jsonify({
+        'deleted_records': result['deleted_records'],
+        'deleted_files': result['deleted_files'],
+        'failed_files': result['failed_files'],
+        'total_files': result['total_files'],
+        'days': days,
+        'message': (
+            f"清理了 {result['deleted_records']} 条超过 {days} 天的事件，"
+            f"删除 {result['deleted_files']} 个文件"
+            f"（失败 {result['failed_files']} 个）"
+        )
+    })
 
 
 # ========================================
@@ -962,6 +1060,18 @@ def _validate_zones_config(zones_config):
         for point in polygon:
             if not isinstance(point, (list, tuple)) or len(point) != 2:
                 return False, f'Zone {zone["name"]} 的polygon点格式错误，应为[x, y]'
+
+        # 可选字段校验：inertia（进入惯性帧数）
+        if 'inertia' in zone:
+            inertia = zone['inertia']
+            if not isinstance(inertia, int) or isinstance(inertia, bool) or inertia < 1 or inertia > 60:
+                return False, f'Zone {zone["name"]} 的inertia必须是1-60之间的整数'
+
+        # 可选字段校验：objects（对象类型白名单）
+        if 'objects' in zone:
+            objects = zone['objects']
+            if not isinstance(objects, list) or not all(isinstance(o, str) for o in objects):
+                return False, f'Zone {zone["name"]} 的objects必须是字符串列表'
 
     return True, None
 
@@ -1225,5 +1335,5 @@ def register_task_blueprint(app, socketio=None):
     from src.tasks.task_manager import get_task_manager
     manager = get_task_manager()
     
-    print("[TaskAPI] 任务管理 Blueprint 已注册")
-    print(f"[TaskAPI] 当前任务数量: {len(manager.get_all_tasks())}")
+    logger.debug("[TaskAPI] 任务管理 Blueprint 已注册")
+    logger.debug(f"[TaskAPI] 当前任务数量: {len(manager.get_all_tasks())}")

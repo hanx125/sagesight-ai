@@ -37,6 +37,7 @@
 - AI 视频流推送使用 HTTP API（端口从配置读取）
 """
 
+import base64
 import logging
 import multiprocessing as mp
 import os
@@ -136,14 +137,20 @@ class TrackedObjectProcessor(mp.Process):
         # AI 视频流推送帧计数器
         self.ai_stream_frame_counters: dict[str, int] = {}
 
+        # 当前帧（主循环读一次 shm，回调/frame_cache/AI流共用，避免重复读 shm）
+        self._current_frame: Optional[np.ndarray] = None
+
+        # AI 流 per-camera 背压锁（防止线程池积压，丢旧帧）
+        self.ai_stream_inflight_locks: dict[str, threading.Lock] = {}
+
         # PTZ 自动跟踪:每个相机当前跟踪的目标 obj_id（None 表示无跟踪目标）
         self.ptz_tracked_object: dict[str, Optional[str]] = {}
 
         logger.info(
             f"[TrackedObjectProcessor] 初始化: "
-            f"cameras={list(camera_configs.keys())}, "
-            f"ptz_cameras={list(self.ptz_metrics.keys())}, "
-            f"ai_stream_config={self.ai_stream_config}"
+            f"cameras={len(camera_configs)}, "
+            f"ptz_cameras={len(self.ptz_metrics)}, "
+            f"ai_stream_enabled={bool(self.ai_stream_config)}"
         )
 
     def run(self):
@@ -172,7 +179,7 @@ class TrackedObjectProcessor(mp.Process):
 
         # AI 视频流异步推送线程池
         self.ai_stream_executor = ThreadPoolExecutor(
-            max_workers=3, thread_name_prefix="AI-Stream"
+            max_workers=6, thread_name_prefix="AI-Stream"
         )
 
         # AI 视频流配置
@@ -246,6 +253,19 @@ class TrackedObjectProcessor(mp.Process):
             event_config["camera_id"] = cam_id
             event_config["task_id"] = config.get("task_id")
             event_config["algorithm"] = config.get("algorithm", "yolov11")
+
+            # 注入全局系统配置（storage/mqtt/web_server 属系统配置，从 system_config.yaml 读取，
+            # 不存任务表）。若不注入，EventOutput 读不到 FTP/MinIO 全局开关和 MQTT 配置，
+            # 导致即使任务开关和系统全局开关都打开也不会上传、不发送 MQTT 事件元数据。
+            from src.system.system_config_loader import (
+                load_system_config, get_storage_config, get_mqtt_config
+            )
+            event_config["storage"] = get_storage_config()
+            event_config["mqtt"] = get_mqtt_config()
+            event_config["system_config"] = load_system_config()
+            event_config.setdefault("enabled", True)
+            event_config.setdefault("save_to_db", True)
+
             self.event_outputs[cam_id] = EventOutput(event_config)
 
             # 创建 FrameCache（仅 GIF 启用时才缓存帧）
@@ -300,10 +320,9 @@ class TrackedObjectProcessor(mp.Process):
         # "end" 回调:目标消失
         state.on("end", self._on_object_end)
 
-        # Zone 区域事件回调
-        state.on("zone_enter", self._on_zone_enter)
-        state.on("zone_exit", self._on_zone_exit)
-        state.on("loitering", self._on_loitering)
+        # 注：zone_enter / zone_exit / loitering 不再作为独立事件，
+        # zone 变化由 TrackedObject 维护 current_zones / entered_zones / pending_loitering，
+        # 随 update / end 事件自然透传给订阅方。
 
         # "autotrack" 回调:目标位置明显移动 → 更新 PTZMetrics
         # 仅在配置了 PTZMetrics 的相机上注册（基于 src/cameras/ptz_service.py）
@@ -342,7 +361,22 @@ class TrackedObjectProcessor(mp.Process):
             "frame_time": frame_time,
         }
 
-        # 更新 CameraState（触发事件回调）
+        # 保存当前帧的检测数据（供事件回调绘制检测框使用，与 AI 视频流绘制保持一致）
+        self._current_tracked_objects = tracked_objects_dict or {}
+        self._current_motion_boxes = motion_boxes or []
+        self._current_regions = regions or []
+        self._current_detection_results = detection_results or []
+
+        # 按需读一次 shm，回调/frame_cache/AI流共用（避免重复读 shm）
+        frame_cache = self.frame_caches.get(camera_id)
+        need_frame = (
+            frame_cache is not None
+            or self._is_ai_stream_enabled(camera_id)
+            or self._event_callbacks_need_frame(camera_id)
+        )
+        self._current_frame = self._read_frame_from_shm(camera_id) if need_frame else None
+
+        # 更新 CameraState（触发事件回调，回调复用 self._current_frame）
         self.camera_states[camera_id].update(
             frame_time=frame_time,
             current_tracked_objects=tracked_objects_dict,
@@ -350,18 +384,19 @@ class TrackedObjectProcessor(mp.Process):
             regions=regions,
         )
 
-        # 帧缓存：将当前帧写入 FrameCache（用于 GIF 帧回放）
-        frame_cache = self.frame_caches.get(camera_id)
-        if frame_cache is not None:
-            image = self._read_frame_from_shm(camera_id)
-            if image is not None:
-                frame_cache.push(frame_time, image)
+        # 帧缓存：复用已读帧写入 FrameCache（用于 GIF 帧回放）
+        if frame_cache is not None and self._current_frame is not None:
+            frame_cache.push(frame_time, self._current_frame)
 
-        # AI 视频流推送
+        # AI 视频流推送（复用已读帧）
         self._maybe_push_ai_stream(
             camera_id, frame_time, tracked_objects_dict,
-            motion_boxes, regions, detection_results
+            motion_boxes, regions, detection_results,
+            frame=self._current_frame,
         )
+
+        # 清理当前帧引用
+        self._current_frame = None
 
     def _on_object_start(self, camera_id: str, obj_dict: dict, frame_time: float):
         """新目标出现回调 - 创建跟踪事件（type=tracking, status=tracking_start）"""
@@ -375,10 +410,18 @@ class TrackedObjectProcessor(mp.Process):
         if not event_output.should_send(class_name, confidence):
             return
 
-        # 根据 capture.save_full_on_start 配置决定是否回读帧生成快照
+        # 根据 capture.save_full_on_start 配置决定是否生成快照（复用主循环已读帧）
+        # required_zones 过滤：start 阶段 entered_zones 必为空（目标刚出现，尚未确认进入任何区域），
+        # 若配置了 required_zones 则跳过 start 图片（end 阶段再按 entered_zones 判定是否保存）
         image = None
         if event_output.capture_save_full_on_start:
-            image = self._read_frame_from_shm(camera_id)
+            entered_zones_at_start = obj_dict.get("entered_zones", []) or []
+            if event_output.passes_required_zones(entered_zones_at_start):
+                image = self._current_frame
+                if image is None:
+                    image = self._read_frame_from_shm(camera_id)
+                # 绘制检测框（与 AI 视频流保持一致，事件图片也需要展示检测框）
+                image = self._prepare_event_image(camera_id, image)
 
         # 构建事件数据
         track_id = obj_dict.get("id", "")
@@ -395,6 +438,10 @@ class TrackedObjectProcessor(mp.Process):
             "center": [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2],
             "start_time": wall_time,
             "status": "tracking_start",
+            "current_zones": obj_dict.get("current_zones", []),
+            "entered_zones": obj_dict.get("entered_zones", []),
+            "pending_loitering": obj_dict.get("pending_loitering", []),
+            "loitered_zones": obj_dict.get("loitered_zones", []),
         }
 
         # 创建跟踪事件（type=tracking）
@@ -439,10 +486,14 @@ class TrackedObjectProcessor(mp.Process):
 
         event_id = active_event.get("event_id", "")
 
-        # 回读帧生成快照（仅在 thumbnail 更新时）
+        # 生成快照（仅在 thumbnail 更新时，复用主循环已读帧）
         image = None
         if obj_dict.get("snapshot") is not None:
-            image = self._read_frame_from_shm(camera_id)
+            image = self._current_frame
+            if image is None:
+                image = self._read_frame_from_shm(camera_id)
+            # 绘制检测框（与 AI 视频流保持一致，best_thumbnail 也带检测框）
+            image = self._prepare_event_image(camera_id, image)
 
         # 构建更新数据
         class_name = obj_dict.get("label", "unknown")
@@ -461,6 +512,10 @@ class TrackedObjectProcessor(mp.Process):
                 "confidence": confidence,
                 "bbox": bbox,
                 "class_name": class_name,
+                "current_zones": obj_dict.get("current_zones", []),
+                "entered_zones": obj_dict.get("entered_zones", []),
+                "pending_loitering": obj_dict.get("pending_loitering", []),
+                "loitered_zones": obj_dict.get("loitered_zones", []),
             }
             event_output.update_event(
                 event_id,
@@ -507,23 +562,36 @@ class TrackedObjectProcessor(mp.Process):
             "class_name": class_name,
             "end_time": time.time(),         # 系统 Unix 时间戳
             "start_time": event_start_time,  # 系统 Unix 时间戳（来自 start 阶段）
+            "current_zones": obj_dict.get("current_zones", []),
+            "entered_zones": obj_dict.get("entered_zones", []),
+            "pending_loitering": obj_dict.get("pending_loitering", []),
+            "loitered_zones": obj_dict.get("loitered_zones", []),
         }
+
+        # required_zones 过滤：未进入过任何必需区域的目标，不保存图片和 GIF
+        entered_zones = obj_dict.get("entered_zones", []) or []
+        passes_zones = event_output.passes_required_zones(entered_zones)
 
         # 获取置信度最高的缩略图作为结束事件图片
         best_thumbnail = event_output.get_best_thumbnail(event_id)
         best_image = None
-        if best_thumbnail and best_thumbnail.get("image") is not None:
+        if passes_zones and best_thumbnail and best_thumbnail.get("image") is not None:
             best_image = best_thumbnail["image"]
 
-        # 根据 capture.save_full_on_end 配置决定是否回读帧生成结束快照
+        # 根据 capture.save_full_on_end 配置决定是否生成结束快照（复用主循环已读帧）
         end_image = None
-        if event_output.capture_save_full_on_end:
-            end_image = self._read_frame_from_shm(camera_id)
+        if passes_zones and event_output.capture_save_full_on_end:
+            end_image = self._current_frame
+            if end_image is None:
+                end_image = self._read_frame_from_shm(camera_id)
+            # 绘制检测框（与 AI 视频流保持一致，结束快照也带检测框）
+            end_image = self._prepare_event_image(camera_id, end_image)
 
         # 选择最终图片：优先使用置信度最高的缩略图，其次使用结束帧
         final_image = best_image if best_image is not None else end_image
 
         # ✅ 更新事件：保存置信度最高的图片 + 推送 event_update（status=tracking_end）
+        # required_zones 未通过时 image=None，仅更新状态（zone 轨迹仍在 update_data 中落库）
         event_output.update_event(
             event_id,
             status="tracking_end",
@@ -533,7 +601,8 @@ class TrackedObjectProcessor(mp.Process):
         )
 
         # 异步生成 GIF（从 FrameCache 按时间窗口回取帧，GIF生成后自动回填到事件）
-        if event_output.gif_enabled and self.gif_executor:
+        # required_zones 未通过则跳过 GIF 生成
+        if passes_zones and event_output.gif_enabled and self.gif_executor:
             frame_cache = self.frame_caches.get(camera_id)
             if frame_cache is not None:
                 # 按 pre_seconds / post_seconds 确定时间窗口
@@ -587,6 +656,8 @@ class TrackedObjectProcessor(mp.Process):
                     )
             else:
                 logger.warning(f"[{camera_id}] FrameCache 不存在, 跳过 GIF 生成")
+        elif not passes_zones:
+            logger.debug(f"[{camera_id}] 未通过 required_zones 过滤, 跳过 GIF 生成")
         elif not event_output.gif_enabled:
             logger.debug(f"[{camera_id}] GIF 未启用, 跳过 GIF 生成")
 
@@ -603,111 +674,6 @@ class TrackedObjectProcessor(mp.Process):
         logger.info(
             f"[{camera_id}] 跟踪事件结束: id={track_id}, event_id={event_id[:8] if event_id else ''}, "
             f"label={class_name}, duration={frame_time - active_event['start_time']:.1f}s"
-        )
-
-    def _on_zone_enter(self, camera_id: str, obj_dict: dict, frame_time: float, zone_name: str):
-        """目标进入 Zone 区域回调"""
-        event_output = self.event_outputs.get(camera_id)
-        if event_output is None:
-            return
-
-        class_name = obj_dict.get("label", "unknown")
-        confidence = obj_dict.get("score", 0.0)
-        if not event_output.should_send(class_name, confidence):
-            return
-
-        track_id = obj_dict.get("id", "")
-        bbox = obj_dict.get("box", [0, 0, 0, 0])
-
-        event_data = {
-            "track_id": track_id,
-            "class_name": class_name,
-            "confidence": confidence,
-            "bbox": bbox,
-            "zone_name": zone_name,
-            "event_subtype": "zone_enter",
-        }
-
-        event_output.emit(
-            event_type="zone_enter",
-            data=event_data,
-            image=None,
-            frame_id=obj_dict.get("frame_time", 0),
-        )
-
-        logger.info(
-            f"[{camera_id}] 目标进入区域: id={track_id}, zone={zone_name}, label={class_name}"
-        )
-
-    def _on_zone_exit(self, camera_id: str, obj_dict: dict, frame_time: float, zone_name: str):
-        """目标离开 Zone 区域回调"""
-        event_output = self.event_outputs.get(camera_id)
-        if event_output is None:
-            return
-
-        class_name = obj_dict.get("label", "unknown")
-        confidence = obj_dict.get("score", 0.0)
-        if not event_output.should_send(class_name, confidence):
-            return
-
-        track_id = obj_dict.get("id", "")
-        bbox = obj_dict.get("box", [0, 0, 0, 0])
-
-        event_data = {
-            "track_id": track_id,
-            "class_name": class_name,
-            "confidence": confidence,
-            "bbox": bbox,
-            "zone_name": zone_name,
-            "event_subtype": "zone_exit",
-        }
-
-        event_output.emit(
-            event_type="zone_exit",
-            data=event_data,
-            image=None,
-            frame_id=obj_dict.get("frame_time", 0),
-        )
-
-        logger.info(
-            f"[{camera_id}] 目标离开区域: id={track_id}, zone={zone_name}, label={class_name}"
-        )
-
-    def _on_loitering(self, camera_id: str, obj_dict: dict, frame_time: float, zone_name: str):
-        """徘徊检测回调"""
-        event_output = self.event_outputs.get(camera_id)
-        if event_output is None:
-            return
-
-        class_name = obj_dict.get("label", "unknown")
-        confidence = obj_dict.get("score", 0.0)
-        if not event_output.should_send(class_name, confidence):
-            return
-
-        track_id = obj_dict.get("id", "")
-        bbox = obj_dict.get("box", [0, 0, 0, 0])
-
-        # 回读帧生成快照
-        image = self._read_frame_from_shm(camera_id)
-
-        event_data = {
-            "track_id": track_id,
-            "class_name": class_name,
-            "confidence": confidence,
-            "bbox": bbox,
-            "zone_name": zone_name,
-            "event_subtype": "loitering",
-        }
-
-        event_output.emit(
-            event_type="loitering",
-            data=event_data,
-            image=image,
-            frame_id=obj_dict.get("frame_time", 0),
-        )
-
-        logger.info(
-            f"[{camera_id}] 徘徊检测: id={track_id}, zone={zone_name}, label={class_name}"
         )
 
     def _on_object_autotrack(
@@ -821,6 +787,26 @@ class TrackedObjectProcessor(mp.Process):
             logger.debug(f"[{camera_id}] 回读帧失败: {e}")
             return None
 
+    def _event_callbacks_need_frame(self, camera_id: str) -> bool:
+        """判断本帧事件回调是否可能需要快照帧（用于按需读 shm）"""
+        event_output = self.event_outputs.get(camera_id)
+        if event_output is None:
+            return False
+        # 任一 capture 开关开启，就可能在 start/end 时需要快照
+        if getattr(event_output, 'capture_save_full_on_start', False):
+            return True
+        if getattr(event_output, 'capture_save_full_on_end', False):
+            return True
+        # 徘徊检测可能需要快照
+        state = self.camera_states.get(camera_id)
+        if state is not None and hasattr(state, 'zone_manager'):
+            try:
+                if state.zone_manager.get_loitering_zones():
+                    return True
+            except Exception:
+                pass
+        return False
+
     def _is_ai_stream_enabled(self, camera_id: str) -> bool:
         """检查摄像机是否启用 AI 流推送。
 
@@ -848,17 +834,17 @@ class TrackedObjectProcessor(mp.Process):
     def _maybe_push_ai_stream(
         self, camera_id: str, frame_time: float, tracked_objects: dict,
         motion_boxes: list = None, regions: list = None,
-        detection_results: list = None
+        detection_results: list = None,
+        frame: Optional[np.ndarray] = None,
     ):
-        """
-        AI 视频流推送（异步方案：后端绘制检测框，推送JPEG帧）
+        """AI 视频流推送（异步方案：主循环只做检查+计数+submit，画框+编码+HTTP在线程池）
 
         流程：
         1. 检查该摄像机是否启用 AI 流（文件标记优先，Manager dict 降级兼容）
-        2. 从共享内存回读帧
-        3. 绘制检测框到帧上（受 display_config 开关管控）
-        4. JPEG压缩
-        5. 异步推送到 /api/ai-stream/push（通过线程池）
+        2. 帧计数 + interval 过滤
+        3. 复用主循环已读帧（None 时兜底读 shm）
+        4. per-camera 背压锁：该 camera 有帧在编码中则丢帧，避免积压
+        5. submit 到线程池：画框+JPEG编码+HTTP推送全部异步
         """
         # 检查该摄像机是否启用 AI 流
         if not self._is_ai_stream_enabled(camera_id):
@@ -867,7 +853,7 @@ class TrackedObjectProcessor(mp.Process):
                 self._ai_stream_check_counters = {}
             self._ai_stream_check_counters[camera_id] = self._ai_stream_check_counters.get(camera_id, 0) + 1
             if self._ai_stream_check_counters[camera_id] % 100 == 0:
-                logger.info(
+                logger.debug(
                     f"[{camera_id}] AI流：未启用 (检查计数: {self._ai_stream_check_counters[camera_id]})"
                 )
             return
@@ -876,74 +862,95 @@ class TrackedObjectProcessor(mp.Process):
         self.ai_stream_frame_counters[camera_id] = (
             self.ai_stream_frame_counters.get(camera_id, 0) + 1
         )
+        frame_seq = self.ai_stream_frame_counters[camera_id]
 
-        if self.ai_stream_frame_counters[camera_id] % interval != 0:
+        if frame_seq % interval != 0:
             return
 
-        # 从共享内存回读帧
-        frame = self._read_frame_from_shm(camera_id)
+        # 复用主循环已读帧，None 时兜底读 shm
         if frame is None:
-            logger.warning(f"[{camera_id}] AI流：回读帧失败，跳过推送 (frame_seq={self.ai_stream_frame_counters[camera_id]})")
+            frame = self._read_frame_from_shm(camera_id)
+        if frame is None:
+            logger.warning(f"[{camera_id}] AI流：回读帧失败，跳过推送 (frame_seq={frame_seq})")
             return
 
-        logger.debug(f"[{camera_id}] AI流：回读帧成功 shape={frame.shape}")
+        # per-camera 背压锁：该 camera 上一帧还在编码中则丢弃本帧，避免积压
+        camera_lock = self.ai_stream_inflight_locks.get(camera_id)
+        if camera_lock is None:
+            camera_lock = threading.Lock()
+            self.ai_stream_inflight_locks[camera_id] = camera_lock
+        if not camera_lock.acquire(blocking=False):
+            logger.debug(f"[{camera_id}] AI流：背压丢弃 frame_seq={frame_seq}")
+            return
 
-        # 绘制检测框（受 display_config 开关管控）
-        frame_with_boxes = self._draw_detections_on_frame(
-            frame, camera_id, tracked_objects, motion_boxes, regions, detection_results
-        )
-
-        # JPEG压缩
-        import base64
-        import cv2
-
-        # 按原始宽高比缩放（降低带宽，最大宽度640）
-        # 注意：不强制缩放到正方形，保持原始视频的宽高比，避免画面变形
-        h, w = frame_with_boxes.shape[:2]
-        target_max_width = 640
-        if w > target_max_width:
-            scale = target_max_width / w
-            new_w = target_max_width
-            new_h = int(h * scale)
-            frame_with_boxes = cv2.resize(frame_with_boxes, (new_w, new_h))
-
-        # JPEG编码（质量70）
-        encode_params = [cv2.IMWRITE_JPEG_QUALITY, 70]
-        _, jpeg_buffer = cv2.imencode('.jpg', frame_with_boxes, encode_params)
-        frame_base64 = base64.b64encode(jpeg_buffer).decode('utf-8')
-
-        # 获取 task_id
+        # 准备线程池任务参数
+        api_url = self.ai_stream_config.get("api_url")
         cam_config = self.camera_configs.get(camera_id, {})
         task_id = cam_config.get("task_id", "")
 
-        # 异步推送到 /api/ai-stream/push
-        api_url = self.ai_stream_config.get("api_url")
-        frame_seq = self.ai_stream_frame_counters.get(camera_id, 0)
-        
-        if api_url and self.ai_stream_executor:
-            logger.debug(
-                f"[{camera_id}] AI流：提交推送任务 frame_seq={frame_seq} "
-                f"size={len(frame_base64)}B"
-            )
-            self.ai_stream_executor.submit(
-                self._async_push_ai_frame,
-                api_url,
-                task_id,
-                camera_id,
-                frame_seq,
-                frame_base64,
-            )
-        else:
+        if not api_url or not self.ai_stream_executor:
+            camera_lock.release()
             logger.warning(
                 f"[{camera_id}] AI流：未推送 api_url={bool(api_url)} "
                 f"executor={bool(self.ai_stream_executor)}"
             )
+            return
 
-    def _async_push_ai_frame(
-        self, api_url: str, task_id: str, camera_id: str, frame_seq: int, frame_base64: str
+        logger.debug(f"[{camera_id}] AI流：提交编码推送任务 frame_seq={frame_seq}")
+        # submit：画框+编码+HTTP 全部在线程池异步执行
+        # shallow copy 可变结构，避免主循环下一帧修改
+        self.ai_stream_executor.submit(
+            self._async_encode_and_push,
+            frame,
+            camera_id,
+            frame_seq,
+            dict(tracked_objects) if tracked_objects else {},
+            list(motion_boxes) if motion_boxes else [],
+            list(regions) if regions else [],
+            list(detection_results) if detection_results else [],
+            task_id,
+            api_url,
+            camera_lock,
+        )
+
+    def _async_encode_and_push(
+        self,
+        frame: np.ndarray,
+        camera_id: str,
+        frame_seq: int,
+        tracked_objects: dict,
+        motion_boxes: list,
+        regions: list,
+        detection_results: list,
+        task_id: str,
+        api_url: str,
+        camera_lock: threading.Lock,
     ):
-        """异步推送 AI 帧（在线程池中执行）"""
+        """线程池任务：画框 + resize + JPEG编码 + base64 + HTTP推送（finally 释放背压锁）"""
         try:
+            # 防御性 copy（主循环可能已覆写 self._current_frame，本任务持有的是参数引用，
+            # 理论上安全；此 copy 防御未来 _draw_detections_on_frame 变更不再 copy 的风险）
+            frame = frame.copy()
+
+            # 1. 画框（PIL 中文渲染耗时主要在此，受 display_config 开关管控）
+            frame_with_boxes = self._draw_detections_on_frame(
+                frame, camera_id, tracked_objects, motion_boxes, regions, detection_results
+            )
+
+            # 2. 按原始宽高比缩放（降低带宽，最大宽度640）
+            h, w = frame_with_boxes.shape[:2]
+            if w > 640:
+                scale = 640 / w
+                frame_with_boxes = cv2.resize(frame_with_boxes, (640, int(h * scale)))
+
+            # 3. JPEG编码（质量70）+ base64
+            _, jpeg_buffer = cv2.imencode(
+                '.jpg', frame_with_boxes, [cv2.IMWRITE_JPEG_QUALITY, 70]
+            )
+            frame_base64 = base64.b64encode(jpeg_buffer).decode('utf-8')
+
+            # 4. HTTP 推送（服务端已改为入队即返回，正常 < 50ms；
+            #    timeout=2.0 仅防御偶发调度抖动/GIL 竞争，单帧超时可接受）
             import requests
             response = requests.post(
                 api_url,
@@ -953,7 +960,7 @@ class TrackedObjectProcessor(mp.Process):
                     "frame_seq": frame_seq,
                     "frame_base64": frame_base64,
                 },
-                timeout=2,
+                timeout=2.0,
             )
             if response.status_code == 200:
                 logger.debug(f"[{camera_id}] AI帧推送成功: frame_seq={frame_seq}")
@@ -963,8 +970,13 @@ class TrackedObjectProcessor(mp.Process):
                     f"frame_seq={frame_seq}"
                 )
         except Exception as e:
-            # 记录网络错误（重要）
-            logger.error(f"[{camera_id}] AI帧推送异常: {e} frame_seq={frame_seq}")
+            logger.error(f"[{camera_id}] AI帧编码推送异常: {e} frame_seq={frame_seq}")
+        finally:
+            # 释放 per-camera 背压锁（允许下一帧 submit）
+            try:
+                camera_lock.release()
+            except RuntimeError:
+                pass
 
     def _draw_detections_on_frame(self, frame: np.ndarray, camera_id: str,
                                     tracked_objects: dict, motion_boxes: list = None,
@@ -1105,8 +1117,10 @@ class TrackedObjectProcessor(mp.Process):
                 # 检测框标签（支持中文）
                 label_y = max(y1 - 20, 2)
                 if _has_chinese_font:
+                    # display_config 中 label_color 为 BGR，draw_utf8_label_on_rgb 需要 RGB，需反转
+                    label_rgb = tuple(reversed(det_label_color))
                     draw_utf8_label_on_rgb(frame_copy, text, (x1, label_y),
-                                           font_size=14, text_color_rgb=tuple(det_label_color))
+                                           font_size=14, text_color_rgb=label_rgb)
                 else:
                     cv2.putText(frame_copy, text, (x1, y1 - 10),
                                cv2.FONT_HERSHEY_SIMPLEX, det_font_scale, det_label_color, 1)
@@ -1120,16 +1134,44 @@ class TrackedObjectProcessor(mp.Process):
             track_thickness = track_box_cfg.get('thickness', 2)
             track_font_scale = track_box_cfg.get('font_scale', 0.5)
             track_label_color = tuple(track_box_cfg.get('label_color', [255, 0, 0]))
+            # 徘徊告警高亮配置（达到 loitering 阈值的目标边框变红+闪烁）
+            loitering_color = tuple(track_box_cfg.get('loitering_color', [0, 0, 255]))
+            loitering_thickness = track_box_cfg.get('loitering_thickness', 3)
+            loitering_blink = track_box_cfg.get('loitering_blink', True)
+            # 闪烁：基于系统时间 0.5 秒交替，所有目标同步明灭
+            blink_on = (int(time.time() * 2) % 2 == 0)
 
             for obj_id, obj_dict in tracked_objects.items():
                 bbox = obj_dict.get("box", [0, 0, 0, 0])
                 x1, y1, x2, y2 = [int(v) for v in bbox]
-                cv2.rectangle(frame_copy, (x1, y1), (x2, y2), track_color, track_thickness)
-                track_text = f"ID: {obj_id[:8]}"
+
+                # zone 状态：当前所在区域 + 是否达到徘徊阈值
+                current_zones = obj_dict.get("current_zones", []) or []
+                pending_loitering = obj_dict.get("pending_loitering", []) or []
+                is_loitering = len(pending_loitering) > 0
+
+                # 边框颜色/线宽：徘徊目标用红色高亮（闪烁时奇数帧退回正常框，形成明灭效果）
+                if is_loitering and (not loitering_blink or blink_on):
+                    box_color = loitering_color
+                    box_thickness = loitering_thickness
+                else:
+                    box_color = track_color
+                    box_thickness = track_thickness
+                cv2.rectangle(frame_copy, (x1, y1), (x2, y2), box_color, box_thickness)
+
+                # 标签：ID + 当前区域 + 徘徊标记（例：ID:a1b2c3d4 | Z1/Z2 | 徘徊）
+                parts = [f"ID: {obj_id[:8]}"]
+                if current_zones:
+                    parts.append("/".join(current_zones))
+                if is_loitering:
+                    parts.append("徘徊")
+                track_text = " | ".join(parts)
                 # 跟踪框标签（支持中文）
                 if _has_chinese_font:
+                    # display_config 中 label_color 为 BGR，draw_utf8_label_on_rgb 需要 RGB，需反转
+                    track_label_rgb = tuple(reversed(track_label_color))
                     draw_utf8_label_on_rgb(frame_copy, track_text, (x1, y2 + 5),
-                                           font_size=14, text_color_rgb=tuple(track_label_color))
+                                           font_size=14, text_color_rgb=track_label_rgb)
                 else:
                     cv2.putText(frame_copy, track_text, (x1, y2 + 20),
                                cv2.FONT_HERSHEY_SIMPLEX, track_font_scale, track_label_color, 1)
@@ -1155,6 +1197,32 @@ class TrackedObjectProcessor(mp.Process):
                         cv2.circle(frame_copy, pt, point_size, point_color, -1)
 
         return frame_copy
+
+    def _prepare_event_image(self, camera_id: str, image: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """在事件图片上绘制检测框（与 AI 视频流保持一致）
+
+        事件图片原本使用原始帧（无检测框），导致前端展示的事件缩略图缺少检测框。
+        本方法复用 AI 视频流的 _draw_detections_on_frame 绘制逻辑，保证事件图片
+        与 AI 视频流的视觉效果一致（检测框、跟踪框、轨迹、区域框等）。
+
+        Args:
+            camera_id: 摄像机ID
+            image: 原始 RGB 帧
+
+        Returns:
+            绘制检测框后的帧；输入为 None 时返回 None
+        """
+        if image is None:
+            return None
+
+        tracked_objects = getattr(self, '_current_tracked_objects', {}) or {}
+        regions = getattr(self, '_current_regions', []) or []
+        detection_results = getattr(self, '_current_detection_results', []) or []
+
+        # 事件图片不绘制运动框（motion_boxes=None），只保留检测框/跟踪框/区域框
+        return self._draw_detections_on_frame(
+            image, camera_id, tracked_objects, None, regions, detection_results
+        )
 
     def _schedule_delayed_gif(self, event_output, event_id: str, camera_id: str,
                               pre_frames: list, bbox: tuple, trajectory_points: list,

@@ -38,7 +38,7 @@ class ZoneCanvasEditor {
         this.snapshotWidth = 0;
         this.snapshotHeight = 0;
 
-        // 区域列表: [{ id, name, polygon: [{x, y}], color, required, enable_loitering_detection, loitering_time }]
+        // 区域列表: [{ id, name, polygon: [{x, y}], color, required, enable_loitering_detection, loitering_time, inertia }]
         // polygon 中的 {x, y} 是归一化坐标 [0-1]
         this.zones = [];
         this._zoneIdCounter = 0;
@@ -182,7 +182,10 @@ class ZoneCanvasEditor {
         if (this.draggingVertex) return;
 
         // 正在绘制多边形时：仅处理闭合或添加顶点，不选中其他区域
-        if (this.drawingPoints.length > 0) {
+        // 注意：必须用 isDrawing() 判断（drawingTargetZoneId 非空也算绘制模式），
+        // 不能只用 drawingPoints.length>0——startDrawingForZone 后 drawingPoints 为空，
+        // 第一次点击时 length=0 会导致进不来此分支，无法添加首个顶点。
+        if (this.isDrawing()) {
             const vertexHit = this._hitTestVertex(pos);
             // 点击正在绘制的多边形首顶点 → 闭合
             if (vertexHit && vertexHit.isDrawing && this.drawingPoints.length >= 3 && vertexHit.vertexIndex === 0) {
@@ -250,11 +253,12 @@ class ZoneCanvasEditor {
             const vertexHit = this._hitTestVertex(pos);
             if (vertexHit) {
                 this.canvas.style.cursor = 'pointer';
-            } else if (this.drawingPoints.length === 0) {
+            } else if (this.isDrawing()) {
+                // 绘制模式下（含尚未点击首个顶点的状态）统一显示十字光标
+                this.canvas.style.cursor = 'crosshair';
+            } else {
                 const zoneHit = this._hitTestZone(pos);
                 this.canvas.style.cursor = zoneHit ? 'pointer' : 'crosshair';
-            } else {
-                this.canvas.style.cursor = 'crosshair';
             }
 
             // 正在绘制时，重绘以显示虚线预览
@@ -412,7 +416,8 @@ class ZoneCanvasEditor {
             color: this.colorPresets[colorIndex],
             required: false,
             enable_loitering_detection: false,
-            loitering_time: 30
+            loitering_time: 30,
+            inertia: 3
         };
 
         this.zones.push(zone);
@@ -441,7 +446,8 @@ class ZoneCanvasEditor {
             color: this.colorPresets[colorIndex],
             required: false,
             enable_loitering_detection: false,
-            loitering_time: 30
+            loitering_time: 30,
+            inertia: 3
         };
         this.zones.push(zone);
         this.activeZoneId = id;
@@ -567,6 +573,7 @@ class ZoneCanvasEditor {
             required: z.required,
             enable_loitering_detection: z.enable_loitering_detection,
             loitering_time: z.loitering_time,
+            inertia: z.inertia,
             polygon_type: 'normalized'
         }));
     }
@@ -605,7 +612,8 @@ class ZoneCanvasEditor {
                 color: zd.color || this.colorPresets[(id - 1) % this.colorPresets.length],
                 required: zd.required || false,
                 enable_loitering_detection: zd.enable_loitering_detection || false,
-                loitering_time: zd.loitering_time || 30
+                loitering_time: zd.loitering_time || 30,
+                inertia: zd.inertia || 3
             });
         }
 

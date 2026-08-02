@@ -5,6 +5,9 @@
 """
 
 from typing import Dict, Type, List, Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class AlgorithmFactory:
@@ -23,10 +26,10 @@ class AlgorithmFactory:
             detector_class: 检测器类（无需继承特定基类）
         """
         if algorithm_name in cls._registry:
-            print(f"[AlgorithmFactory] 警告：算法 '{algorithm_name}' 已存在，将被覆盖")
+            logger.debug(f"[AlgorithmFactory] 警告：算法 '{algorithm_name}' 已存在，将被覆盖")
 
         cls._registry[algorithm_name] = detector_class
-        print(f"[AlgorithmFactory] 已注册算法: {algorithm_name} -> {detector_class.__name__}")
+        logger.debug(f"[AlgorithmFactory] 已注册算法: {algorithm_name} -> {detector_class.__name__}")
 
     @classmethod
     def unregister(cls, algorithm_name: str) -> bool:
@@ -41,7 +44,7 @@ class AlgorithmFactory:
         """
         if algorithm_name in cls._registry:
             del cls._registry[algorithm_name]
-            print(f"[AlgorithmFactory] 已注销算法: {algorithm_name}")
+            logger.debug(f"[AlgorithmFactory] 已注销算法: {algorithm_name}")
             return True
         return False
 
@@ -67,7 +70,7 @@ class AlgorithmFactory:
         detector_class = cls._registry[algorithm_name]
         detector = detector_class(config)
 
-        print(f"[AlgorithmFactory] 创建检测器: {algorithm_name}")
+        logger.debug(f"[AlgorithmFactory] 创建检测器: {algorithm_name}")
         return detector
 
     @classmethod

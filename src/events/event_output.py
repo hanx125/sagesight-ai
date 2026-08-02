@@ -14,6 +14,10 @@ from datetime import datetime
 from typing import Dict, Optional, List
 import cv2
 import numpy as np
+import logging
+from concurrent.futures import ThreadPoolExecutor
+
+logger = logging.getLogger(__name__)
 
 
 class EventOutput:
@@ -40,7 +44,7 @@ class EventOutput:
         self.save_to_db = config.get('save_to_db', False)
 
         # ========================================
-        # 新增：缩略图管理（借鉴 Frigate）
+        # 新增：缩略图管理）
         # ========================================
         # 缩略图存储：event_id -> {image, score, bbox, timestamp}
         self.thumbnails: Dict[str, Dict] = {}
@@ -73,6 +77,10 @@ class EventOutput:
         # 上次清理时间
         self.last_cleanup_time = 0
 
+        # 异步 I/O 线程池（远程上传、MQTT发送、数据库保存、WebSocket推送）
+        # 避免 I/O 阻塞事件处理主循环导致队列积压
+        self._io_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='event_io')
+
         # 创建本地保存目录（强制创建，无论配置如何）
         os.makedirs(self.local_output_dir, exist_ok=True)
 
@@ -94,19 +102,22 @@ class EventOutput:
         capture_cfg = config.get('capture', {})
         self.capture_save_full_on_start = capture_cfg.get('save_full_on_start', True)
         self.capture_save_full_on_end = capture_cfg.get('save_full_on_end', True)
+        # required_zones：目标必须进入过其中任一区域，才在 end 阶段保存图片/GIF
+        # 空列表表示不限制（所有目标都保存）
+        self.required_zones: List[str] = list(capture_cfg.get('required_zones', []) or [])
 
         # GIF 生成器（延迟初始化，仅在 GIF 启用时创建）
         self._gif_generator = None
 
-        print(f"[EventOutput] 初始化完成")
-        print(f"[EventOutput]   MQTT 输出器: {self.mqtt_outputter.__class__.__name__ if self.mqtt_outputter else 'None'}")
-        print(f"[EventOutput]   图片输出器数量: {len(self.image_outputters)}")
+        logger.debug(f"[EventOutput] 初始化完成")
+        logger.debug(f"[EventOutput]   MQTT 输出器: {self.mqtt_outputter.__class__.__name__ if self.mqtt_outputter else 'None'}")
+        logger.debug(f"[EventOutput]   图片输出器数量: {len(self.image_outputters)}")
         if getattr(self, 'local_enabled', False) or self.auto_cleanup:
-            print(f"[EventOutput]   本地保存: {'启用' if getattr(self, 'local_enabled', False) else '禁用'}")
-            print(f"[EventOutput]   本地保存目录: {self.local_output_dir}")
-            print(f"[EventOutput]   本地保存天数: {self.local_retention_days}")
-            print(f"[EventOutput]   自动清理: {self.auto_cleanup}")
-        print(f"[EventOutput]   缩略图管理: 已启用")
+            logger.debug(f"[EventOutput]   本地保存: {'启用' if getattr(self, 'local_enabled', False) else '禁用'}")
+            logger.debug(f"[EventOutput]   本地保存目录: {self.local_output_dir}")
+            logger.debug(f"[EventOutput]   本地保存天数: {self.local_retention_days}")
+            logger.debug(f"[EventOutput]   自动清理: {self.auto_cleanup}")
+        logger.debug(f"[EventOutput]   缩略图管理: 已启用")
     
     def _init_mqtt_outputter(self):
         """初始化 MQTT 输出器（给其他平台订阅）"""
@@ -121,12 +132,12 @@ class EventOutput:
             mqtt_config = mqtt_cfg.get('config', {})
             self.mqtt_outputter = MQTTOutputter(mqtt_config)
             
-            print(f"[EventOutput] MQTT 输出器已初始化（给其他平台订阅）")
-            print(f"[EventOutput]   Broker: {mqtt_config.get('broker', 'localhost:1883')}")
-            print(f"[EventOutput]   Topic: {mqtt_config.get('topic', 'sagesight/events')}")
+            logger.debug(f"[EventOutput] MQTT 输出器已初始化（给其他平台订阅）")
+            logger.debug(f"[EventOutput]   Broker: {mqtt_config.get('broker', 'localhost:1883')}")
+            logger.debug(f"[EventOutput]   Topic: {mqtt_config.get('topic', 'sagesight/events')}")
             
         except Exception as e:
-            print(f"[EventOutput] MQTT 输出器初始化失败: {e}")
+            logger.debug(f"[EventOutput] MQTT 输出器初始化失败: {e}")
 
     def _init_image_outputters(self):
         """初始化图片输出器（根据独立开关：local_enabled / minio_enabled / ftp_enabled）"""
@@ -155,7 +166,7 @@ class EventOutput:
                 image_cfg['local_enabled'] = False
                 image_cfg['minio_enabled'] = False
                 image_cfg['ftp_enabled'] = False
-            print(f"[EventOutput] 旧版 method='{method}' 已自动迁移为独立开关")
+            logger.debug(f"[EventOutput] 旧版 method='{method}' 已自动迁移为独立开关")
 
         # 读取三个独立开关
         self.local_enabled = image_cfg.get('local_enabled', True)
@@ -167,7 +178,7 @@ class EventOutput:
         global_minio_config = storage_config.get('minio', {})
         global_ftp_config = storage_config.get('ftp', {})
 
-        print(f"[EventOutput] 存储开关: local={self.local_enabled}, minio={minio_enabled}, ftp={ftp_enabled}")
+        logger.debug(f"[EventOutput] 存储开关: local={self.local_enabled}, minio={minio_enabled}, ftp={ftp_enabled}")
 
         try:
             # ========================================
@@ -175,7 +186,7 @@ class EventOutput:
             # ========================================
             if minio_enabled:
                 if not global_minio_config.get('enabled', False):
-                    print(f"[EventOutput] MinIO 任务开关已启用，但系统全局 storage.minio.enabled=false，跳过MinIO输出器")
+                    logger.debug(f"[EventOutput] MinIO 任务开关已启用，但系统全局 storage.minio.enabled=false，跳过MinIO输出器")
                 else:
                     minio_bucket = image_cfg.get('minio_bucket', 'sagesight-images')
                     minio_config = {
@@ -189,14 +200,14 @@ class EventOutput:
                     }
                     from .minio_outputter import MinIOOutputter
                     self.image_outputters.append(MinIOOutputter(minio_config))
-                    print(f"[EventOutput] MinIO 输出器已初始化 (Bucket: {minio_config.get('bucket')})")
+                    logger.debug(f"[EventOutput] MinIO 输出器已初始化 (Bucket: {minio_config.get('bucket')})")
 
             # ========================================
             # FTP 输出器（任务开关 AND 系统全局开关）
             # ========================================
             if ftp_enabled:
                 if not global_ftp_config.get('enabled', False):
-                    print(f"[EventOutput] FTP 任务开关已启用，但系统全局 storage.ftp.enabled=false，跳过FTP输出器")
+                    logger.debug(f"[EventOutput] FTP 任务开关已启用，但系统全局 storage.ftp.enabled=false，跳过FTP输出器")
                 else:
                     ftp_remote_dir = image_cfg.get('ftp_remote_dir', '/sagesight/images')
                     ftp_config = {
@@ -210,20 +221,20 @@ class EventOutput:
                     }
                     from .ftp_outputter import FTPOutputter
                     self.image_outputters.append(FTPOutputter(ftp_config))
-                    print(f"[EventOutput] FTP 输出器已初始化 (Remote Dir: {ftp_config.get('remote_dir')})")
+                    logger.debug(f"[EventOutput] FTP 输出器已初始化 (Remote Dir: {ftp_config.get('remote_dir')})")
 
         except Exception as e:
-            print(f"[EventOutput] 图片输出器初始化失败: {e}")
+            logger.debug(f"[EventOutput] 图片输出器初始化失败: {e}")
     
     # ========================================
-    # 新增：缩略图管理（借鉴 Frigate）
+    # 新增：缩略图管理
     # ========================================
     def update_thumbnail(self, event_id: str, image: np.ndarray,
                         score: float, bbox: tuple) -> bool:
         """
         更新事件缩略图（自动选择最佳帧）
 
-        参考 Frigate 的 is_better_thumbnail 逻辑：
+        is_better_thumbnail 逻辑：
         - 选择最高分数的帧作为缩略图
         - 提高事件质量
 
@@ -245,9 +256,9 @@ class EventOutput:
                 for key in old_keys:
                     self.clear_thumbnail(key)
 
-                print(f"[EventOutput] 清理了 {len(old_keys)} 个旧缩略图")
+                logger.debug(f"[EventOutput] 清理了 {len(old_keys)} 个旧缩略图")
             except Exception as e:
-                print(f"[EventOutput] 清理缩略图失败: {e}")
+                logger.debug(f"[EventOutput] 清理缩略图失败: {e}")
 
         # 初始化事件缩略图存储
         if event_id not in self.thumbnails:
@@ -273,7 +284,7 @@ class EventOutput:
             # 同时更新 best_thumbnails（用于快速访问）
             self.best_thumbnails[event_id] = self.thumbnails[event_id]
 
-            print(f"[EventOutput] 更新最佳缩略图: event_id={event_id}, score={score:.3f}")
+            logger.debug(f"[EventOutput] 更新最佳缩略图: event_id={event_id}, score={score:.3f}")
             return True
 
         return False
@@ -304,7 +315,7 @@ class EventOutput:
             del self.best_thumbnails[event_id]
     
     # ========================================
-    # 新增：属性事件支持（借鉴 Frigate）
+    # 新增：属性事件支持
     # ========================================
     def emit_attribute_event(self, track_id: int, attribute_type: str,
                             attribute_value: str, confidence: float,
@@ -312,7 +323,7 @@ class EventOutput:
         """
         发送属性事件
         
-        参考 Frigate 的属性系统：
+        属性系统：
         - 支持多种属性类型（颜色、类型、方向等）
         - 扩展事件类型
         
@@ -428,11 +439,11 @@ class EventOutput:
             with open(filepath, 'wb') as f:
                 f.write(image_bytes)
             
-            print(f"[EventOutput] 图片已保存到本地: {filepath}")
+            logger.debug(f"[EventOutput] 图片已保存到本地: {filepath}")
             return filepath
             
         except Exception as e:
-            print(f"[EventOutput] 本地保存失败: {e}")
+            logger.debug(f"[EventOutput] 本地保存失败: {e}")
             return None
     
     def _cleanup_old_images(self):
@@ -482,12 +493,12 @@ class EventOutput:
             self.last_cleanup_time = current_time
             
             if deleted_count > 0:
-                print(f"[EventOutput] 已清理 {deleted_count} 个过期图片")
-                print(f"[EventOutput]   释放空间: {total_size / 1024 / 1024:.2f} MB")
-                print(f"[EventOutput]   保留天数: {self.local_retention_days}")
+                logger.debug(f"[EventOutput] 已清理 {deleted_count} 个过期图片")
+                logger.debug(f"[EventOutput]   释放空间: {total_size / 1024 / 1024:.2f} MB")
+                logger.debug(f"[EventOutput]   保留天数: {self.local_retention_days}")
         
         except Exception as e:
-            print(f"[EventOutput] 清理图片失败: {e}")
+            logger.debug(f"[EventOutput] 清理图片失败: {e}")
     
     def emit(self, event_type: str, data: Dict, image: Optional[np.ndarray] = None, 
             frame_id: int = 0, task_id: int = None, algorithm: str = None,
@@ -508,20 +519,20 @@ class EventOutput:
             事件 ID，如果未发送则返回 None
         """
         # ✅ 调试日志：跟踪事件输出流程
-        print(f"[EventOutput] emit() 被调用: type={event_type}, class_name={data.get('class_name', '')}, confidence={data.get('confidence', 0.0)}")
-        print(f"[EventOutput]   self.enabled={self.enabled}")
+        logger.debug(f"[EventOutput] emit() 被调用: type={event_type}, class_name={data.get('class_name', '')}, confidence={data.get('confidence', 0.0)}")
+        logger.debug(f"[EventOutput]   self.enabled={self.enabled}")
         
         if not self.enabled:
-            print(f"[EventOutput]   事件未启用，跳过")
+            logger.debug(f"[EventOutput]   事件未启用，跳过")
             return None
         
         # 检查过滤条件
         class_name = data.get('class_name', '')
         confidence = data.get('confidence', 0.0)
         should_send = self._should_send(class_name, confidence)
-        print(f"[EventOutput]   过滤检查结果: should_send={should_send}, class_name={class_name}, confidence={confidence}, target_classes={self.filter_cfg.get('target_classes', [])}, min_confidence={self.filter_cfg.get('min_confidence', 0.0)}")
+        logger.debug(f"[EventOutput]   过滤检查结果: should_send={should_send}, class_name={class_name}, confidence={confidence}, target_classes={self.filter_cfg.get('target_classes', [])}, min_confidence={self.filter_cfg.get('min_confidence', 0.0)}")
         if not should_send:
-            print(f"[EventOutput]   未通过过滤，跳过")
+            logger.debug(f"[EventOutput]   未通过过滤，跳过")
             return None
         
         # 生成事件 ID
@@ -535,53 +546,30 @@ class EventOutput:
         image_urls = {}
         local_image_path = None
         
-        print(f"[EventOutput]   图片处理: image is not None={image is not None}")
-        print(f"[EventOutput]   local_enabled={getattr(self, 'local_enabled', False)}, image_outputters count={len(self.image_outputters)}")
-        
+        compressed_image = None
+        logger.debug(f"[EventOutput]   图片处理: image is not None={image is not None}")
+        logger.debug(f"[EventOutput]   local_enabled={getattr(self, 'local_enabled', False)}, image_outputters count={len(self.image_outputters)}")
+
         if image is not None:
             try:
                 compressed_image = self._compress_image(image)
-                print(f"[EventOutput]   图片压缩成功: {len(compressed_image)} bytes")
+                logger.debug(f"[EventOutput]   图片压缩成功: {len(compressed_image)} bytes")
 
-                # 根据独立开关决定是否保存到本地
+                # 本地保存（同步，需要 URL 填入 event）
                 if getattr(self, 'local_enabled', False):
                     local_image_path = self._save_image_local(event_id, compressed_image)
                     if local_image_path:
-                        # 生成完整的 HTTP URL（避免浏览器 HTTPS 强制升级）
                         local_image_url = f"http://{self.server_host}:{self.server_port}/{local_image_path}"
                         image_urls['local'] = local_image_url
-                        print(f"[EventOutput]   图片本地保存成功: {local_image_path}")
-                        print(f"[EventOutput]   图片 URL: {local_image_url}")
+                        logger.debug(f"[EventOutput]   图片本地保存成功: {local_image_path}")
                 else:
-                    print(f"[EventOutput]   本地存储已禁用，跳过本地保存")
-
-                # 再根据配置上传到远程服务器（MinIO/FTP）
-                if self.image_outputters:
-                    for outputter in self.image_outputters:
-                        try:
-                            url = outputter.upload(event_id, compressed_image, content_type='image/jpeg')
-                            image_urls[outputter.__class__.__name__] = url
-                            print(f"[EventOutput]   图片上传成功 ({outputter.__class__.__name__}): {url}")
-                        except Exception as e:
-                            print(f"[EventOutput] 图片上传失败 ({outputter.__class__.__name__}): {e}")
-
+                    logger.debug(f"[EventOutput]   本地存储已禁用，跳过本地保存")
+                # 远程上传（MinIO/FTP）已改为异步执行，见 _async_io_task
             except Exception as e:
-                print(f"[EventOutput] 图片处理失败: {e}")
-                import traceback
-                traceback.print_exc()
-
-                # 处理失败时根据开关决定是否本地保存
-                if getattr(self, 'local_enabled', False):
-                    try:
-                        compressed_image = self._compress_image(image)
-                        local_image_path = self._save_image_local(event_id, compressed_image)
-                        if local_image_path:
-                            local_image_url = f"http://{self.server_host}:{self.server_port}/{local_image_path}"
-                            image_urls['local'] = local_image_url
-                    except Exception as e2:
-                        print(f"[EventOutput] 本地保存失败: {e2}")
+                logger.debug(f"[EventOutput] 图片处理失败: {e}")
+                compressed_image = None
         else:
-            print(f"[EventOutput]   未传入图片，跳过图片处理")
+            logger.debug(f"[EventOutput]   未传入图片，跳过图片处理")
         
         # 构建事件
         event = {
@@ -597,20 +585,36 @@ class EventOutput:
             'metadata': metadata or {}
         }
         
-        # 发送元数据到 MQTT（给其他平台订阅）
-        if self.mqtt_outputter:
-            try:
-                self.mqtt_outputter.send(event)
-                print(f"[EventOutput] 事件已发送到 MQTT: {event_type} - {class_name} (ID: {event_id[:8]}...)")
-            except Exception as e:
-                print(f"[EventOutput] MQTT 发送失败: {e}")
-                return None
-        
-        # 保存到数据库（如果启用）
-        if self.save_to_db or actual_task_id:
-            self._save_to_database(event)
+        # 异步执行 I/O 密集型操作（远程上传、MQTT发送、数据库保存、WebSocket推送）
+        # 避免网络 I/O 阻塞事件处理主循环导致事件队列积压
+        self._io_executor.submit(self._async_io_task, event, compressed_image)
 
         return event_id
+
+    def _async_io_task(self, event: Dict, compressed_image):
+        """异步执行 I/O 密集型操作（在线程池中运行，不阻塞事件处理主循环）"""
+        try:
+            # 1. 远程上传（MinIO/FTP）
+            if compressed_image is not None and self.image_outputters:
+                for outputter in self.image_outputters:
+                    try:
+                        url = outputter.upload(event['event_id'], compressed_image, content_type='image/jpeg')
+                        event['image_urls'][outputter.__class__.__name__] = url
+                    except Exception as e:
+                        logger.debug(f"[EventOutput] 图片上传失败 ({outputter.__class__.__name__}): {e}")
+
+            # 2. MQTT 发送
+            if self.mqtt_outputter:
+                try:
+                    self.mqtt_outputter.send(event)
+                except Exception as e:
+                    logger.debug(f"[EventOutput] MQTT 发送失败: {e}")
+
+            # 3. 数据库保存 + WebSocket 推送
+            if self.save_to_db or event.get('task_id'):
+                self._save_to_database(event)
+        except Exception as e:
+            logger.error(f"[EventOutput] 异步 I/O 任务失败: {e}")
 
     def _save_to_database(self, event: Dict):
         """
@@ -628,15 +632,23 @@ class EventOutput:
             # 提取GIF URL字典
             gif_urls = event.get('data', {}).get('gif_urls', {})
             
+            # zone 字段：entered_zones 写入独立列，current_zones 转逗号串作为 zone_name
+            event_data = event.get('data', {}) or {}
+            entered_zones = event_data.get('entered_zones') or []
+            current_zones = event_data.get('current_zones') or []
+            zone_name = ",".join(current_zones) if current_zones else ""
+            # loitered_zones：生命周期内累计曾徘徊的区域（只增不减），写入独立列
+            loitered_zones = event_data.get('loitered_zones') or []
+
             event_record = EventRecord(
                 event_id=event['event_id'],
                 task_id=event.get('task_id'),
                 camera_id=event['camera_id'],
                 algorithm=event.get('algorithm', ''),
                 type=event['type'],
-                class_name=event['data'].get('class_name', ''),
-                confidence=event['data'].get('confidence', 0.0),
-                bbox=event['data'].get('bbox', []),
+                class_name=event_data.get('class_name', ''),
+                confidence=event_data.get('confidence', 0.0),
+                bbox=event_data.get('bbox', []),
                 local_image_url=image_urls.get('local', ''),
                 minio_image_url=image_urls.get('MinIOOutputter', ''),
                 ftp_image_url=image_urls.get('FTPOutputter', ''),
@@ -644,9 +656,12 @@ class EventOutput:
                 minio_gif_url=gif_urls.get('minio', ''),
                 ftp_gif_url=gif_urls.get('ftp', ''),
                 metadata=event.get('metadata', {}),
-                start_time=self._parse_datetime(event['data'].get('start_time')),
-                end_time=self._parse_datetime(event['data'].get('end_time')),
-                status=event['data'].get('status', 'tracking_start')
+                start_time=self._parse_datetime(event_data.get('start_time')),
+                end_time=self._parse_datetime(event_data.get('end_time')),
+                status=event_data.get('status', 'tracking_start'),
+                entered_zones=entered_zones,
+                zone_name=zone_name,
+                loitered_zones=loitered_zones
             )
             task_manager.add_event(event_record)
             
@@ -658,7 +673,7 @@ class EventOutput:
             self._push_event_to_websocket(event_record)
             
         except Exception as e:
-            print(f"[EventOutput] 保存事件到数据库失败: {e}")
+            logger.debug(f"[EventOutput] 保存事件到数据库失败: {e}")
     
     @staticmethod
     def _parse_datetime(value):
@@ -702,19 +717,22 @@ class EventOutput:
                 'start_time': event_record.start_time.isoformat() + 'Z' if event_record.start_time else None,
                 'end_time': event_record.end_time.isoformat() + 'Z' if event_record.end_time else None,
                 'status': event_record.status,
+                'entered_zones': event_record.entered_zones,
+                'zone_name': event_record.zone_name,
+                'loitered_zones': event_record.loitered_zones,
                 'created_at': event_record.created_at.isoformat() + 'Z' if event_record.created_at else None
             }
             
             # 通过HTTP POST发送到Flask服务器，由服务器通过WebSocket广播
             resp = requests.post(
-                'http://127.0.0.1:5555/api/events/push',
+                f'http://{self.server_host}:{self.server_port}/api/events/push',
                 json=event_data,
                 timeout=2
             )
-            print(f"[EventOutput] 事件已推送到驾驶舱: {event_record.event_id[:8]}... type={event_record.type}")
+            logger.debug(f"[EventOutput] 事件已推送到驾驶舱: {event_record.event_id[:8]}... type={event_record.type}")
             
         except Exception as e:
-            print(f"[EventOutput] 推送事件到驾驶舱失败: {e}")
+            logger.debug(f"[EventOutput] 推送事件到驾驶舱失败: {e}")
     
     def emit_detection(self, track_id: int, class_name: str, confidence: float, 
                     bbox: List[float], image: Optional[np.ndarray] = None, 
@@ -754,6 +772,24 @@ class EventOutput:
             algorithm=algorithm,
             metadata=extra_metadata
         )
+
+    def passes_required_zones(self, entered_zones: List[str]) -> bool:
+        """判断目标是否满足 required_zones 过滤条件
+
+        - required_zones 为空：不限制，所有目标都通过
+        - required_zones 非空：目标进入过的区域与 required_zones 有交集才通过
+
+        Args:
+            entered_zones: 目标进入过的区域列表（TrackedObject.entered_zones，只增不减）
+
+        Returns:
+            bool: 是否通过 required_zones 过滤
+        """
+        if not self.required_zones:
+            return True
+        if not entered_zones:
+            return False
+        return bool(set(entered_zones) & set(self.required_zones))
 
     def update_event(self, event_id: str, status: str = None,
                      data: Dict = None, image=None,
@@ -798,9 +834,9 @@ class EventOutput:
                                 url = outputter.upload(event_id, compressed_image, content_type='image/jpeg')
                                 image_urls[outputter.__class__.__name__] = url
                             except Exception as e:
-                                print(f"[EventOutput] 更新事件图片上传失败 ({outputter.__class__.__name__}): {e}")
+                                logger.debug(f"[EventOutput] 更新事件图片上传失败 ({outputter.__class__.__name__}): {e}")
                 except Exception as e:
-                    print(f"[EventOutput] 更新事件图片处理失败: {e}")
+                    logger.debug(f"[EventOutput] 更新事件图片处理失败: {e}")
 
             # 提取 data 中的字段
             metadata = data.get('metadata') if data else None
@@ -809,6 +845,12 @@ class EventOutput:
             bbox = data.get('bbox') if data else None
             confidence = data.get('confidence') if data else None
             class_name = data.get('class_name') if data else None
+            # zone 字段：entered_zones 写入独立列，current_zones 转逗号串作为 zone_name
+            entered_zones = data.get('entered_zones') if data else None
+            current_zones = data.get('current_zones') if data else None
+            zone_name = ",".join(current_zones) if current_zones is not None else None
+            # loitered_zones：累计曾徘徊区域（只增不减），写入独立列
+            loitered_zones = data.get('loitered_zones') if data else None
 
             # 提取 gif_urls（如果存在）
             if data and 'gif_urls' in data:
@@ -818,7 +860,8 @@ class EventOutput:
             # 将 data 中不属于独立列的额外字段放入 metadata
             if data:
                 known_keys = ('metadata', 'start_time', 'end_time', 'bbox',
-                              'gif_urls', 'confidence', 'class_name', 'status')
+                              'gif_urls', 'confidence', 'class_name', 'status',
+                              'entered_zones', 'current_zones', 'loitered_zones')
                 extra_meta = {k: v for k, v in data.items() if k not in known_keys}
                 if extra_meta:
                     if metadata is None:
@@ -840,13 +883,16 @@ class EventOutput:
                 bbox=bbox,
                 confidence=confidence,
                 class_name=class_name,
-                status=status
+                status=status,
+                entered_zones=entered_zones,
+                zone_name=zone_name,
+                loitered_zones=loitered_zones
             )
 
             if success:
-                print(f"[EventOutput] 事件更新成功: event_id={event_id[:8]}, status={status}")
+                logger.debug(f"[EventOutput] 事件更新成功: event_id={event_id[:8]}, status={status}")
             else:
-                print(f"[EventOutput] 事件更新失败（未找到记录）: event_id={event_id[:8]}")
+                logger.debug(f"[EventOutput] 事件更新失败（未找到记录）: event_id={event_id[:8]}")
 
             # ✅ 新增：end 时推送 event_update 到前端
             if push_websocket and success:
@@ -855,7 +901,7 @@ class EventOutput:
             return success
 
         except Exception as e:
-            print(f"[EventOutput] 更新事件异常: {e}")
+            logger.debug(f"[EventOutput] 更新事件异常: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -872,19 +918,26 @@ class EventOutput:
         """
         try:
             import requests
+            data = data or {}
+            current_zones = data.get('current_zones') or []
             payload = {
                 'event_id': event_id,
+                'task_id': self.task_id,
                 'status': status,
-                'data': data or {},
+                'data': data,
                 'image_urls': image_urls or {},
+                # zone 字段提到顶层，便于前端无需深挖 data 即可消费
+                'entered_zones': data.get('entered_zones') or [],
+                'zone_name': ",".join(current_zones) if current_zones else "",
+                'loitered_zones': data.get('loitered_zones') or [],
             }
             requests.post(
-                'http://127.0.0.1:5555/api/events/update',
+                f'http://{self.server_host}:{self.server_port}/api/events/update',
                 json=payload,
                 timeout=2
             )
         except Exception as e:
-            print(f"[EventOutput] 推送 event_update 失败: {e}")
+            logger.debug(f"[EventOutput] 推送 event_update 失败: {e}")
 
     def _get_gif_generator(self):
         """延迟初始化 GIF 生成器"""
@@ -896,7 +949,7 @@ class EventOutput:
                 gif_config['storage'] = self.config.get('storage', {})
                 self._gif_generator = GIFGenerator(gif_config)
             except Exception as e:
-                print(f"[EventOutput] GIF 生成器初始化失败: {e}")
+                logger.debug(f"[EventOutput] GIF 生成器初始化失败: {e}")
                 self._gif_generator = None
         return self._gif_generator
 
@@ -934,7 +987,7 @@ class EventOutput:
                 })
 
             if not gif_frames:
-                print(f"[EventOutput] GIF 帧序列为空，跳过生成: event_id={event_id[:8]}")
+                logger.debug(f"[EventOutput] GIF 帧序列为空，跳过生成: event_id={event_id[:8]}")
                 return None
 
             # 生成输出文件名（基于 event_id）
@@ -960,7 +1013,7 @@ class EventOutput:
             )
 
             local_path = gif_urls.get('local', '')
-            print(f"[EventOutput] GIF 生成成功: event_id={event_id[:8]}, urls={list(gif_urls.keys())}")
+            logger.debug(f"[EventOutput] GIF 生成成功: event_id={event_id[:8]}, urls={list(gif_urls.keys())}")
 
             # ✅ 新增：推送 gif_ready 到前端（驾驶舱 + 事件管理页面）
             self._push_gif_ready_to_websocket(event_id, gif_urls)
@@ -968,7 +1021,7 @@ class EventOutput:
             return local_path if local_path else None
 
         except Exception as e:
-            print(f"[EventOutput] GIF 生成失败: {e}")
+            logger.debug(f"[EventOutput] GIF 生成失败: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -991,12 +1044,12 @@ class EventOutput:
                 'ftp_gif_url': gif_urls.get('ftp', ''),
             }
             requests.post(
-                'http://127.0.0.1:5555/api/events/gif_ready',
+                f'http://{self.server_host}:{self.server_port}/api/events/gif_ready',
                 json=payload,
                 timeout=2
             )
         except Exception as e:
-            print(f"[EventOutput] 推送 gif_ready 失败: {e}")
+            logger.debug(f"[EventOutput] 推送 gif_ready 失败: {e}")
 
     def close(self):
         """关闭所有输出器"""
@@ -1005,31 +1058,31 @@ class EventOutput:
             try:
                 self._gif_generator.close()
             except Exception as e:
-                print(f"[EventOutput] 关闭 GIF 生成器失败: {e}")
+                logger.debug(f"[EventOutput] 关闭 GIF 生成器失败: {e}")
 
         # 关闭 MQTT 输出器
         if self.mqtt_outputter:
             try:
                 self.mqtt_outputter.close()
             except Exception as e:
-                print(f"[EventOutput] 关闭 MQTT 输出器失败: {e}")
+                logger.debug(f"[EventOutput] 关闭 MQTT 输出器失败: {e}")
 
         # 关闭 WebSocket 输出器
         if self.websocket_outputter:
             try:
                 self.websocket_outputter.close()
             except Exception as e:
-                print(f"[EventOutput] 关闭 WebSocket 输出器失败: {e}")
+                logger.debug(f"[EventOutput] 关闭 WebSocket 输出器失败: {e}")
 
         # 关闭图片输出器
         for outputter in self.image_outputters:
             try:
                 outputter.close()
             except Exception as e:
-                print(f"[EventOutput] 关闭图片输出器失败 ({outputter.__class__.__name__}): {e}")
+                logger.debug(f"[EventOutput] 关闭图片输出器失败 ({outputter.__class__.__name__}): {e}")
         
         # 最后一次清理本地图片
         if self.auto_cleanup:
             self._cleanup_old_images()
         
-        print("[EventOutput] 已关闭所有输出器")
+        logger.debug("[EventOutput] 已关闭所有输出器")

@@ -2,15 +2,15 @@
 日志管理器
 
 提供统一的日志管理功能：
-- 多进程日志收集（QueueHandler）
-- 日志监听器（LogListener）
-- 统一日志格式
+- 主进程日志配置（setup_main_process）
+- 子进程日志配置（setup_worker_process）
+- 多进程日志收集（QueueHandler → QueueListener）
 - 文件日志 + 控制台日志
 
-使用场景：
-- 多进程应用日志收集
-- 统一日志管理
-- 日志文件轮转
+使用方式：
+- 主进程：LogManager.get_instance().setup_main_process(log_config)
+- 子进程：LogManager.get_instance().setup_worker_process()
+- 所有模块：logger = logging.getLogger(__name__)
 """
 
 import logging
@@ -18,195 +18,119 @@ import logging.handlers
 import multiprocessing as mp
 from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 
 class LogManager:
     """
-    日志管理器
-    
-    提供：
-    1. 日志监听器（多进程日志收集）
-    2. 统一日志格式
-    3. 文件日志 + 控制台日志
+    日志管理器（单例）
+
+    统一管理主进程和子进程的日志配置：
+    1. 主进程：setup_main_process() 配置 root logger + 启动 QueueListener
+    2. 子进程：setup_worker_process() 配置 root logger 的 QueueHandler
     """
-    
+
     _instance: Optional['LogManager'] = None
-    
-    def __init__(
-        self,
-        log_dir: str = "logs",
-        log_level: int = logging.INFO,
-        max_bytes: int = 10 * 1024 * 1024,  # 10MB
-        backup_count: int = 5,
-        format_string: Optional[str] = None,
-    ):
-        """
-        初始化日志管理器
-        
-        Args:
-            log_dir: 日志目录
-            log_level: 日志级别
-            max_bytes: 单个日志文件最大字节数
-            backup_count: 日志文件备份数量
-            format_string: 日志格式字符串
-        """
-        self.log_dir = Path(log_dir)
-        self.log_level = log_level
-        self.max_bytes = max_bytes
-        self.backup_count = backup_count
-        self.format_string = format_string or self._get_default_format()
-        
-        # 创建日志目录
-        self.log_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 日志队列（用于多进程日志收集）
+
+    def __init__(self):
+        # 日志队列（子进程通过 QueueHandler 发送日志到此队列）
         self.log_queue: mp.Queue = mp.Queue()
-        
-        # 日志监听器
+        # 日志监听器（主进程启动，从队列读取子进程日志）
         self.log_listener: Optional[QueueListener] = None
-        
-        # 是否已启动
         self._started = False
-    
+
     @classmethod
-    def get_instance(cls, **kwargs) -> 'LogManager':
+    def get_instance(cls) -> 'LogManager':
         """获取单例实例"""
         if cls._instance is None:
-            cls._instance = cls(**kwargs)
+            cls._instance = cls()
         return cls._instance
-    
-    def _get_default_format(self) -> str:
-        """获取默认日志格式（与 run.py 保持一致）"""
-        return (
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-    
-    def start(self):
-        """启动日志监听器"""
+
+    def setup_main_process(self, config: Optional[Dict[str, Any]] = None):
+        """
+        主进程日志配置
+
+        1. 从 config 读取日志级别、格式、文件路径等
+        2. 配置 root logger（RotatingFileHandler + StreamHandler）
+        3. 启动 QueueListener（接收子进程日志）
+
+        Args:
+            config: 日志配置字典，来自 system_config.yaml 的 logging 部分
+        """
         if self._started:
             return
-        
+
+        config = config or {}
+        log_level = getattr(logging, str(config.get('level', 'INFO')).upper(), logging.INFO)
+        log_format = config.get('format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        log_file = config.get('file', 'logs/system.log')
+        log_max_size = int(config.get('max_size', 10)) * 1024 * 1024
+        log_backup_count = int(config.get('backup_count', 5))
+        log_console = config.get('console', True)
+
+        # 确保日志目录存在
+        log_path = Path(log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
         # 创建日志格式器
-        formatter = logging.Formatter(self.format_string)
-        
-        # 创建文件处理器（轮转）
-        # ✅ 修改：统一使用 system.log（与 run.py 保持一致）
+        formatter = logging.Formatter(log_format)
+
+        # 配置 root logger
+        root_logger = logging.getLogger()
+        root_logger.setLevel(log_level)
+        root_logger.handlers.clear()
+
+        # 文件 handler（轮转）
         file_handler = logging.handlers.RotatingFileHandler(
-            self.log_dir / "system.log",
-            maxBytes=self.max_bytes,
-            backupCount=self.backup_count,
-            encoding='utf-8'
+            log_file, maxBytes=log_max_size, backupCount=log_backup_count, encoding='utf-8'
         )
+        file_handler.setLevel(log_level)
         file_handler.setFormatter(formatter)
-        file_handler.setLevel(self.log_level)
-        
-        # 创建控制台处理器
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        console_handler.setLevel(self.log_level)
-        
-        # 创建日志监听器
+        root_logger.addHandler(file_handler)
+
+        # 控制台 handler
+        console_handler = None
+        if log_console:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(log_level)
+            console_handler.setFormatter(formatter)
+            root_logger.addHandler(console_handler)
+
+        # 启动 QueueListener（接收子进程通过队列发来的日志）
+        # QueueListener 从队列读取日志记录，转发到 file_handler 和 console_handler
+        handlers = [file_handler]
+        if console_handler:
+            handlers.append(console_handler)
         self.log_listener = QueueListener(
             self.log_queue,
-            file_handler,
-            console_handler,
+            *handlers,
             respect_handler_level=True
         )
-        
-        # 启动监听器
         self.log_listener.start()
         self._started = True
-        
-        print(f"日志监听器已启动，日志目录: {self.log_dir}")
-    
+
+        root_logger.info(
+            f"日志系统初始化完成: file={log_file}, level={config.get('level', 'INFO')}, "
+            f"max_size={config.get('max_size', 10)}MB"
+        )
+
+    def setup_worker_process(self):
+        """
+        子进程日志配置
+
+        配置 root logger 的 QueueHandler，将日志通过队列发送到主进程。
+        在 Process.before_run() 中调用。
+        """
+        root_logger = logging.getLogger()
+        root_logger.handlers.clear()
+        root_logger.addHandler(QueueHandler(self.log_queue))
+
     def stop(self):
         """停止日志监听器"""
         if self.log_listener and self._started:
             self.log_listener.stop()
             self._started = False
-            print("日志监听器已停止")
-    
-    def get_queue_handler(self, logger_name: str) -> QueueHandler:
-        """
-        获取队列处理器（用于多进程日志）
-        
-        Args:
-            logger_name: 日志器名称
-            
-        Returns:
-            QueueHandler 实例
-        """
-        return QueueHandler(self.log_queue)
-    
-    def setup_logger(self, logger_name: str) -> logging.Logger:
-        """
-        设置日志器（用于多进程）
-        
-        Args:
-            logger_name: 日志器名称
-            
-        Returns:
-            配置好的日志器
-        """
-        logger = logging.getLogger(logger_name)
-        logger.setLevel(self.log_level)
-        
-        # 清除现有处理器
-        logger.handlers.clear()
-        
-        # 添加队列处理器
-        queue_handler = self.get_queue_handler(logger_name)
-        logger.addHandler(queue_handler)
-        
-        return logger
 
 
-# ========================================
-# 全局日志监听器
-# ========================================
-
-class LogListener:
-    """日志监听器（全局日志管理）"""
-    
-    def __init__(self):
-        self.manager = LogManager.get_instance()
-        self.queue = self.manager.log_queue
-    
-    def start(self):
-        """启动监听器"""
-        self.manager.start()
-    
-    def stop(self):
-        """停止监听器"""
-        self.manager.stop()
-
-
-# 全局日志监听器实例
-log_listener = LogListener()
-
-
-def setup_logging(log_dir: str = "logs", log_level: int = logging.INFO):
-    """
-    设置全局日志（便捷函数）
-    
-    Args:
-        log_dir: 日志目录
-        log_level: 日志级别
-    """
-    manager = LogManager.get_instance(log_dir=log_dir, log_level=log_level)
-    manager.start()
-
-
-def get_logger(name: str) -> logging.Logger:
-    """
-    获取日志器（便捷函数）
-    
-    Args:
-        name: 日志器名称
-        
-    Returns:
-        配置好的日志器
-    """
-    manager = LogManager.get_instance()
-    return manager.setup_logger(name)
+# 全局日志管理器实例（替代原 log_listener）
+log_listener = LogManager.get_instance()

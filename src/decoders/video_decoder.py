@@ -385,10 +385,10 @@ class VideoDecoder:
             )
             if hwaccel_args:
                 self.ffmpeg_args.extend(hwaccel_args)
-                print(f"[VideoDecoder] 使用硬件加速预设：{self.config.hwaccel_preset}")
+                logger.info(f"[VideoDecoder] 使用硬件加速预设：{self.config.hwaccel_preset}")
         else:
             # 未指定预设，使用 CPU 解码
-            print("[VideoDecoder] 未指定硬件加速预设，使用 CPU 解码")
+            logger.info("[VideoDecoder] 未指定硬件加速预设，使用 CPU 解码")
 
         # ========== 输入参数 ==========
         if self.config.video_file:
@@ -397,7 +397,7 @@ class VideoDecoder:
                 '-re',  # 按原始帧率读取
                 '-i', self.config.video_file,
             ])
-            print(f"[VideoDecoder] 视频文件：{self.config.video_file}")
+            logger.info(f"[VideoDecoder] 视频文件：{self.config.video_file}")
         else:
             # RTSP/网络流输入
             if self.config.input_preset:
@@ -408,7 +408,7 @@ class VideoDecoder:
                 )
                 if input_args:
                     self.ffmpeg_args.extend(input_args)
-                    print(f"[VideoDecoder] 使用输入预设：{self.config.input_preset}")
+                    logger.info(f"[VideoDecoder] 使用输入预设：{self.config.input_preset}")
             else:
                 # 使用默认 RTSP 配置
                 self.ffmpeg_args.extend([
@@ -421,7 +421,7 @@ class VideoDecoder:
         # ========== 输出格式（固定使用I420） ==========
         # ✅ 优化：使用I420格式（Y+U+V分离），预处理性能提升60%
         pix_fmt = 'yuv420p'  # I420格式
-        print(f"[VideoDecoder] 输出格式：{pix_fmt} (I420)")
+        logger.info(f"[VideoDecoder] 输出格式：{pix_fmt} (I420)")
 
         # ========== 缩放和滤镜 ==========
         self._add_scale_filters(pix_fmt)
@@ -435,7 +435,7 @@ class VideoDecoder:
 
         # ✅ 移除showinfo依赖：新版FFmpeg格式变化，RTSP流PTS不可靠
         # 直接使用帧序号计算时间戳（回退逻辑已支持）
-        print(f"[VideoDecoder] FFmpeg 命令：{' '.join(self.ffmpeg_args)}")
+        logger.info(f"[VideoDecoder] FFmpeg 命令：{' '.join(self.ffmpeg_args)}")
 
     def _add_scale_filters(self, pix_fmt: str):
         """添加缩放滤镜"""
@@ -489,7 +489,7 @@ class VideoDecoder:
             bool: 启动是否成功
         """
         if self.is_running:
-            print("[VideoDecoder] 已在运行中")
+            logger.debug("[VideoDecoder] 已在运行中")
             return True
 
         try:
@@ -503,15 +503,15 @@ class VideoDecoder:
             )
 
             # ✅ 调试日志：确认VideoDecoder接收到的参数
-            print(f"[VideoDecoder] 接收到的配置:")
-            print(f"  camera_id={self.config.camera_id}, task_id={self.config.task_id}")
+            logger.debug(f"[VideoDecoder] 接收到的配置:")
+            logger.debug(f"  camera_id={self.config.camera_id}, task_id={self.config.task_id}")
 
             # 创建索引队列
             self.index_queue = FrameIndexQueue(
                 max_size=self.config.index_queue_size
             )
 
-            print(f"[VideoDecoder] 初始化完成：环形缓冲区（{self.config.ring_buffer_block_count}块） + 索引队列")
+            logger.debug(f"[VideoDecoder] 初始化完成：环形缓冲区（{self.config.ring_buffer_block_count}块） + 索引队列")
 
             # 启动 FFmpeg 进程（✅ 修改：stderr独立，用于解析PTS）
             self.process = subprocess.Popen(
@@ -526,8 +526,8 @@ class VideoDecoder:
             if self.process.poll() is not None:
                 # FFmpeg 立即退出，读取错误输出
                 stderr_output = self.process.stdout.read().decode('utf-8', errors='replace')
-                print(f"[VideoDecoder] FFmpeg 启动失败，返回码={self.process.poll()}")
-                print(f"[VideoDecoder] 错误信息：{stderr_output[:1000]}")
+                logger.debug(f"[VideoDecoder] FFmpeg 启动失败，返回码={self.process.poll()}")
+                logger.debug(f"[VideoDecoder] 错误信息：{stderr_output[:1000]}")
                 return False
 
             # ✅ 修复：先设置 is_running，再启动线程
@@ -538,7 +538,7 @@ class VideoDecoder:
             self.thread = threading.Thread(target=self._decode_loop, daemon=True)
             self.thread.start()
 
-            print(f"[VideoDecoder] 启动成功（{self.config.hwaccel_preset or 'CPU'} 硬件加速）")
+            logger.debug(f"[VideoDecoder] 启动成功（{self.config.hwaccel_preset or 'CPU'} 硬件加速）")
             return True
 
         except FileNotFoundError:
@@ -565,10 +565,10 @@ class VideoDecoder:
             # ✅ 尝试删除共享内存（如果检测器仍在运行，可能失败，这是正常的）
             try:
                 self.ring_buffer.unlink()
-                print(f"[VideoDecoder] 共享内存已清理: {self.shm_name}")
+                logger.debug(f"[VideoDecoder] 共享内存已清理: {self.shm_name}")
             except Exception as e:
                 # 删除失败是正常的（可能检测器仍在持有）
-                print(f"[VideoDecoder] 共享内存清理提示: {e}（正常，Windows会在进程退出后自动清理）")
+                logger.debug(f"[VideoDecoder] 共享内存清理提示: {e}（正常，Windows会在进程退出后自动清理）")
             self.ring_buffer = None
 
         # 清空索引队列
@@ -576,7 +576,7 @@ class VideoDecoder:
             self.index_queue.clear()
             self.index_queue = None
 
-        print("[VideoDecoder] 已停止")
+        logger.debug("[VideoDecoder] 已停止")
     
     def _decode_loop(self):
         """解码主循环"""
@@ -597,18 +597,18 @@ class VideoDecoder:
                 if self.process.poll() is not None:
                     # FFmpeg 进程已退出
                     ret_code = self.process.poll()
-                    print(f"[VideoDecoder] FFmpeg 进程退出，返回码={ret_code}")
+                    logger.debug(f"[VideoDecoder] FFmpeg 进程退出，返回码={ret_code}")
                     if error_count < 5:
                         # 读取 stderr 输出（已重定向到 stdout）
                         if self.process.stdout:
                             stderr_output = self.process.stdout.read().decode('utf-8', errors='replace')
                             if stderr_output:
-                                print(f"[VideoDecoder] FFmpeg 输出:\n{stderr_output[:2000]}")
+                                logger.debug(f"[VideoDecoder] FFmpeg 输出:\n{stderr_output[:2000]}")
                             else:
-                                print("[VideoDecoder] FFmpeg stdout 为空")
+                                logger.debug("[VideoDecoder] FFmpeg stdout 为空")
                         error_count += 1
                     if self.config.reconnect:
-                        print(f"[VideoDecoder] {self.config.reconnect_delay}秒后重连...")
+                        logger.debug(f"[VideoDecoder] {self.config.reconnect_delay}秒后重连...")
                         time.sleep(self.config.reconnect_delay)
                         self.stats['reconnect_count'] += 1
                         self._restart_ffmpeg()
@@ -627,7 +627,7 @@ class VideoDecoder:
                         continue
                 except Exception as e:
                     # 读取错误，等待后重试
-                    print(f"[VideoDecoder] 读取错误：{e}")
+                    logger.debug(f"[VideoDecoder] 读取错误：{e}")
                     time.sleep(0.1)
                     continue
                 
@@ -655,7 +655,7 @@ class VideoDecoder:
 
                     # 调试输出
                     if self.stats['frames_decoded'] < 3:
-                        print(f"[VideoDecoder] I420 帧 {self.stats['frames_decoded']}: Y shape={y.shape}, U shape={u.shape}, V shape={v.shape}")
+                        logger.debug(f"[VideoDecoder] I420 帧 {self.stats['frames_decoded']}: Y shape={y.shape}, U shape={u.shape}, V shape={v.shape}")
 
                     # 写入环形缓冲区（I420 格式）
                     # ✅ 修改：使用真实PTS时间戳，而不是系统时间
@@ -677,7 +677,7 @@ class VideoDecoder:
 
             except Exception as e:
                 self.stats['decode_errors'] += 1
-                print(f"[VideoDecoder] 解码错误：{e}")
+                logger.debug(f"[VideoDecoder] 解码错误：{e}")
                 if self.config.reconnect:
                     time.sleep(self.config.reconnect_delay)
                     self._restart_ffmpeg()
@@ -729,7 +729,7 @@ class VideoDecoder:
         """
         import re
 
-        print(f"[VideoDecoder] stderr PTS解析线程开始运行")
+        logger.debug(f"[VideoDecoder] stderr PTS解析线程开始运行")
 
         while self.is_running and self.process and self.process.stderr:
             try:
@@ -745,7 +745,7 @@ class VideoDecoder:
                 if not hasattr(self, '_stderr_debug_count'):
                     self._stderr_debug_count = 0
                 if self._stderr_debug_count < 10:
-                    print(f"[VideoDecoder] stderr行: {line_str[:200]}")
+                    logger.debug(f"[VideoDecoder] stderr行: {line_str[:200]}")
                     self._stderr_debug_count += 1
 
                 # 使用正则表达式提取PTS
@@ -769,14 +769,14 @@ class VideoDecoder:
 
                     # 定期输出调试信息
                     if frame_index % 100 == 0:
-                        print(f"[VideoDecoder] 帧PTS: frame_index={frame_index}, pts={pts}, pts_time={pts_time:.3f}s, pts_ns={pts_ns}")
+                        logger.debug(f"[VideoDecoder] 帧PTS: frame_index={frame_index}, pts={pts}, pts_time={pts_time:.3f}s, pts_ns={pts_ns}")
 
             except Exception as e:
                 if self.is_running:
-                    print(f"[VideoDecoder] PTS解析错误：{e}")
+                    logger.debug(f"[VideoDecoder] PTS解析错误：{e}")
                 time.sleep(0.01)
 
-        print(f"[VideoDecoder] stderr PTS解析线程退出")
+        logger.debug(f"[VideoDecoder] stderr PTS解析线程退出")
 
     def _get_pts_for_frame(self, frame_seq: int) -> int:
         """
@@ -797,7 +797,7 @@ class VideoDecoder:
                 with self.start_pts_lock:
                     if self.start_pts_ns is None:
                         self.start_pts_ns = pts_ns
-                        print(f"[VideoDecoder] 记录基准PTS: {pts_ns}ns (frame_seq={frame_seq})")
+                        logger.debug(f"[VideoDecoder] 记录基准PTS: {pts_ns}ns (frame_seq={frame_seq})")
 
                 # ✅ 修改：计算相对时间戳（当前PTS - 基准PTS）
                 relative_pts_ns = pts_ns - (self.start_pts_ns or 0)
@@ -830,9 +830,9 @@ class VideoDecoder:
                 stderr=subprocess.PIPE,
                 bufsize=self.config.buffer_size,
             )
-            print("[VideoDecoder] FFmpeg 进程已重启")
+            logger.debug("[VideoDecoder] FFmpeg 进程已重启")
         except Exception as e:
-            print(f"[VideoDecoder] 重启 FFmpeg 失败：{e}")
+            logger.debug(f"[VideoDecoder] 重启 FFmpeg 失败：{e}")
     
     def get_frame_index(self) -> Optional[FrameIndex]:
         """
@@ -863,7 +863,7 @@ class VideoDecoder:
             header, y, uv = self.ring_buffer.read_frame_nv12(block_id)
             return y, uv
         except Exception as e:
-            print(f"[VideoDecoder] 读取块 {block_id} 失败：{e}")
+            logger.debug(f"[VideoDecoder] 读取块 {block_id} 失败：{e}")
             return None
 
     def get_stats(self) -> Dict[str, Any]:
@@ -896,34 +896,34 @@ class VideoDecoder:
 
     def print_stats(self):
         """打印详细统计信息"""
-        print("\n" + "="*60)
-        print("视频解码器统计信息（新架构）")
-        print("="*60)
-        print(f"解码帧数：{self.stats['frames_decoded']}")
-        print(f"解码错误：{self.stats['decode_errors']}")
-        print(f"重连次数：{self.stats['reconnect_count']}")
+        logger.debug("\n" + "="*60)
+        logger.debug("视频解码器统计信息（新架构）")
+        logger.debug("="*60)
+        logger.debug(f"解码帧数：{self.stats['frames_decoded']}")
+        logger.debug(f"解码错误：{self.stats['decode_errors']}")
+        logger.debug(f"重连次数：{self.stats['reconnect_count']}")
 
         if self.stats['start_time']:
             elapsed = time.time() - self.stats['start_time']
-            print(f"运行时间：{elapsed:.1f} 秒")
+            logger.debug(f"运行时间：{elapsed:.1f} 秒")
             if elapsed > 0:
                 fps = self.stats['frames_decoded'] / elapsed
-                print(f"平均 FPS: {fps:.2f}")
+                logger.debug(f"平均 FPS: {fps:.2f}")
 
         # 打印环形缓冲区统计
         if self.ring_buffer:
-            print("\n环形缓冲区:")
-            print(f"  块数量：{self.ring_buffer.block_count}")
-            print(f"  帧计数：{self.ring_buffer.frame_count}")
+            logger.debug("\n环形缓冲区:")
+            logger.debug(f"  块数量：{self.ring_buffer.block_count}")
+            logger.debug(f"  帧计数：{self.ring_buffer.frame_count}")
 
         # 打印索引队列统计
         if self.index_queue:
-            print("\n索引队列:")
+            logger.debug("\n索引队列:")
             queue_stats = self.index_queue.get_stats()
-            print(f"  当前大小：{queue_stats.current_size}")
-            print(f"  总索引数：{queue_stats.total_indices}")
+            logger.debug(f"  当前大小：{queue_stats.current_size}")
+            logger.debug(f"  总索引数：{queue_stats.total_indices}")
 
-        print("="*60)
+        logger.debug("="*60)
 
 
 def create_decoder(

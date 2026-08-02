@@ -21,11 +21,7 @@ import signal
 import sys
 import threading
 from functools import wraps
-from logging.handlers import QueueHandler
 from typing import Any, Callable, Optional
-
-# 导入项目内部的日志管理器
-from .log_manager import log_listener
 
 
 class BaseProcess(mp.Process):
@@ -129,14 +125,15 @@ class Process(BaseProcess):
         return self.__dict__["stop_event"]
     
     def before_start(self) -> None:
-        """进程启动前：保存日志队列"""
-        self.__log_queue = log_listener.queue
-    
+        """进程启动前：保存主进程的日志队列引用"""
+        from .log_manager import LogManager
+        self._log_queue = LogManager.get_instance().log_queue
+
     def before_run(self) -> None:
         """进程运行前：配置信号处理和日志"""
         # 启用故障处理（调试崩溃）
         faulthandler.enable()
-        
+
         # 信号处理函数
         def receiveSignal(signalNumber, frame):
             # Get the stop_event through the dict to bypass lazy initialization.
@@ -147,19 +144,18 @@ class Process(BaseProcess):
             else:
                 # Nobody is monitoring stop_event. We should raise SystemExit.
                 sys.exit()
-        
+
         # 注册信号处理器
         signal.signal(signal.SIGTERM, receiveSignal)
         signal.signal(signal.SIGINT, receiveSignal)
-        
-        # 配置日志
-        self.logger = logging.getLogger(self.name)
-        
-        # 清除现有日志处理器
-        logging.basicConfig(handlers=[], force=True)
-        
-        # 添加队列处理器（将日志发送到主进程）
-        logging.getLogger().addHandler(QueueHandler(self.__log_queue))
+
+        # 配置子进程日志（使用主进程传递的队列引用，通过 QueueHandler 发送到主进程）
+        # 注意：不能在子进程中调用 LogManager.get_instance()，因为 spawn 模式下
+        # 单例会重新创建，log_queue 是新的空队列，导致日志丢失
+        from logging.handlers import QueueHandler
+        root_logger = logging.getLogger()
+        root_logger.handlers.clear()
+        root_logger.addHandler(QueueHandler(self._log_queue))
     
     def is_running(self) -> bool:
         """

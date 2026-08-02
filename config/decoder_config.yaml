@@ -59,6 +59,10 @@ decoder:
   #
   # ⚠️ 根据您的硬件环境（NVIDIA RTX 2070 + CUDA 12.9），建议使用 "preset-nvidia"
   # 如果遇到兼容性问题，可以回退到 "preset-dxva2"（Windows 通用）
+  #
+  # 职责分离：解码 preset 在此独立设置，与 detector_config.backend 互不干预。
+  #   部署到 RK3588 盒子时，把 detector_config.backend 改为 "rknn"（管预处理+推理），
+  #   同时把这里的 hwaccel_preset 改为 "preset-rk-h264"（管解码，启用 RKMPP）。
   hwaccel_preset: "preset-nvidia"
 
   # ========== 输入预设配置 ==========

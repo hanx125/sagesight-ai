@@ -1,2 +1,2 @@
-head
-safehat
+头部
+安全帽

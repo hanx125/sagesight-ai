@@ -83,6 +83,14 @@
         <div class="monitor-wall" id="monitorWall">
             <!-- 画面格子将通过 JavaScript 动态生成 -->
         </div>
+
+        <!-- 屏幕闪烁报警叠加层（进入区域红色 / 徘徊橙色） -->
+        <div id="alarmOverlay" class="alarm-overlay"></div>
+        <!-- 顶部报警横幅 -->
+        <div id="alarmBanner" class="alarm-banner" style="display:none;">
+            <span id="alarmBannerIcon" class="alarm-banner-icon">⚠</span>
+            <span id="alarmBannerText" class="alarm-banner-text"></span>
+        </div>
     </div>
 
     <!-- 右侧事件列表 -->
@@ -581,12 +589,12 @@
                         <span id="monitorEventType"></span>
                     </div>
                     <div class="event-detail-row">
-                        <label>目标类别：</label>
-                        <span id="monitorEventClass"></span>
+                        <label>事件状态：</label>
+                        <span id="monitorEventStatus"></span>
                     </div>
                     <div class="event-detail-row">
-                        <label>置信度：</label>
-                        <span id="monitorEventConfidence"></span>
+                        <label>目标类别：</label>
+                        <span id="monitorEventClass"></span>
                     </div>
                     <div class="event-detail-row">
                         <label>设备通道：</label>
@@ -599,6 +607,18 @@
                     <div class="event-detail-row">
                         <label>算法：</label>
                         <span id="monitorEventAlgorithm"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>进入区域：</label>
+                        <span id="monitorEventEnteredZones"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>当前区域：</label>
+                        <span id="monitorEventZoneName"></span>
+                    </div>
+                    <div class="event-detail-row">
+                        <label>徘徊区域：</label>
+                        <span id="monitorEventLoiteredZones"></span>
                     </div>
                     <div class="event-detail-row">
                         <label>起始时间：</label>
@@ -644,7 +664,7 @@
 <script src="{{ url_for('static', filename='js/jessibuca/jessibuca.js') }}"></script>
 <script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260731"></script>
 <script src="{{ url_for('static', filename='js/ptz_joystick.js') }}"></script>
-<script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}"></script>
+<script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}?v=20260801"></script>
 <script>
 // ========================================
 // 驾驶舱事件列表功能
@@ -771,15 +791,12 @@ function createMonitorEventCard(event) {
     const statusInfo = getStatusDisplay(event.status);
     infoContainer.innerHTML = `
         <div class="event-info-row">
-            <span class="event-tag tag-type">${formatEventType(event.type)}</span>
+            <span class="event-status ${statusInfo.className}">${statusInfo.text}</span>
             <span class="event-tag tag-class">${event.class_name || '-'}</span>
         </div>
         <div class="event-info-row">
             <span class="event-tag tag-task">${getTaskNameById(event.task_id) || '-'}</span>
             <span class="event-tag tag-time">${formatEventTime(event.start_time || event.created_at)}</span>
-        </div>
-        <div class="event-info-row">
-            <span class="event-status ${statusInfo.className}">${statusInfo.text}</span>
         </div>
     `;
     card.appendChild(infoContainer);
@@ -852,11 +869,23 @@ function showMonitorEventDetail(event) {
     // 设置详情信息
     document.getElementById('monitorEventId').textContent = event.event_id || '-';
     document.getElementById('monitorEventType').textContent = formatEventType(event.type);
+
+    // 事件状态：使用统一映射渲染徽章
+    const detailStatusInfo = getStatusDisplay(event.status);
+    const detailStatusEl = document.getElementById('monitorEventStatus');
+    detailStatusEl.textContent = detailStatusInfo.text;
+    detailStatusEl.className = `event-status ${detailStatusInfo.className}`;
+
     document.getElementById('monitorEventClass').textContent = event.class_name || '-';
-    document.getElementById('monitorEventConfidence').textContent = event.confidence ? `${(event.confidence * 100).toFixed(1)}%` : '-';
     document.getElementById('monitorEventChannel').textContent = event.channel_name || event.camera_id || '-';
     document.getElementById('monitorEventTask').textContent = getTaskNameById(event.task_id) || event.task_name || '-';
     document.getElementById('monitorEventAlgorithm').textContent = event.algorithm || '-';
+    document.getElementById('monitorEventEnteredZones').textContent =
+        (event.entered_zones && event.entered_zones.length) ? event.entered_zones.join('、') : '-';
+    document.getElementById('monitorEventZoneName').textContent = event.zone_name || '-';
+    const loiteredZones = event.loitered_zones || [];
+    document.getElementById('monitorEventLoiteredZones').textContent =
+        loiteredZones.length ? loiteredZones.join('、') : '-';
     document.getElementById('monitorEventStartTime').textContent = formatEventTime(event.start_time);
     document.getElementById('monitorEventEndTime').textContent = formatEventTime(event.end_time);
     document.getElementById('monitorEventTime').textContent = formatEventTime(event.created_at);
@@ -1027,19 +1056,6 @@ function updateMonitorEventCard(data) {
     statusBadge.textContent = statusInfo.text;
     statusBadge.className = `event-status ${statusInfo.className}`;
 
-    // 更新置信度（如果 data.data 中有）
-    if (data.data) {
-        if (data.data.confidence !== undefined) {
-            let confEl = card.querySelector('.event-confidence');
-            if (!confEl) {
-                confEl = document.createElement('div');
-                confEl.className = 'event-confidence';
-                card.querySelector('.event-info-container').appendChild(confEl);
-            }
-            confEl.textContent = `置信度: ${(data.data.confidence * 100).toFixed(0)}%`;
-        }
-    }
-
     // 更新内存中事件对象（用于点击查看详情时显示最新数据）
     const eventIdx = monitorEvents.findIndex(e => e.event_id === data.event_id);
     if (eventIdx >= 0) {
@@ -1088,21 +1104,12 @@ function updateMonitorEventGif(data) {
     card._hasGif = true;
     card._gifData = data;
 
-    // 更新内存中事件对象
+    // 更新内存中事件对象（不修改卡片状态标签）
     const eventIdx = monitorEvents.findIndex(e => e.event_id === data.event_id);
     if (eventIdx >= 0) {
         monitorEvents[eventIdx].local_gif_url = data.local_gif_url || '';
         monitorEvents[eventIdx].minio_gif_url = data.minio_gif_url || '';
         monitorEvents[eventIdx].ftp_gif_url = data.ftp_gif_url || '';
-        monitorEvents[eventIdx].status = 'gif_ready';
-    }
-
-    // ✅ 同步刷新状态徽章为"GIF就绪"
-    const gifStatusInfo = getStatusDisplay('gif_ready');
-    const gifStatusBadge = card.querySelector('.event-status');
-    if (gifStatusBadge) {
-        gifStatusBadge.textContent = gifStatusInfo.text;
-        gifStatusBadge.className = `event-status ${gifStatusInfo.className}`;
     }
 }
 
@@ -1128,8 +1135,7 @@ function getStatusDisplay(status) {
     const statusMap = {
         'tracking_start':  { text: '跟踪开始', className: 'status-start' },
         'tracking_update': { text: '跟踪更新', className: 'status-update' },
-        'tracking_end':    { text: '已结束',   className: 'status-ended' },
-        'gif_ready':       { text: 'GIF就绪',  className: 'status-gif' }
+        'tracking_end':    { text: '已结束',   className: 'status-ended' }
     };
     return statusMap[status] || { text: status || '未知', className: 'status-unknown' };
 }
@@ -1263,22 +1269,25 @@ document.addEventListener('DOMContentLoaded', function() {
 
 /* ✅ 新增：事件状态标识样式 */
 .event-status {
-    display: inline-block;
-    font-size: 10px;
-    padding: 1px 6px;
-    border-radius: 3px;
-    margin-top: 2px;
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+    box-sizing: border-box;
 }
 .event-status.status-start   { background: #e3f2fd; color: #1976d2; }  /* 跟踪开始：蓝 */
 .event-status.status-update  { background: #f3e5f5; color: #7b1fa2; }  /* 跟踪更新：紫 */
 .event-status.status-ended   { background: #6c757d; color: #fff; }     /* 已结束：灰 */
 .event-status.status-gif     { background: #e8f5e9; color: #2e7d32; }  /* GIF就绪：绿 */
 .event-status.status-unknown { background: #eee; color: #555; }
-.event-confidence {
-    font-size: 11px;
-    color: #555;
-    margin-top: 2px;
-}
 
 .event-no-image {
     width: 100%;
@@ -1359,14 +1368,16 @@ document.addEventListener('DOMContentLoaded', function() {
 .event-detail-image-container {
     flex: 1;
     max-width: 500px;
+    height: 320px;
 }
 
 .event-detail-image {
     width: 100%;
-    max-height: 400px;
-    object-fit: contain;
+    height: 100%;
+    object-fit: cover;
     border-radius: 8px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    background: #1a1a1a;
 }
 
 .event-detail-info {

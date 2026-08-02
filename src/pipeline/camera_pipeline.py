@@ -27,7 +27,7 @@ import numpy as np
 
 from src.detectors.region_utils import (
     area,
-    create_tensor_input,
+    create_tensor_input_hw,
     get_cluster_candidates,
     get_cluster_region,
     merge_yuv_planes,
@@ -56,6 +56,7 @@ def run_pipeline(
     stop_event,
     ptz_metrics=None,
     target_classes: Optional[list] = None,
+    backend: str = 'onnx_cuda',
 ):
     """
     CameraWorker 主循环
@@ -76,12 +77,31 @@ def run_pipeline(
         stop_event: 停止事件
         ptz_metrics: PTZ 共享状态（可选）
         target_classes: 目标类别过滤列表（可选,只保留这些类别的检测）
+        backend: 检测器后端（'onnx_cuda'/'onnx_cpu'/'rknn' 等）
+            backend='rknn' 时启用 RGA 硬件预处理（RK3588 平台，失败自动回退 cv2）
     """
     proc_logger = logging.getLogger(f"pipeline.{camera_id}")
     proc_logger.info(
         f"检测管道启动: frame_shape={frame_shape}, "
         f"model_size={model_size}, threshold={detect_threshold}"
     )
+
+    # backend=rknn 时启用 RGA 硬件预处理（RK3588 平台，失败自动回退 cv2）
+    use_rga = (backend == 'rknn')
+    if use_rga:
+        proc_logger.info("RGA 硬件预处理已启用（backend=rknn）")
+
+    # Linux（非 RK3588）启用 OpenCV CUDA 预处理（仅 resize 上 GPU，失败回退 cv2）
+    # Windows 暂不做 GPU 预处理（推理已用 GPU，预处理 CPU 开销可接受）
+    use_cuda = False
+    if not use_rga:
+        try:
+            from src.utils.platform_utils import get_platform
+            if get_platform() == 'linux':
+                use_cuda = True
+                proc_logger.info("OpenCV CUDA 预处理已启用（platform=linux）")
+        except ImportError:
+            pass
 
     # 最小 region 尺寸（取模型宽高的最大值）
     min_region = max(model_size)
@@ -98,6 +118,9 @@ def run_pipeline(
         "detect_ms": [],
         "track_ms": [],
         "total_ms": [],
+        "regions": [],        # 每帧 region 数量
+        "detections": [],     # 每帧检测结果数量
+        "tracked": [],        # 每帧已跟踪对象数量
     }
     perf_log_interval = 100
 
@@ -206,7 +229,12 @@ def run_pipeline(
 
                 for region in regions:
                     # 从 YUV 帧裁剪 region 并转为模型输入 tensor
-                    tensor = create_tensor_input(yuv_frame, region, model_size)
+                    # 硬件加速：RK3588→RGA（裁剪+缩放+YUV→RGB），Linux→CUDA（resize）
+                    # 任一不可用或异常时自动回退 cv2 CPU 路径
+                    tensor = create_tensor_input_hw(
+                        yuv_frame, region, model_size,
+                        use_rga=use_rga, use_cuda=use_cuda,
+                    )
 
                     # 同步检测（写输入SHM → queue.put → wait event → 读输出SHM）
                     detections = remote_detector.detect(tensor, detect_threshold)
@@ -285,20 +313,24 @@ def run_pipeline(
             # ========================================
             total_time = (time.time() - cycle_start) * 1000
             perf_stats["total_ms"].append(total_time)
+            # 计数指标也按帧追加，与耗时字段统一为"近100帧 avg"语义
+            perf_stats["regions"].append(len(regions))
+            perf_stats["detections"].append(len(reduced_detections))
+            perf_stats["tracked"].append(len(tracked_objects_dict))
 
             if frame_count % perf_log_interval == 0:
                 avg = lambda lst: sum(lst[-100:]) / max(1, len(lst[-100:]))
-                proc_logger.info(
-                    f"性能统计(近100帧 avg ms): "
-                    f"decode={avg(perf_stats['decode_ms']):.1f}, "
-                    f"motion={avg(perf_stats['motion_ms']):.1f}, "
-                    f"region={avg(perf_stats['region_ms']):.1f}, "
-                    f"detect={avg(perf_stats['detect_ms']):.1f}, "
-                    f"track={avg(perf_stats['track_ms']):.1f}, "
-                    f"total={avg(perf_stats['total_ms']):.1f}, "
-                    f"regions={len(regions)}, "
-                    f"detections={len(reduced_detections)}, "
-                    f"tracked={len(tracked_objects_dict)}"
+                proc_logger.debug(
+                    f"性能统计(近100帧 avg): "
+                    f"decode={avg(perf_stats['decode_ms']):.1f}ms, "
+                    f"motion={avg(perf_stats['motion_ms']):.1f}ms, "
+                    f"region={avg(perf_stats['region_ms']):.1f}ms, "
+                    f"detect={avg(perf_stats['detect_ms']):.1f}ms, "
+                    f"track={avg(perf_stats['track_ms']):.1f}ms, "
+                    f"total={avg(perf_stats['total_ms']):.1f}ms, "
+                    f"regions={avg(perf_stats['regions']):.1f}, "
+                    f"detections={avg(perf_stats['detections']):.1f}, "
+                    f"tracked={avg(perf_stats['tracked']):.1f}"
                 )
 
         except KeyboardInterrupt:

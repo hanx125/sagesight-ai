@@ -23,6 +23,9 @@ import numpy as np
 import onnxruntime as ort
 
 from src.detectors.base import BaseDetector, Detection, DetectorConfig
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ONNXCPUDetector(BaseDetector):
@@ -53,7 +56,7 @@ class ONNXCPUDetector(BaseDetector):
         # CPU线程数配置
         self._num_threads = 0  # 将在load_model时计算
         
-        print(f"[ONNXCPUDetector] 初始化完成")
+        logger.debug(f"[ONNXCPUDetector] 初始化完成")
     
     def initialize(self):
         """
@@ -62,16 +65,16 @@ class ONNXCPUDetector(BaseDetector):
         此方法在创建对象后调用，用于延迟加载模型。
         """
         try:
-            print(f"[ONNXCPUDetector] 正在初始化检测器...")
-            print(f"[ONNXCPUDetector]   模型路径: {self.config.model_path}")
+            logger.debug(f"[ONNXCPUDetector] 正在初始化检测器...")
+            logger.debug(f"[ONNXCPUDetector]   模型路径: {self.config.model_path}")
             sys.stdout.flush()
             
             self.load_model()
             
-            print(f"[ONNXCPUDetector] 检测器初始化完成")
+            logger.debug(f"[ONNXCPUDetector] 检测器初始化完成")
             sys.stdout.flush()
         except Exception as e:
-            print(f"[ONNXCPUDetector] 检测器初始化失败: {e}")
+            logger.debug(f"[ONNXCPUDetector] 检测器初始化失败: {e}")
             sys.stdout.flush()
             raise
     
@@ -124,7 +127,7 @@ class ONNXCPUDetector(BaseDetector):
             session_options.intra_op_num_threads = max_threads_per_task
             session_options.inter_op_num_threads = max_threads_per_task
             
-            print(f"[ONNXCPUDetector] CPU线程数限制: {max_threads_per_task} (总核心数: {num_cores})")
+            logger.debug(f"[ONNXCPUDetector] CPU线程数限制: {max_threads_per_task} (总核心数: {num_cores})")
             
             # ========================================
             # 创建推理会话
@@ -142,12 +145,12 @@ class ONNXCPUDetector(BaseDetector):
             self.input_name = inputs[0].name
             self.input_shape = tuple(inputs[0].shape)
             
-            print(f"[ONNXCPUDetector] ONNX 模型加载成功（CPU 后端）：{model_path}")
-            print(f"  输入名称：{self.input_name}")
-            print(f"  输入形状：{self.input_shape}")
-            print(f"  CPU 核心数：{num_cores}")
-            print(f"  使用线程数：{self._num_threads}")
-            print(f"  提示：CPU推理速度较慢，建议使用GPU后端")
+            logger.debug(f"[ONNXCPUDetector] ONNX 模型加载成功（CPU 后端）：{model_path}")
+            logger.debug(f"  输入名称：{self.input_name}")
+            logger.debug(f"  输入形状：{self.input_shape}")
+            logger.debug(f"  CPU 核心数：{num_cores}")
+            logger.debug(f"  使用线程数：{self._num_threads}")
+            logger.debug(f"  提示：CPU推理速度较慢，建议使用GPU后端")
             
         except Exception as e:
             raise RuntimeError(f"模型加载失败：{e}")
@@ -207,8 +210,8 @@ class ONNXCPUDetector(BaseDetector):
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            print(f"[ONNXCPUDetector] 推理失败：{e}")
-            print(f"[ONNXCPUDetector] 错误详情:\n{error_details}")
+            logger.debug(f"[ONNXCPUDetector] 推理失败：{e}")
+            logger.debug(f"[ONNXCPUDetector] 错误详情:\n{error_details}")
             raise RuntimeError(f"推理失败：{e}")
     
     def unload_model(self):
@@ -223,7 +226,7 @@ class ONNXCPUDetector(BaseDetector):
             self.input_name = None
             self.input_shape = None
         
-        print("[ONNXCPUDetector] 模型已卸载")
+        logger.debug("[ONNXCPUDetector] 模型已卸载")
     
     def get_info(self) -> Dict:
         """

@@ -149,3 +149,24 @@ def get_db_path(default: str = 'data/tasks.db') -> str:
     """
     db_cfg = get_database_config()
     return db_cfg.get('path', default)
+
+
+def get_events_cleanup_config() -> Dict[str, Any]:
+    """获取事件清理配置（自动清理过期事件及其存储文件）
+
+    配置来源为 system_config.yaml 的 events_cleanup 段（单一真相源）。
+    归一化字段，确保缺失时回退默认值。
+
+    Returns:
+        事件清理配置字典，包含：
+        - enabled: 是否启用自动清理后台线程（默认 False）
+        - retention_days: 事件保留天数，超过则清理（默认 7）
+        - cleanup_interval_hours: 自动清理间隔小时数（默认 24）
+    """
+    config = load_system_config()
+    cleanup_cfg = config.get('events_cleanup', {})
+    return {
+        'enabled': cleanup_cfg.get('enabled', False),
+        'retention_days': cleanup_cfg.get('retention_days', 7),
+        'cleanup_interval_hours': cleanup_cfg.get('cleanup_interval_hours', 24),
+    }

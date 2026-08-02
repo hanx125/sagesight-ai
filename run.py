@@ -7,6 +7,13 @@
 import os
 import sys
 
+# 抑制 eventlet hub 的连接异常打印（客户端断开/超时导致的 ConnectionAbortedError 等）
+try:
+    import eventlet.debug
+    eventlet.debug.hub_exceptions(False)
+except Exception:
+    pass
+
 # ✅ 设置多进程启动方法为 'spawn'（Windows 默认，确保子进程正确继承）
 import multiprocessing
 try:
@@ -30,6 +37,7 @@ from pathlib import Path
 from typing import Dict, List
 from flask import Flask, render_template, jsonify, request, Response, redirect, session, url_for
 from flask_socketio import SocketIO, emit
+from eventlet import websocket
 import logging
 
 # 添加项目根目录到路径
@@ -48,10 +56,10 @@ from src.cameras.ptz_api import register_ptz_api
 from src.cameras.audio_talk_api import init_audio_talk_api
 from src.utils.process import Process
 
-# 配置日志（从system_config.yaml加载，支持文件输出和轮转）
+# 配置日志（从system_config.yaml加载，统一通过 LogManager 管理）
 import yaml
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from src.utils.log_manager import LogManager
 
 _log_config_path = Path(__file__).parent / 'config' / 'system_config.yaml'
 _log_cfg = {}
@@ -60,41 +68,9 @@ if _log_config_path.exists():
         _full_cfg = yaml.safe_load(_f) or {}
     _log_cfg = _full_cfg.get('logging', {})
 
-_log_level = getattr(logging, _log_cfg.get('level', 'INFO').upper(), logging.INFO)
-_log_format = _log_cfg.get('format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-_log_file = _log_cfg.get('file', 'logs/system.log')
-_log_max_size = int(_log_cfg.get('max_size', 10)) * 1024 * 1024
-_log_backup_count = int(_log_cfg.get('backup_count', 5))
-_log_console = _log_cfg.get('console', True)
-
-# 确保日志目录存在
-_log_path = Path(_log_file)
-_log_path.parent.mkdir(parents=True, exist_ok=True)
-
-# 配置根logger
-_root_logger = logging.getLogger()
-_root_logger.setLevel(_log_level)
-
-# 清除默认handler
-_root_logger.handlers.clear()
-
-# 文件handler（带轮转）
-_file_handler = RotatingFileHandler(
-    _log_file, maxBytes=_log_max_size, backupCount=_log_backup_count, encoding='utf-8'
-)
-_file_handler.setLevel(_log_level)
-_file_handler.setFormatter(logging.Formatter(_log_format))
-_root_logger.addHandler(_file_handler)
-
-# 控制台handler
-if _log_console:
-    _console_handler = logging.StreamHandler()
-    _console_handler.setLevel(_log_level)
-    _console_handler.setFormatter(logging.Formatter(_log_format))
-    _root_logger.addHandler(_console_handler)
-
+# 主进程日志配置（root logger + QueueListener）
+LogManager.get_instance().setup_main_process(_log_cfg)
 logger = logging.getLogger(__name__)
-logger.info(f"日志系统初始化完成: file={_log_file}, level={_log_cfg.get('level', 'INFO')}, max_size={_log_cfg.get('max_size', 10)}MB")
 
 
 # ========================================
@@ -133,8 +109,8 @@ def _run_executor_process(task_config: Dict, ai_stream_enabled_state=None):
 
     # ✅ 如果任务没有关联的设备通道，优雅退出（不抛异常）
     if not channels:
-        print(f"[MultiCameraExecutor-{task_id}] 任务没有关联的摄像机通道，跳过启动")
-        print(f"[MultiCameraExecutor-{task_id}] 请先在任务配置中添加设备通道")
+        logger.debug(f"[MultiCameraExecutor-{task_id}] 任务没有关联的摄像机通道，跳过启动")
+        logger.debug(f"[MultiCameraExecutor-{task_id}] 请先在任务配置中添加设备通道")
         # 更新任务状态为 stopped，避免监控线程反复重启
         try:
             task_manager.update_task(task_id, {'status': 'stopped', 'enabled': False})
@@ -427,6 +403,69 @@ app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # ========================================
+# 原生 WebSocket 端点（/ws/raw，供第三方系统标准 WebSocket 接入）
+# ========================================
+# 双通道方案：保留 Socket.IO（前端用）+ 新增原生 WebSocket（第三方用）
+# 第三方连接 ws://<host>:5555/ws/raw，接收 JSON 格式消息：{"event": "...", "data": {...}}
+
+class WebSocketManager:
+    """原生 WebSocket 连接管理器（给第三方接入用）"""
+
+    def __init__(self):
+        self._clients = set()
+
+    def add(self, ws):
+        self._clients.add(ws)
+
+    def remove(self, ws):
+        self._clients.discard(ws)
+
+    def broadcast(self, event, data):
+        """向所有原生 WebSocket 客户端广播 {event, data} JSON 消息"""
+        if not self._clients:
+            return
+        message = json.dumps({'event': event, 'data': data}, ensure_ascii=False)
+        for ws in list(self._clients):
+            try:
+                ws.send(message)
+            except Exception:
+                self._clients.discard(ws)
+
+
+ws_manager = WebSocketManager()
+
+
+@websocket.WebSocketWSGI
+def _ws_raw_handler(ws):
+    """原生 WebSocket 端点 /ws/raw 的处理函数"""
+    ws_manager.add(ws)
+    try:
+        ws.send(json.dumps({'event': 'connected', 'data': {'message': '已连接到SageSight实时推送服务'}},
+                           ensure_ascii=False))
+        while True:
+            # 等待客户端消息（第三方一般只接收，这里保持连接直到断开）
+            msg = ws.wait()
+            if msg is None:
+                break
+    except Exception:
+        pass
+    finally:
+        ws_manager.remove(ws)
+
+
+# WSGI 中间件：分发 /ws/raw 到原生 WebSocket，其他路径交给 socketio
+_socketio_wsgi = app.wsgi_app
+
+
+def _dispatching_wsgi(environ, start_response):
+    if environ.get('PATH_INFO') == '/ws/raw':
+        return _ws_raw_handler(environ, start_response)
+    return _socketio_wsgi(environ, start_response)
+
+
+app.wsgi_app = _dispatching_wsgi
+
+# ========================================
 # AI 视频流推送状态（文件标记方案）
 # ========================================
 # 使用文件标记替代 multiprocessing.Manager dict，避免 Windows spawn 模式下
@@ -548,7 +587,7 @@ def get_process_manager():
 # ========================================
 
 # 不需要认证的路径前缀
-PUBLIC_PATHS = ('/login', '/api/auth/', '/api/ai-stream/', '/api/events/push', '/api/events/update', '/api/events/gif_ready', '/static/', '/output/')
+PUBLIC_PATHS = ('/login', '/api/auth/', '/api/ai-stream/', '/api/events/push', '/api/events/update', '/api/events/gif_ready', '/api/display/config', '/static/', '/output/')
 
 @app.before_request
 def check_auth():
@@ -658,6 +697,17 @@ def get_event_stats():
     })
 
 
+@app.route('/api/display/config', methods=['GET'])
+def get_display_config():
+    """返回显示配置（含 alarm 报警开关）给前端
+
+    前端实时监控页通过此接口拉取 display_config.yaml 中的 alarm 段，
+    用于控制屏幕闪烁报警行为。配置文件为单一真相源，避免前端硬编码。
+    """
+    from src.tasks.task_manager import get_default_display_config
+    return jsonify(get_default_display_config())
+
+
 # ========================================
 # 监控 API
 # ========================================
@@ -701,16 +751,36 @@ def get_stream_status(task_id):
 #    - 前端点击停止 → /api/ai-stream/disable → 删除标记文件 → 后端停止推流
 #    文件标记方案替代 Manager dict 代理，避免 Windows spawn 模式下跨两层进程 pickle 失效
 #
-# 注意：独立的 WebSocketOutputter 已废弃（system_config.yaml:71: enabled: false）
 # 注意：旧的 detection_frame 前端画框模式已完全移除，统一使用后端画框
 # ========================================
 
 # AI 视频帧缓存（最近帧）
 _ai_stream_cache = {}  # {camera_id: {'frame': base64, 'timestamp': str}}
 
+
+def _emit_ai_stream_frame(payload):
+    """后台 greenlet 执行的 AI 帧 WebSocket 广播
+
+    socketio.emit 在 eventlet 下为非阻塞写 socket 缓冲区（缓冲区满才 yield），
+    不会卡死 hub。从 HTTP 请求派发到此 greenlet，避免 emit 遍历慢客户端时
+    阻塞 HTTP 协程导致任务进程超时。
+    """
+    try:
+        socketio.emit('ai_stream_frame', payload, namespace='/ws')
+        ws_manager.broadcast('ai_stream_frame', payload)
+    except Exception as e:
+        logger.error(f"广播 AI 帧失败 [{payload.get('camera_id', '')}]: {e}")
+
+
 @app.route('/api/ai-stream/push', methods=['POST'])
 def push_ai_stream_frame():
-    """接收任务进程推送的 AI 视频帧，并通过 WebSocket 广播"""
+    """接收任务进程推送的 AI 视频帧，并派发到后台 greenlet 异步广播
+
+    HTTP 处理只做：解析 → 缓存最新帧 → 派发 emit greenlet，立即返回，
+    避免前端客户端接收慢时阻塞本协程导致任务进程 HTTP 超时。
+    （注意：不能用标准库 queue.Queue 的阻塞 get 做常驻 greenlet——本项目未调用
+     eventlet.monkey_patch()，阻塞 get 会卡死 eventlet hub，导致整个服务无响应。）
+    """
     try:
         data = request.get_json()
         task_id = data.get('task_id')
@@ -729,13 +799,18 @@ def push_ai_stream_frame():
             'task_id': task_id
         }
 
-        # 通过 WebSocket 广播给订阅的客户端
-        socketio.emit('ai_stream_frame', {
+        # 派发到后台 greenlet 执行 emit（start_background_task 在 eventlet 下用
+        # eventlet.spawn，非阻塞；HTTP 立即返回，emit 不阻塞本协程）
+        payload = {
             'task_id': task_id,
             'camera_id': camera_id,
             'frame': frame,
             'timestamp': timestamp
-        }, namespace='/ws')
+        }
+        try:
+            socketio.start_background_task(_emit_ai_stream_frame, payload)
+        except Exception as e:
+            logger.error(f"[AI流] 派发广播 greenlet 失败: {e}")
 
         return jsonify({'success': True})
 
@@ -754,6 +829,7 @@ def push_event_to_websocket():
 
         # 通过 WebSocket 广播到驾驶舱
         socketio.emit('new_event', data, namespace='/ws')
+        ws_manager.broadcast('new_event', data)
         logger.debug(f"事件已推送到驾驶舱: {data.get('event_id', '')[:8]}... type={data.get('type', '')}")
 
         return jsonify({'success': True})
@@ -775,6 +851,7 @@ def push_event_update_to_websocket():
             return jsonify({'error': '参数不完整'}), 400
 
         socketio.emit('event_update', data, namespace='/ws')
+        ws_manager.broadcast('event_update', data)
         logger.info(f"[Event] event_update 推送: event_id={data['event_id'][:8]}, status={data.get('status', '')}")
 
         return jsonify({'success': True})
@@ -796,6 +873,7 @@ def push_gif_ready_to_websocket():
             return jsonify({'error': '参数不完整'}), 400
 
         socketio.emit('gif_ready', data, namespace='/ws')
+        ws_manager.broadcast('gif_ready', data)
         logger.info(f"[GIF] gif_ready 推送: event_id={data['event_id'][:8]}")
 
         return jsonify({'success': True})
@@ -980,7 +1058,7 @@ def task_monitor_thread():
             # 定期打印状态
             running_count = len(running_ids)
             if running_count > 0:
-                logger.info(f"[TaskMonitor] 运行中任务进程: {running_count}")
+                logger.debug(f"[TaskMonitor] 运行中任务进程: {running_count}")
             
             time.sleep(2)
         
@@ -989,6 +1067,86 @@ def task_monitor_thread():
             time.sleep(5)
     
     logger.info("[TaskMonitor] 监控线程退出")
+
+
+# ========================================
+# 自签名证书生成（用于 HTTPS，使语音对讲功能在 IP 访问时可用）
+# ========================================
+
+def _generate_self_signed_cert(cert_path: str, key_path: str):
+    """生成自签名 SSL 证书（首次启用 HTTPS 时自动调用）"""
+    import ssl
+    import datetime
+
+    # 确保目录存在
+    os.makedirs(os.path.dirname(cert_path), exist_ok=True)
+    os.makedirs(os.path.dirname(key_path), exist_ok=True)
+
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        # 生成 RSA 私钥
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+        )
+
+        # 构建证书主题
+        subject = issuer = x509.Name([
+            x509.NameAttribute(NameOID.COUNTRY_NAME, "CN"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "SageSight AI"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "SageSight"),
+        ])
+
+        # 创建自签名证书（有效期 10 年）
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime.utcnow())
+            .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=3650))
+            .add_extension(
+                x509.SubjectAlternativeName([
+                    x509.DNSName("localhost"),
+                    x509.IPAddress(__import__('ipaddress').ip_address("0.0.0.0")),
+                ]),
+                critical=False,
+            )
+            .sign(private_key, hashes.SHA256())
+        )
+
+        # 写入私钥文件
+        with open(key_path, "wb") as f:
+            f.write(
+                private_key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+            )
+
+        # 写入证书文件
+        with open(cert_path, "wb") as f:
+            f.write(cert.public_bytes(serialization.Encoding.PEM))
+
+        logger.info("[HTTPS] 自签名证书生成成功（有效期10年）")
+
+    except ImportError:
+        # cryptography 不可用时，回退到 OpenSSL 命令行
+        logger.warning("[HTTPS] cryptography 库不可用，尝试使用 OpenSSL 命令行...")
+        import subprocess
+        subprocess.run([
+            "openssl", "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", key_path, "-out", cert_path,
+            "-days", "3650", "-nodes",
+            "-subj", "/CN=SageSight/O=SageSight AI/C=CN",
+        ], check=True, capture_output=True)
+        logger.info("[HTTPS] OpenSSL 自签名证书生成成功")
 
 
 # ========================================
@@ -1007,10 +1165,7 @@ if __name__ == '__main__':
     logger.info(f"启动时间: {datetime.now().isoformat()}")
     logger.info("="*60)
 
-    # 启动日志监听器（处理子进程的日志队列）
-    from src.utils.log_manager import log_listener
-    log_listener.start()
-    logger.info("[Main] 日志监听器已启动")
+    # 日志监听器已在模块级别通过 LogManager.setup_main_process() 启动
 
     # 初始化进程管理器
     pm = get_process_manager()
@@ -1045,7 +1200,7 @@ if __name__ == '__main__':
 
         # 停止日志监听器
         try:
-            log_listener.stop()
+            LogManager.get_instance().stop()
             logger.info("[Cleanup] 日志监听器已停止")
         except Exception as e:
             logger.error(f"[Cleanup] 停止日志监听器失败: {e}")
@@ -1103,23 +1258,39 @@ if __name__ == '__main__':
     monitor_thread = threading.Thread(target=task_monitor_thread, daemon=True)
     monitor_thread.start()
 
-    logger.info("\n[Main] Web管理平台访问地址: http://localhost:5555")
-    logger.info("  - 任务管理: http://localhost:5555/tasks")
-    logger.info("  - 摄像机管理: http://localhost:5555/cameras")
-    logger.info("  - 事件列表: http://localhost:5555/events")
-    logger.info("  - 可视化监控: http://localhost:5555/monitor")
-    logger.info("  - 算法库: http://localhost:5555/algorithms")
-    logger.info("  - 系统管理: http://localhost:5555/system")
+    # 启动事件清理后台线程（按 system_config.yaml 的 events_cleanup 配置定期清理过期事件及存储文件）
+    # enabled=false 时不启动后台线程（仍可通过 POST /api/events/clear 手动清理）
+    from src.events.event_cleanup_service import start_event_cleanup_scheduler
+    start_event_cleanup_scheduler()
+
+    # 读取端口配置
+    from src.system.system_config_loader import load_system_config
+    sys_cfg = load_system_config()
+    web_cfg = sys_cfg.get('web_server', {})
+    port = web_cfg.get('port', 5555)
+
+    # 显示访问地址
+    logger.info(f"\n[Main] Web管理平台访问地址: http://localhost:{port}")
+    logger.info(f"  - 任务管理: http://localhost:{port}/tasks")
+    logger.info(f"  - 摄像机管理: http://localhost:{port}/cameras")
+    logger.info(f"  - 事件列表: http://localhost:{port}/events")
+    logger.info(f"  - 可视化监控: http://localhost:{port}/monitor")
+    logger.info(f"  - 算法库: http://localhost:{port}/algorithms")
+    logger.info(f"  - 系统管理: http://localhost:{port}/system")
     logger.info("="*60)
-    
+
     # 运行Flask应用（前台）
     try:
-        socketio.run(app, host='0.0.0.0', port=5555, debug=False)
+        logger.info(f"[HTTP] 服务已启用: http://0.0.0.0:{port}")
+        socketio.run(app, host='0.0.0.0', port=port, debug=False)
     except KeyboardInterrupt:
         logger.info("\n[Main] 用户按下Ctrl+C，正在关闭...")
     except Exception as e:
         logger.error(f"\n[Main] 应用异常退出: {e}")
     finally:
+        # 停止事件清理后台线程（优雅退出）
+        from src.events.event_cleanup_service import stop_event_cleanup_scheduler
+        stop_event_cleanup_scheduler()
         # 调用清理函数（双重保险）
         cleanup_handler()
         logger.info("[Main] 系统已关闭")

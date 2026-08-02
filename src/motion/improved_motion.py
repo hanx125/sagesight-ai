@@ -1,7 +1,7 @@
 """
 改进版运动检测模块
 
-基于Frigate的帧差法实现，CPU占用比MOG2低5倍
+基于帧差法实现，CPU占用比MOG2低5倍
 
 特性：
 - 帧差法（比MOG2快5倍）
@@ -16,6 +16,9 @@ import numpy as np
 from typing import List, Tuple
 from dataclasses import dataclass
 from scipy.ndimage import gaussian_filter
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -388,9 +391,9 @@ def benchmark():
     """性能测试"""
     import time
 
-    print("\n" + "="*70)
-    print("改进版运动检测器性能测试")
-    print("="*70)
+    logger.debug("\n" + "="*70)
+    logger.debug("改进版运动检测器性能测试")
+    logger.debug("="*70)
 
     # 创建测试帧
     frame = np.random.randint(0, 255, (640, 640, 3), dtype=np.uint8)
@@ -398,11 +401,11 @@ def benchmark():
     # 测试改进版
     detector = ImprovedMotionDetector(frame_shape=(640, 640))
 
-    print("\n预热（30 帧）...")
+    logger.debug("\n预热（30 帧）...")
     for i in range(30):
         detector.detect(frame)
 
-    print("\n性能测试（100 帧）...")
+    logger.debug("\n性能测试（100 帧）...")
     start_time = time.time()
     for i in range(100):
         motion_regions = detector.detect(frame)
@@ -411,9 +414,9 @@ def benchmark():
     fps = 100 / elapsed
     avg_time = elapsed / 100 * 1000
 
-    print(f"  FPS: {fps:.1f}")
-    print(f"  平均延迟：{avg_time:.2f}ms")
-    print("="*70)
+    logger.debug(f"  FPS: {fps:.1f}")
+    logger.debug(f"  平均延迟：{avg_time:.2f}ms")
+    logger.debug("="*70)
 
 
 if __name__ == "__main__":

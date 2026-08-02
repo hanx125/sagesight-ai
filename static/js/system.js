@@ -942,6 +942,10 @@ switchTab = function(tabId) {
     if (tabId === 'config') {
         loadSystemConfig();
     }
+    // 切换到数据库管理页时加载数据库信息
+    if (tabId === 'database') {
+        loadDatabaseInfo();
+    }
 };
 
 // ========================================
@@ -981,12 +985,13 @@ async function loadSystemConfig() {
             document.getElementById('mqttQos').value = String(mqttConfig.qos ?? 1);
             document.getElementById('mqttRetain').value = String(mqttConfig.retain || false);
             
-            // WebSocket
-            const ws = data.websocket || {};
-            document.getElementById('websocketEnabled').checked = ws.enabled === true;
-            const wsConfig = ws.config || {};
-            document.getElementById('websocketHost').value = wsConfig.host || '0.0.0.0';
-            document.getElementById('websocketPort').value = wsConfig.port || 8765;
+            // 实时通信配置（Socket.IO + 原生 WebSocket）
+            const webServer = data.web_server || {};
+            const socketio = webServer.socketio || {};
+            document.getElementById('socketioCors').value = socketio.cors_allowed_origins || '*';
+            const rawWs = webServer.raw_websocket || {};
+            document.getElementById('rawWebsocketEnabled').checked = rawWs.enabled !== false;
+            document.getElementById('rawWebsocketPath').value = rawWs.path || '/ws/raw';
         }
     } catch (error) {
         showNotification('加载配置失败', 'error');
@@ -1023,11 +1028,13 @@ async function saveSystemConfig() {
                 retain: document.getElementById('mqttRetain').value === 'true'
             }
         },
-        websocket: {
-            enabled: document.getElementById('websocketEnabled').checked,
-            config: {
-                host: document.getElementById('websocketHost').value,
-                port: parseInt(document.getElementById('websocketPort').value) || 8765
+        web_server: {
+            socketio: {
+                cors_allowed_origins: document.getElementById('socketioCors').value || '*'
+            },
+            raw_websocket: {
+                enabled: document.getElementById('rawWebsocketEnabled').checked,
+                path: document.getElementById('rawWebsocketPath').value || '/ws/raw'
             }
         }
     };
@@ -1049,5 +1056,154 @@ async function saveSystemConfig() {
     } catch (error) {
         showNotification('保存配置失败', 'error');
         console.error('保存系统配置失败:', error);
+    }
+}
+
+// ========================================
+// 数据库管理（路径设置 + 备份/恢复）
+// ========================================
+
+async function loadDatabaseInfo() {
+    try {
+        const response = await fetch('/api/system/database/info');
+        const data = await response.json();
+
+        if (response.ok) {
+            document.getElementById('dbCurrentPath').value = data.path || '未配置';
+            document.getElementById('dbType').value = data.type || 'sqlite';
+            document.getElementById('dbFileSize').value = data.exists ? data.size_display : '文件不存在';
+            document.getElementById('dbBackupCount').value = (data.backup_count || 0) + ' 个备份';
+            document.getElementById('dbPathInput').value = data.path || 'data/tasks.db';
+
+            // 渲染备份列表
+            renderBackupList(data.backups || []);
+        }
+    } catch (error) {
+        showNotification('加载数据库信息失败', 'error');
+        console.error('加载数据库信息失败:', error);
+    }
+}
+
+function renderBackupList(backups) {
+    const list = document.getElementById('dbBackupList');
+    if (!list) return;
+
+    if (!backups || backups.length === 0) {
+        list.innerHTML = '<div class="notify-empty">暂无备份</div>';
+        return;
+    }
+
+    list.innerHTML = backups.map(b => {
+        const date = new Date(b.created_at * 1000);
+        const dateStr = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;
+        return `
+            <div class="backup-item" style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border-color,#f0f0f0);">
+                <div>
+                    <div style="font-size:13px;color:var(--text-primary);">${b.filename}</div>
+                    <div style="font-size:12px;color:var(--text-secondary);">${dateStr} · ${b.size_display}</div>
+                </div>
+                <button class="btn btn-secondary btn-sm" style="color:#f44336;font-size:12px;padding:4px 8px;" onclick="deleteBackup('${b.filename}')">删除</button>
+            </div>
+        `;
+    }).join('');
+}
+
+async function backupDatabase() {
+    try {
+        const response = await fetch('/api/system/database/backup', { method: 'POST' });
+        const data = await response.json();
+
+        if (response.ok) {
+            showNotification(data.message || '备份成功', 'success');
+            loadDatabaseInfo();
+        } else {
+            showNotification(data.error || '备份失败', 'error');
+        }
+    } catch (error) {
+        showNotification('备份失败', 'error');
+        console.error('数据库备份失败:', error);
+    }
+}
+
+async function saveDatabasePath() {
+    const newPath = document.getElementById('dbPathInput').value.trim();
+    if (!newPath) {
+        showNotification('路径不能为空', 'error');
+        return;
+    }
+
+    if (!newPath.endsWith('.db') && !newPath.endsWith('.sqlite') && !newPath.endsWith('.sqlite3')) {
+        showNotification('路径必须以 .db 或 .sqlite 结尾', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/system/database/path', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: newPath })
+        });
+        const data = await response.json();
+
+        if (response.ok) {
+            showNotification(data.message || '路径已保存，重启后生效', 'success');
+        } else {
+            showNotification(data.error || '保存失败', 'error');
+        }
+    } catch (error) {
+        showNotification('保存路径失败', 'error');
+        console.error('保存数据库路径失败:', error);
+    }
+}
+
+async function restoreDatabase(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    if (!confirm(`确定要从 "${file.name}" 恢复数据库吗？\n\n当前数据库将被覆盖（系统会先自动备份当前数据库），重启后生效。`)) {
+        input.value = '';
+        return;
+    }
+
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch('/api/system/database/restore', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+
+        if (response.ok) {
+            showNotification(data.message || '恢复成功，重启后生效', 'success');
+        } else {
+            showNotification(data.error || '恢复失败', 'error');
+        }
+    } catch (error) {
+        showNotification('恢复失败', 'error');
+        console.error('数据库恢复失败:', error);
+    }
+    input.value = '';
+}
+
+async function deleteBackup(filename) {
+    if (!confirm(`确定要删除备份 "${filename}" 吗？`)) return;
+
+    try {
+        const response = await fetch(`/api/system/database/backups/${encodeURIComponent(filename)}`, {
+            method: 'DELETE'
+        });
+        const data = await response.json();
+
+        if (response.ok) {
+            showNotification(data.message || '已删除', 'success');
+            loadDatabaseInfo();
+        } else {
+            showNotification(data.error || '删除失败', 'error');
+        }
+    } catch (error) {
+        showNotification('删除失败', 'error');
+        console.error('删除备份失败:', error);
     }
 }

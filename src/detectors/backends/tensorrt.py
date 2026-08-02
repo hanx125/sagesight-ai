@@ -27,15 +27,18 @@ from typing import List, Dict, Optional, Tuple
 import numpy as np
 
 from src.detectors.base import BaseDetector, Detection, DetectorConfig
+import logging
+
+logger = logging.getLogger(__name__)
 
 # TensorRT 支持
 TRT_AVAILABLE = False
 try:
     import tensorrt as trt
     TRT_AVAILABLE = True
-    print(f"[TensorRTDetector] TensorRT 已加载")
+    logger.debug(f"[TensorRTDetector] TensorRT 已加载")
 except ImportError:
-    print(f"[TensorRTDetector] TensorRT 未安装")
+    logger.debug(f"[TensorRTDetector] TensorRT 未安装")
 
 
 def _setup_tensorrt_lib_path(config_tensorrt_lib_path: str = "") -> str:
@@ -123,23 +126,23 @@ class TensorRTDetector(BaseDetector):
         # 由于直接 TensorRT 推理需要 GPU 内存管理，这里简化处理
         # 实际生产环境建议使用 ONNX Runtime TensorRT EP
         
-        print(f"[TensorRTDetector] 初始化完成")
+        logger.debug(f"[TensorRTDetector] 初始化完成")
     
     def initialize(self):
         """
         初始化检测器（加载模型）
         """
         try:
-            print(f"[TensorRTDetector] 正在初始化检测器...")
-            print(f"[TensorRTDetector]   Engine路径: {self.config.tensorrt_engine_path}")
+            logger.debug(f"[TensorRTDetector] 正在初始化检测器...")
+            logger.debug(f"[TensorRTDetector]   Engine路径: {self.config.tensorrt_engine_path}")
             sys.stdout.flush()
             
             self.load_model()
             
-            print(f"[TensorRTDetector] 检测器初始化完成")
+            logger.debug(f"[TensorRTDetector] 检测器初始化完成")
             sys.stdout.flush()
         except Exception as e:
-            print(f"[TensorRTDetector] 检测器初始化失败: {e}")
+            logger.debug(f"[TensorRTDetector] 检测器初始化失败: {e}")
             sys.stdout.flush()
             raise
     
@@ -212,18 +215,18 @@ class TensorRTDetector(BaseDetector):
                     self.input_name = name
                     self._input_shape_trt = shape
                     self.input_shape = tuple(shape)
-                    print(f"  [INPUT] {name}: 形状={shape}, 类型={dtype}")
+                    logger.debug(f"  [INPUT] {name}: 形状={shape}, 类型={dtype}")
                 else:
                     self._output_name = name
                     self._output_shape_trt = shape
-                    print(f"  [OUTPUT] {name}: 形状={shape}, 类型={dtype}")
+                    logger.debug(f"  [OUTPUT] {name}: 形状={shape}, 类型={dtype}")
             
             # 打印加载信息
             engine_size_mb = os.path.getsize(engine_path) / (1024 * 1024)
-            print(f"[TensorRTDetector] TensorRT Engine 加载成功：{engine_path}")
-            print(f"  输入名称：{self.input_name}")
-            print(f"  输入形状：{self.input_shape}")
-            print(f"  Engine 大小：{engine_size_mb:.1f} MB")
+            logger.debug(f"[TensorRTDetector] TensorRT Engine 加载成功：{engine_path}")
+            logger.debug(f"  输入名称：{self.input_name}")
+            logger.debug(f"  输入形状：{self.input_shape}")
+            logger.debug(f"  Engine 大小：{engine_size_mb:.1f} MB")
             
         except Exception as e:
             raise RuntimeError(f"TensorRT Engine 加载失败：{e}")
@@ -284,8 +287,8 @@ class TensorRTDetector(BaseDetector):
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            print(f"[TensorRTDetector] 推理失败：{e}")
-            print(f"[TensorRTDetector] 错误详情:\n{error_details}")
+            logger.debug(f"[TensorRTDetector] 推理失败：{e}")
+            logger.debug(f"[TensorRTDetector] 错误详情:\n{error_details}")
             raise
     
     def _infer_with_cuda_python(self, input_tensor: np.ndarray) -> List[Detection]:
@@ -385,7 +388,7 @@ class TensorRTDetector(BaseDetector):
             del self._runtime
             self._runtime = None
         
-        print("[TensorRTDetector] 模型已卸载")
+        logger.debug("[TensorRTDetector] 模型已卸载")
     
     def get_info(self) -> Dict:
         """

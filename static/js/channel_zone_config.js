@@ -307,6 +307,7 @@ function onZoneSelected(zone) {
         document.getElementById('zonePropLoitering').value = zone.enable_loitering_detection ? 'true' : 'false';
         document.getElementById('zonePropLoiteringTime').value = zone.loitering_time;
         document.getElementById('zonePropLoiteringTime').disabled = !zone.enable_loitering_detection;
+        document.getElementById('zonePropInertia').value = zone.inertia || 3;
 
         // “重新绘制”按钮：选中区域后可用
         if (redrawBtn) redrawBtn.disabled = false;
@@ -422,6 +423,8 @@ function clearZoneProperties() {
         timeEl.value = 30;
         timeEl.disabled = true;
     }
+    const inertiaEl = document.getElementById('zonePropInertia');
+    if (inertiaEl) inertiaEl.value = 3;
     // 无选中区域时禁用“重新绘制”按钮
     const redrawBtn = document.getElementById('redrawZoneBtn');
     if (redrawBtn) redrawBtn.disabled = true;
@@ -442,6 +445,7 @@ function onZonePropChange() {
     zone.required = document.getElementById('zonePropRequired').value === 'true';
     zone.enable_loitering_detection = document.getElementById('zonePropLoitering').value === 'true';
     zone.loitering_time = parseInt(document.getElementById('zonePropLoiteringTime').value) || 30;
+    zone.inertia = parseInt(document.getElementById('zonePropInertia').value) || 3;
 
     // 启用/禁用徘徊时间输入
     document.getElementById('zonePropLoiteringTime').disabled = !zone.enable_loitering_detection;

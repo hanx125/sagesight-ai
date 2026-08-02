@@ -917,8 +917,8 @@ def yuv_region_2_yuv(frame, region):
         yuv_cropped_frame = yuv_crop_and_resize(frame, region)
         return yuv_to_3_channel_yuv(yuv_cropped_frame)
     except:
-        print(f"frame.shape: {frame.shape}")
-        print(f"region: {region}")
+        logger.debug(f"frame.shape: {frame.shape}")
+        logger.debug(f"region: {region}")
         raise
 
 
@@ -934,8 +934,8 @@ def yuv_region_2_rgb(frame, region):
         yuv_cropped_frame = yuv_crop_and_resize(frame, region)
         return cv2.cvtColor(yuv_cropped_frame, cv2.COLOR_YUV2RGB_I420)
     except:
-        print(f"frame.shape: {frame.shape}")
-        print(f"region: {region}")
+        logger.debug(f"frame.shape: {frame.shape}")
+        logger.debug(f"region: {region}")
         raise
 
 
@@ -951,8 +951,8 @@ def yuv_region_2_bgr(frame, region):
         yuv_cropped_frame = yuv_crop_and_resize(frame, region)
         return cv2.cvtColor(yuv_cropped_frame, cv2.COLOR_YUV2BGR_I420)
     except:
-        print(f"frame.shape: {frame.shape}")
-        print(f"region: {region}")
+        logger.debug(f"frame.shape: {frame.shape}")
+        logger.debug(f"region: {region}")
         raise
 
 

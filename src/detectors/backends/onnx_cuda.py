@@ -23,6 +23,9 @@ import numpy as np
 import onnxruntime as ort
 
 from src.detectors.base import BaseDetector, Detection, DetectorConfig
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ONNXCUDADetector(BaseDetector):
@@ -57,7 +60,7 @@ class ONNXCUDADetector(BaseDetector):
         self._device_id = config.device_id
         self._gpu_mem_limit = config.gpu_mem_limit
         
-        print(f"[ONNXCUDADetector] 初始化完成")
+        logger.debug(f"[ONNXCUDADetector] 初始化完成")
     
     def initialize(self):
         """
@@ -66,17 +69,17 @@ class ONNXCUDADetector(BaseDetector):
         此方法在创建对象后调用，用于延迟加载模型。
         """
         try:
-            print(f"[ONNXCUDADetector] 正在初始化检测器...")
-            print(f"[ONNXCUDADetector]   模型路径: {self.config.model_path}")
-            print(f"[ONNXCUDADetector]   GPU设备ID: {self._device_id}")
+            logger.debug(f"[ONNXCUDADetector] 正在初始化检测器...")
+            logger.debug(f"[ONNXCUDADetector]   模型路径: {self.config.model_path}")
+            logger.debug(f"[ONNXCUDADetector]   GPU设备ID: {self._device_id}")
             sys.stdout.flush()
             
             self.load_model()
             
-            print(f"[ONNXCUDADetector] 检测器初始化完成")
+            logger.debug(f"[ONNXCUDADetector] 检测器初始化完成")
             sys.stdout.flush()
         except Exception as e:
-            print(f"[ONNXCUDADetector] 检测器初始化失败: {e}")
+            logger.debug(f"[ONNXCUDADetector] 检测器初始化失败: {e}")
             sys.stdout.flush()
             raise
     
@@ -113,10 +116,10 @@ class ONNXCUDADetector(BaseDetector):
             # 尝试启用 CUDA Graph 加速（需要 ONNX Runtime 1.17+）
             try:
                 session_options.enable_cuda_graph = True
-                print(f"[ONNXCUDADetector] CUDA Graph 加速已启用")
+                logger.debug(f"[ONNXCUDADetector] CUDA Graph 加速已启用")
             except AttributeError:
                 # 旧版本不支持 CUDA Graph，跳过
-                print(f"[ONNXCUDADetector] 当前版本不支持 CUDA Graph，使用默认优化")
+                logger.debug(f"[ONNXCUDADetector] 当前版本不支持 CUDA Graph，使用默认优化")
             
             # 启用图优化
             session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -136,15 +139,23 @@ class ONNXCUDADetector(BaseDetector):
                 # - 'kSameAsRequested': 按需分配，节省内存
                 # - 'kNextPowerOfTwo': 按2的幂次分配，减少碎片
                 'arena_extend_strategy': 'kSameAsRequested',
-                
-                # GPU 内存限制（字节）
-                # 超过限制会回退到 CPU
-                'gpu_mem_limit': self._gpu_mem_limit,
-                
+
                 # cuDNN 卷积 padding 优化
                 'cudnn_conv1d_pad_to_nc1d': True,
             }
-            
+
+            # GPU 内存限制（字节）保护：
+            # 仅在合理值（>= 1GB）时传给 ONNX，避免历史任务的错误小值
+            # （如 6144 字节，把 GB 误当 KB）导致 BFCArena 分配失败、模型加载崩溃。
+            # 不传该键时 ONNX 使用默认（不限制 GPU 显存）。
+            MIN_GPU_MEM_LIMIT = 1024 * 1024 * 1024  # 1GB
+            if self._gpu_mem_limit and self._gpu_mem_limit >= MIN_GPU_MEM_LIMIT:
+                cuda_options['gpu_mem_limit'] = self._gpu_mem_limit
+            elif self._gpu_mem_limit:
+                logger.debug(f"[ONNXCUDADetector] [警告] gpu_mem_limit={self._gpu_mem_limit} 字节 "
+                      f"(< 1GB)，疑似配置错误（GB 误当 KB），已忽略，使用 ONNX 默认（不限制显存）")
+                sys.stdout.flush()
+
             # Provider 列表（CUDA优先，CPU作为回退）
             providers = [
                 ('CUDAExecutionProvider', cuda_options),
@@ -169,22 +180,22 @@ class ONNXCUDADetector(BaseDetector):
             active_providers = self.session.get_providers()
             
             # 打印加载信息
-            print(f"[ONNXCUDADetector] ONNX 模型加载成功（CUDA 后端）：{model_path}")
-            print(f"  输入名称：{self.input_name}")
-            print(f"  输入形状：{self.input_shape}")
-            print(f"  可用 Provider: {active_providers}")
-            print(f"  GPU 设备ID: {self._device_id}")
-            print(f"  GPU 内存限制: {self._gpu_mem_limit / (1024**3):.1f} GB")
+            logger.debug(f"[ONNXCUDADetector] ONNX 模型加载成功（CUDA 后端）：{model_path}")
+            logger.debug(f"  输入名称：{self.input_name}")
+            logger.debug(f"  输入形状：{self.input_shape}")
+            logger.debug(f"  可用 Provider: {active_providers}")
+            logger.debug(f"  GPU 设备ID: {self._device_id}")
+            logger.debug(f"  GPU 内存限制: {self._gpu_mem_limit / (1024**3):.1f} GB")
             
             # 验证 CUDA Provider 是否生效
             if 'CUDAExecutionProvider' not in active_providers:
-                print(f"[ONNXCUDADetector] [警告] CUDA EP 未激活！实际使用：{active_providers}")
-                print(f"[ONNXCUDADetector] 可能原因：")
-                print(f"    1. CUDA 未正确安装")
-                print(f"    2. ONNX Runtime GPU 版本未安装")
-                print(f"    3. GPU 驱动版本不兼容")
+                logger.debug(f"[ONNXCUDADetector] [警告] CUDA EP 未激活！实际使用：{active_providers}")
+                logger.debug(f"[ONNXCUDADetector] 可能原因：")
+                logger.debug(f"    1. CUDA 未正确安装")
+                logger.debug(f"    2. ONNX Runtime GPU 版本未安装")
+                logger.debug(f"    3. GPU 驱动版本不兼容")
             else:
-                print(f"[ONNXCUDADetector] [OK] CUDA EP 已确认激活")
+                logger.debug(f"[ONNXCUDADetector] [OK] CUDA EP 已确认激活")
             
         except Exception as e:
             raise RuntimeError(f"模型加载失败：{e}")
@@ -244,8 +255,8 @@ class ONNXCUDADetector(BaseDetector):
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            print(f"[ONNXCUDADetector] 推理失败：{e}")
-            print(f"[ONNXCUDADetector] 错误详情:\n{error_details}")
+            logger.debug(f"[ONNXCUDADetector] 推理失败：{e}")
+            logger.debug(f"[ONNXCUDADetector] 错误详情:\n{error_details}")
             raise RuntimeError(f"推理失败：{e}")
     
     def unload_model(self):
@@ -260,7 +271,7 @@ class ONNXCUDADetector(BaseDetector):
             self.input_name = None
             self.input_shape = None
         
-        print("[ONNXCUDADetector] 模型已卸载")
+        logger.debug("[ONNXCUDADetector] 模型已卸载")
     
     def get_info(self) -> Dict:
         """

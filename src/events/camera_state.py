@@ -25,7 +25,6 @@
 
 import logging
 import threading
-import time
 from collections import defaultdict
 from typing import Callable, Optional
 
@@ -82,14 +81,9 @@ class CameraState:
         self.object_counts: dict[str, int] = defaultdict(int)
         self.active_object_counts: dict[str, int] = defaultdict(int)
 
-        # Zone 区域检测管理器
+        # Zone 区域检测管理器（zone 检测在 TrackedObject 内部完成，
+        # 此处仅保留用于查询启用了徘徊检测的区域，供按需预读帧判断）
         self.zone_manager = ZoneManager(self.zones_config, frame_shape)
-
-        # 区域进入时间记录（徘徊检测用）: {obj_id: {zone_name: entry_time}}
-        self.zone_entry_times: dict[str, dict[str, float]] = defaultdict(dict)
-
-        # 已触发徘徊事件的对象（避免重复触发）: {(obj_id, zone_name)}
-        self.loitering_triggered: set = set()
 
         # 当前帧信息
         self.current_frame_time: float = 0.0
@@ -158,20 +152,9 @@ class CameraState:
             removed_ids = previous_ids - current_ids
             updated_ids = current_ids & previous_ids
 
-            # ========================================
-            # Zone 区域检测：计算每个目标当前所在的区域
-            # ========================================
-            previous_zone_map = {}  # {obj_id: [zone_names]}
-            if self.zone_manager.zones:
-                # 记录之前的区域状态（在修改 tracked_objects 之前）
-                for obj_id, obj_dict in self.tracked_objects.items():
-                    previous_zone_map[obj_id] = list(obj_dict.get("current_zones", []))
-                # 计算当前帧中每个目标所在的区域
-                for obj_id, obj_dict in current_tracked_objects.items():
-                    bbox = obj_dict.get("box", [0, 0, 0, 0])
-                    obj_dict["current_zones"] = self.zone_manager.get_object_zones(bbox)
-
             # 处理新增目标
+            # 注意：current_zones / entered_zones / pending_loitering 由 TrackedObject 维护，
+            # 直接随 to_dict() 输出，此处不再覆盖。
             for obj_id in new_ids:
                 obj_dict = current_tracked_objects[obj_id]
                 self.tracked_objects[obj_id] = obj_dict
@@ -276,14 +259,6 @@ class CameraState:
                 # 从跟踪对象中移除
                 del self.tracked_objects[obj_id]
 
-            # ========================================
-            # Zone 区域事件检测：进入/离开区域、徘徊检测
-            # ========================================
-            if self.zone_manager.zones:
-                self._detect_zone_events(
-                    current_tracked_objects, previous_zone_map, frame_time
-                )
-
     def _is_significant_change(self, old_obj: dict, new_obj: dict) -> bool:
         """
         判断目标是否有显著变化
@@ -372,131 +347,6 @@ class CameraState:
             "top_score", 0
         ):
             self.best_objects[label] = obj_dict.copy()
-
-    def _detect_zone_events(
-        self,
-        current_tracked_objects: dict[str, dict],
-        previous_zone_map: dict[str, list],
-        frame_time: float,
-    ):
-        """检测 Zone 区域进入/离开事件和徘徊检测
-
-        比较每个目标的前后区域状态，触发 zone_enter / zone_exit 回调。
-        同时检查启用了徘徊检测的区域，触发 loitering 事件。
-
-        Args:
-            current_tracked_objects: 当前帧的跟踪对象字典
-            previous_zone_map: 之前的区域状态 {obj_id: [zone_names]}
-            frame_time: 当前帧时间
-        """
-        current_ids = set(current_tracked_objects.keys())
-        previous_ids = set(previous_zone_map.keys())
-
-        # 检查所有目标（包括消失的目标）的区域变化
-        all_obj_ids = current_ids | previous_ids
-
-        for obj_id in all_obj_ids:
-            old_zones = set(previous_zone_map.get(obj_id, []))
-            new_zones = set()
-
-            if obj_id in current_tracked_objects:
-                obj_dict = current_tracked_objects[obj_id]
-                new_zones = set(obj_dict.get("current_zones", []))
-
-            # 进入区域
-            entered_zones = new_zones - old_zones
-            for zone_name in entered_zones:
-                # 记录进入时间（徘徊检测用）
-                self.zone_entry_times[obj_id][zone_name] = time.time()
-                # 触发 zone_enter 回调
-                obj_dict = current_tracked_objects.get(obj_id, {})
-                for callback in self.callbacks.get("zone_enter", []):
-                    try:
-                        callback(self.camera_id, obj_dict, frame_time, zone_name)
-                    except Exception as e:
-                        logger.error(
-                            f"[CameraState-{self.camera_id}] zone_enter 回调失败: {e}",
-                            exc_info=True,
-                        )
-
-            # 离开区域
-            exited_zones = old_zones - new_zones
-            for zone_name in exited_zones:
-                # 清除进入时间和徘徊标记
-                self.zone_entry_times.get(obj_id, {}).pop(zone_name, None)
-                self.loitering_triggered.discard((obj_id, zone_name))
-                # 触发 zone_exit 回调
-                obj_dict = current_tracked_objects.get(obj_id, {})
-                if not obj_dict:
-                    obj_dict = {"id": obj_id, "current_zones": []}
-                for callback in self.callbacks.get("zone_exit", []):
-                    try:
-                        callback(self.camera_id, obj_dict, frame_time, zone_name)
-                    except Exception as e:
-                        logger.error(
-                            f"[CameraState-{self.camera_id}] zone_exit 回调失败: {e}",
-                            exc_info=True,
-                        )
-
-        # 清理消失目标的区域记录
-        removed_ids = previous_ids - current_ids
-        for obj_id in removed_ids:
-            self.zone_entry_times.pop(obj_id, None)
-            self.loitering_triggered = {
-                (oid, zn) for oid, zn in self.loitering_triggered
-                if oid != obj_id
-            }
-
-        # 徘徊检测
-        self._check_loitering(current_tracked_objects, frame_time)
-
-    def _check_loitering(self, current_tracked_objects: dict, frame_time: float):
-        """检查区域徘徊检测
-
-        对于启用了徘徊检测的区域，如果目标在区域内停留超过阈值时间，
-        触发 "loitering" 回调。每个目标在每个区域只触发一次。
-
-        Args:
-            current_tracked_objects: 当前帧的跟踪对象字典
-            frame_time: 当前帧时间
-        """
-        loitering_zones = self.zone_manager.get_loitering_zones()
-        if not loitering_zones:
-            return
-
-        loitering_zone_map = {z.name: z.loitering_time for z in loitering_zones}
-        now = time.time()
-
-        for obj_id, obj_dict in current_tracked_objects.items():
-            current_zones = obj_dict.get("current_zones", [])
-            entry_times = self.zone_entry_times.get(obj_id, {})
-
-            for zone_name in current_zones:
-                if zone_name not in loitering_zone_map:
-                    continue
-
-                entry_time = entry_times.get(zone_name)
-                if entry_time is None:
-                    continue
-
-                dwell_time = now - entry_time
-                threshold = loitering_zone_map[zone_name]
-
-                if dwell_time >= threshold and (obj_id, zone_name) not in self.loitering_triggered:
-                    self.loitering_triggered.add((obj_id, zone_name))
-                    logger.info(
-                        f"[CameraState-{self.camera_id}] 徘徊检测触发: "
-                        f"obj_id={obj_id}, zone={zone_name}, "
-                        f"dwell_time={dwell_time:.1f}s, threshold={threshold}s"
-                    )
-                    for callback in self.callbacks.get("loitering", []):
-                        try:
-                            callback(self.camera_id, obj_dict, frame_time, zone_name)
-                        except Exception as e:
-                            logger.error(
-                                f"[CameraState-{self.camera_id}] loitering 回调失败: {e}",
-                                exc_info=True,
-                            )
 
     def finished(self, obj_id: str):
         """标记对象已结束（从跟踪对象中移除）"""

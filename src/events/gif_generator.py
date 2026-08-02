@@ -11,6 +11,9 @@ import cv2
 import numpy as np
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class GIFGenerator:
@@ -28,7 +31,7 @@ class GIFGenerator:
         # GIF 功能开关（总开关）
         self.enabled = self.config.get('enabled', True)
         if not self.enabled:
-            print(f"[GIFGenerator] GIF 功能已禁用")
+            logger.debug(f"[GIFGenerator] GIF 功能已禁用")
             return
         
         # GIF 参数
@@ -60,7 +63,7 @@ class GIFGenerator:
             self.local_enabled, self.minio_enabled, self.ftp_enabled = method_mapping.get(
                 legacy_method, (True, False, False)
             )
-            print(f"[GIFGenerator] 旧版 output_method='{legacy_method}' 已自动迁移为独立开关")
+            logger.debug(f"[GIFGenerator] 旧版 output_method='{legacy_method}' 已自动迁移为独立开关")
 
         # 本地输出目录
         self.output_dir = self.config.get('output_dir', 'data/gifs')
@@ -96,15 +99,15 @@ class GIFGenerator:
         if self.auto_cleanup:
             self._cleanup_old_files()
 
-        print(f"[GIFGenerator] 初始化完成")
-        print(f"[GIFGenerator]   功能状态: 已启用")
-        print(f"[GIFGenerator]   最大帧数: {self.max_frames}")
-        print(f"[GIFGenerator]   帧率: {self.fps} FPS")
-        print(f"[GIFGenerator]   存储开关: local={self.local_enabled}, minio={self.minio_enabled}, ftp={self.ftp_enabled}")
+        logger.debug(f"[GIFGenerator] 初始化完成")
+        logger.debug(f"[GIFGenerator]   功能状态: 已启用")
+        logger.debug(f"[GIFGenerator]   最大帧数: {self.max_frames}")
+        logger.debug(f"[GIFGenerator]   帧率: {self.fps} FPS")
+        logger.debug(f"[GIFGenerator]   存储开关: local={self.local_enabled}, minio={self.minio_enabled}, ftp={self.ftp_enabled}")
         if self.local_enabled or self.auto_cleanup:
-            print(f"[GIFGenerator]   输出目录: {self.output_dir}")
-            print(f"[GIFGenerator]   本地保存天数: {self.local_retention_days}")
-            print(f"[GIFGenerator]   自动清理: {self.auto_cleanup}")
+            logger.debug(f"[GIFGenerator]   输出目录: {self.output_dir}")
+            logger.debug(f"[GIFGenerator]   本地保存天数: {self.local_retention_days}")
+            logger.debug(f"[GIFGenerator]   自动清理: {self.auto_cleanup}")
     
     def _init_minio_outputter(self):
         """初始化 MinIO 输出器"""
@@ -115,7 +118,7 @@ class GIFGenerator:
 
             # 检查是否启用 MinIO
             if not global_minio_config.get('enabled', False):
-                print(f"[GIFGenerator] MinIO 已禁用，跳过初始化")
+                logger.debug(f"[GIFGenerator] MinIO 已禁用，跳过初始化")
                 return
 
             from .minio_outputter import MinIOOutputter
@@ -151,11 +154,11 @@ class GIFGenerator:
             
             self.minio_outputter = MinIOOutputter(minio_config)
             
-            print(f"[GIFGenerator] MinIO 输出器已初始化")
-            print(f"[GIFGenerator]   Bucket: {minio_config.get('bucket')}")
+            logger.debug(f"[GIFGenerator] MinIO 输出器已初始化")
+            logger.debug(f"[GIFGenerator]   Bucket: {minio_config.get('bucket')}")
             
         except Exception as e:
-            print(f"[GIFGenerator] MinIO 输出器初始化失败: {e}")
+            logger.debug(f"[GIFGenerator] MinIO 输出器初始化失败: {e}")
     
     def _init_ftp_outputter(self):
         """初始化 FTP 输出器"""
@@ -166,7 +169,7 @@ class GIFGenerator:
 
             # 检查是否启用 FTP
             if not global_ftp_config.get('enabled', False):
-                print(f"[GIFGenerator] FTP 已禁用，跳过初始化")
+                logger.debug(f"[GIFGenerator] FTP 已禁用，跳过初始化")
                 return
 
             from .ftp_outputter import FTPOutputter
@@ -203,11 +206,11 @@ class GIFGenerator:
             
             self.ftp_outputter = FTPOutputter(ftp_config)
             
-            print(f"[GIFGenerator] FTP 输出器已初始化")
-            print(f"[GIFGenerator]   Remote Dir: {ftp_config.get('remote_dir')}")
+            logger.debug(f"[GIFGenerator] FTP 输出器已初始化")
+            logger.debug(f"[GIFGenerator]   Remote Dir: {ftp_config.get('remote_dir')}")
             
         except Exception as e:
-            print(f"[GIFGenerator] FTP 输出器初始化失败: {e}")
+            logger.debug(f"[GIFGenerator] FTP 输出器初始化失败: {e}")
     
     def generate(self, track_id: int, frames: List[Dict], 
                 output_filename: Optional[str] = None) -> Dict[str, str]:
@@ -228,7 +231,7 @@ class GIFGenerator:
             GIF 路径字典 {'local': path, 'minio': url, 'ftp': url}
         """
         if not frames:
-            print(f"[GIFGenerator] 警告：帧序列为空，无法生成 GIF")
+            logger.debug(f"[GIFGenerator] 警告：帧序列为空，无法生成 GIF")
             return {}
         
         # 限制帧数
@@ -346,7 +349,7 @@ class GIFGenerator:
             processed_frames.append(cropped)
         
         if not processed_frames:
-            print(f"[GIFGenerator] 警告：处理后帧序列为空")
+            logger.debug(f"[GIFGenerator] 警告：处理后帧序列为空")
             return {}
         
         # 根据帧时间戳计算实际时长（毫秒/帧）
@@ -357,14 +360,14 @@ class GIFGenerator:
             gif_bytes = self._generate_gif_bytes(processed_frames, actual_duration)
             
             if gif_bytes is None:
-                print(f"[GIFGenerator] GIF 生成失败")
+                logger.debug(f"[GIFGenerator] GIF 生成失败")
                 return {}
             
-            print(f"[GIFGenerator] GIF 已生成")
-            print(f"[GIFGenerator]   帧数: {len(processed_frames)}")
-            print(f"[GIFGenerator]   尺寸: {processed_frames[0].shape[1]}x{processed_frames[0].shape[0]}")
-            print(f"[GIFGenerator]   大小: {len(gif_bytes) / 1024:.1f} KB")
-            print(f"[GIFGenerator]   每帧时长: {actual_duration}ms")
+            logger.debug(f"[GIFGenerator] GIF 已生成")
+            logger.debug(f"[GIFGenerator]   帧数: {len(processed_frames)}")
+            logger.debug(f"[GIFGenerator]   尺寸: {processed_frames[0].shape[1]}x{processed_frames[0].shape[0]}")
+            logger.debug(f"[GIFGenerator]   大小: {len(gif_bytes) / 1024:.1f} KB")
+            logger.debug(f"[GIFGenerator]   每帧时长: {actual_duration}ms")
             
             # 上传 GIF
             gif_urls = self._upload_gif(output_filename, gif_bytes)
@@ -373,7 +376,7 @@ class GIFGenerator:
             return gif_urls
             
         except Exception as e:
-            print(f"[GIFGenerator] GIF 生成失败: {e}")
+            logger.debug(f"[GIFGenerator] GIF 生成失败: {e}")
             return {}
     
     def _upload_gif(self, filename: str, gif_bytes: bytes) -> Dict[str, str]:
@@ -396,9 +399,9 @@ class GIFGenerator:
                 gif_filename = filename.replace('.jpg', '.gif') if filename.endswith('.jpg') else filename
                 url = self.minio_outputter.upload(gif_filename, gif_bytes)
                 urls['minio'] = url
-                print(f"[GIFGenerator] GIF 已上传到 MinIO: {gif_filename}")
+                logger.debug(f"[GIFGenerator] GIF 已上传到 MinIO: {gif_filename}")
             except Exception as e:
-                print(f"[GIFGenerator] MinIO 上传失败: {e}")
+                logger.debug(f"[GIFGenerator] MinIO 上传失败: {e}")
         
         # 上传到 FTP
         if self.ftp_outputter:
@@ -406,9 +409,9 @@ class GIFGenerator:
                 gif_filename = filename.replace('.jpg', '.gif') if filename.endswith('.jpg') else filename
                 url = self.ftp_outputter.upload(gif_filename, gif_bytes)
                 urls['ftp'] = url
-                print(f"[GIFGenerator] GIF 已上传到 FTP: {gif_filename}")
+                logger.debug(f"[GIFGenerator] GIF 已上传到 FTP: {gif_filename}")
             except Exception as e:
-                print(f"[GIFGenerator] FTP 上传失败: {e}")
+                logger.debug(f"[GIFGenerator] FTP 上传失败: {e}")
         
         # 保存到本地（开关启用，或远程上传失败时作为备份）
         if self.local_enabled or not urls:
@@ -416,7 +419,7 @@ class GIFGenerator:
             with open(local_path, 'wb') as f:
                 f.write(gif_bytes)
             urls['local'] = local_path
-            print(f"[GIFGenerator] GIF 已保存到本地: {local_path}")
+            logger.debug(f"[GIFGenerator] GIF 已保存到本地: {local_path}")
         
         return urls
     
@@ -529,7 +532,7 @@ class GIFGenerator:
             return duration_per_frame
             
         except Exception as e:
-            print(f"[GIFGenerator] 时间跨度计算失败，使用默认时长: {e}")
+            logger.debug(f"[GIFGenerator] 时间跨度计算失败，使用默认时长: {e}")
             return self.duration
     
     def _generate_gif_bytes(self, frames: List[np.ndarray], duration: int = None) -> Optional[bytes]:
@@ -577,10 +580,10 @@ class GIFGenerator:
             return buf.getvalue()
 
         except ImportError:
-            print("[GIFGenerator] PIL 未安装，无法生成 GIF")
+            logger.debug("[GIFGenerator] PIL 未安装，无法生成 GIF")
             return None
         except Exception as e:
-            print(f"[GIFGenerator] GIF 生成错误: {e}")
+            logger.debug(f"[GIFGenerator] GIF 生成错误: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -628,12 +631,12 @@ class GIFGenerator:
             self.last_cleanup_time = current_time
             
             if deleted_count > 0:
-                print(f"[GIFGenerator] 已清理 {deleted_count} 个过期文件")
-                print(f"[GIFGenerator]   释放空间: {total_size / 1024 / 1024:.2f} MB")
-                print(f"[GIFGenerator]   保留天数: {self.local_retention_days}")
+                logger.debug(f"[GIFGenerator] 已清理 {deleted_count} 个过期文件")
+                logger.debug(f"[GIFGenerator]   释放空间: {total_size / 1024 / 1024:.2f} MB")
+                logger.debug(f"[GIFGenerator]   保留天数: {self.local_retention_days}")
         
         except Exception as e:
-            print(f"[GIFGenerator] 清理文件失败: {e}")
+            logger.debug(f"[GIFGenerator] 清理文件失败: {e}")
     
     def close(self):
         """关闭 GIF 生成器"""
@@ -641,4 +644,4 @@ class GIFGenerator:
         if self.auto_cleanup:
             self._cleanup_old_files()
         
-        print("[GIFGenerator] 已关闭")
+        logger.debug("[GIFGenerator] 已关闭")

@@ -80,8 +80,8 @@ class ONVIFAudioBackchannel:
         self.local_rtp_port = 5000
         self.local_rtcp_port = 5001
         
-        logger.info(f"初始化ONVIF Audio Backchannel客户端: {camera_ip}:{camera_port}")
-        logger.info(f"音频配置: codec={audio_codec}, rate={sample_rate}Hz, channels={channels}")
+        logger.debug(f"初始化ONVIF Audio Backchannel客户端: {camera_ip}:{camera_port}")
+        logger.debug(f"音频配置: codec={audio_codec}, rate={sample_rate}Hz, channels={channels}")
     
     def connect(self) -> bool:
         """
@@ -91,9 +91,9 @@ class ONVIFAudioBackchannel:
             bool: 连接是否成功
         """
         try:
-            logger.info("=" * 60)
-            logger.info("[步骤1] 创建RTSP连接")
-            logger.info("=" * 60)
+            logger.debug("=" * 60)
+            logger.debug("[步骤1] 创建RTSP连接")
+            logger.debug("=" * 60)
             
             # 创建RTSP socket
             self.rtsp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -135,7 +135,7 @@ class ONVIFAudioBackchannel:
         realm = auth_parts.get('realm', '')
         nonce = auth_parts.get('nonce', '')
         
-        logger.info(f"[Auth] Digest认证参数: realm={realm}, nonce={nonce}")
+        logger.debug(f"[Auth] Digest认证参数: realm={realm}, nonce={nonce}")
         
         # 计算HA1
         ha1_str = f"{self.username}:{realm}:{self.password}"
@@ -149,7 +149,7 @@ class ONVIFAudioBackchannel:
         response_str = f"{ha1}:{nonce}:{ha2}"
         response = hashlib.md5(response_str.encode()).hexdigest()
         
-        logger.info(f"[Auth] Digest认证响应: {response}")
+        logger.debug(f"[Auth] Digest认证响应: {response}")
         
         # 构建Authorization头
         auth_header = (
@@ -173,14 +173,14 @@ class ONVIFAudioBackchannel:
             Dict: SDP响应信息
         """
         try:
-            logger.info("=" * 60)
-            logger.info("[步骤2] RTSP DESCRIBE - 请求Audio Back Channel")
-            logger.info("=" * 60)
+            logger.debug("=" * 60)
+            logger.debug("[步骤2] RTSP DESCRIBE - 请求Audio Back Channel")
+            logger.debug("=" * 60)
             
             # 构建RTSP URI
             rtsp_uri = f"rtsp://{quote(self.username)}:{quote(self.password)}@{self.camera_ip}:{self.camera_port}{audio_path}"
             
-            logger.info(f"[Request] RTSP URI: {rtsp_uri}")
+            logger.debug(f"[Request] RTSP URI: {rtsp_uri}")
             
             # 第一次DESCRIBE请求（不带认证）
             describe_request = (
@@ -194,20 +194,20 @@ class ONVIFAudioBackchannel:
             
             self.cseq += 1
             
-            logger.info("[Request] 发送DESCRIBE请求（包含Require头）:")
-            logger.info(f"  Require: www.onvif.org/ver20/backchannel")
+            logger.debug("[Request] 发送DESCRIBE请求（包含Require头）:")
+            logger.debug(f"  Require: www.onvif.org/ver20/backchannel")
             
             self.rtsp_socket.send(describe_request.encode())
             
             # 接收响应
             response = self._receive_rtsp_response()
             
-            logger.info("[Response] RTSP响应:")
-            logger.info(response[:500])  # 显示前500字符
+            logger.debug("[Response] RTSP响应:")
+            logger.debug(response[:500])  # 显示前500字符
             
             # 检查认证要求
             if "401 Unauthorized" in response or "401" in response:
-                logger.info("[Auth] 需要Digest认证")
+                logger.debug("[Auth] 需要Digest认证")
                 
                 # 提取WWW-Authenticate头
                 auth_info = ""
@@ -233,15 +233,15 @@ class ONVIFAudioBackchannel:
                     
                     self.cseq += 1
                     
-                    logger.info("[Request] 发送带认证的DESCRIBE请求")
+                    logger.debug("[Request] 发送带认证的DESCRIBE请求")
                     
                     self.rtsp_socket.send(describe_request_auth.encode())
                     
                     # 接收认证后的响应
                     response = self._receive_rtsp_response()
                     
-                    logger.info("[Response] 认证后的响应:")
-                    logger.info(response[:500])
+                    logger.debug("[Response] 认证后的响应:")
+                    logger.debug(response[:500])
             
             # 解析SDP响应
             sdp_info = self._parse_sdp(response)
@@ -337,8 +337,8 @@ class ONVIFAudioBackchannel:
         
         sdp_content = rtsp_response[sdp_start:]
         
-        logger.info("[SDP] 解析SDP内容:")
-        logger.info(sdp_content[:1500])  # 显示前1500字符
+        logger.debug("[SDP] 解析SDP内容:")
+        logger.debug(sdp_content[:1500])  # 显示前1500字符
         
         # 解析SDP
         current_track = None
@@ -370,7 +370,7 @@ class ONVIFAudioBackchannel:
                     'rtpmap': {}  # 存储所有rtpmap
                 }
                 
-                logger.info(f"[SDP] 发现音频轨道: port={port}, payload_types={payload_types}")
+                logger.debug(f"[SDP] 发现音频轨道: port={port}, payload_types={payload_types}")
             
             # 视频轨道
             elif line.startswith('m=video'):
@@ -393,18 +393,18 @@ class ONVIFAudioBackchannel:
                     'track_id': ''
                 }
                 
-                logger.info(f"[SDP] 发现视频轨道: port={port}")
+                logger.debug(f"[SDP] 发现视频轨道: port={port}")
             
             # 音频属性
             elif line.startswith('a=') and current_track:
                 if line == 'a=sendonly':
                     current_track['mode'] = 'sendonly'
-                    logger.info(f"[SDP] Audio Back Channel: {current_track['mode']} (客户端发送音频)")
+                    logger.debug(f"[SDP] Audio Back Channel: {current_track['mode']} (客户端发送音频)")
                     sdp_info['audio_backchannel_supported'] = True
                     
                 elif line == 'a=recvonly':
                     current_track['mode'] = 'recvonly'
-                    logger.info(f"[SDP] 音频接收通道: {current_track['mode']} (摄像机发送音频)")
+                    logger.debug(f"[SDP] 音频接收通道: {current_track['mode']} (摄像机发送音频)")
                     
                 elif line.startswith('a=rtpmap:'):
                     # 解析编码格式
@@ -422,7 +422,7 @@ class ONVIFAudioBackchannel:
                         if str(current_track['payload_type']) == payload_num:
                             current_track['codec'] = codec_info
                         
-                        logger.info(f"[SDP] RTP映射: payload={payload_num}, codec={codec_info}")
+                        logger.debug(f"[SDP] RTP映射: payload={payload_num}, codec={codec_info}")
                 
                 elif line.startswith('a=control:'):
                     # 提取track ID（支持多种品牌格式）
@@ -462,7 +462,7 @@ class ONVIFAudioBackchannel:
                         track_id = control_line
                     
                     current_track['track_id'] = track_id
-                    logger.info(f"[SDP] Track ID: {track_id} (原始: {control_line})")
+                    logger.debug(f"[SDP] Track ID: {track_id} (原始: {control_line})")
         
         # 保存最后一个track
         if current_track:
@@ -500,23 +500,23 @@ class ONVIFAudioBackchannel:
             logger.warning("[WARN] 没有发现音频轨道")
             return None
         
-        logger.info(f"[Select] 从{len(audio_tracks)}个音频轨道中选择Audio Back Channel")
+        logger.debug(f"[Select] 从{len(audio_tracks)}个音频轨道中选择Audio Back Channel")
         
         # 策略1: 优先选择sendonly模式（标准Audio Back Channel）
         for idx, track in enumerate(audio_tracks):
             if track.get('mode') == 'sendonly':
-                logger.info(f"[Select] ✓ 策略1成功: 轨道#{idx}是sendonly模式")
-                logger.info(f"  - track_id: {track.get('track_id')}")
-                logger.info(f"  - codec: {track.get('codec')}")
-                logger.info(f"  - payload_type: {track.get('payload_type')}")
+                logger.debug(f"[Select] ✓ 策略1成功: 轨道#{idx}是sendonly模式")
+                logger.debug(f"  - track_id: {track.get('track_id')}")
+                logger.debug(f"  - codec: {track.get('codec')}")
+                logger.debug(f"  - payload_type: {track.get('payload_type')}")
                 return track
         
         # 策略2: 选择包含'backchannel'关键字的轨道
         for idx, track in enumerate(audio_tracks):
             track_id = track.get('track_id', '').lower()
             if 'backchannel' in track_id:
-                logger.info(f"[Select] ✓ 策略2成功: 轨道#{idx}包含backchannel关键字")
-                logger.info(f"  - track_id: {track.get('track_id')}")
+                logger.debug(f"[Select] ✓ 策略2成功: 轨道#{idx}包含backchannel关键字")
+                logger.debug(f"  - track_id: {track.get('track_id')}")
                 # 标记为需要测试
                 track['mode'] = 'sendonly'
                 track['needs_testing'] = True
@@ -528,8 +528,8 @@ class ONVIFAudioBackchannel:
             track_id = track.get('track_id', '').lower()
             mode = track.get('mode', '')
             if 'audio' in track_id and mode != 'recvonly':
-                logger.info(f"[Select] ✓ 策略3成功: 轨道#{idx}包含audio关键字且不是recvonly")
-                logger.info(f"  - track_id: {track.get('track_id')}")
+                logger.debug(f"[Select] ✓ 策略3成功: 轨道#{idx}包含audio关键字且不是recvonly")
+                logger.debug(f"  - track_id: {track.get('track_id')}")
                 # 标记为需要测试
                 track['mode'] = 'sendonly'
                 track['needs_testing'] = True
@@ -538,7 +538,7 @@ class ONVIFAudioBackchannel:
         
         # 策略4: 如果只有一个音频轨道，直接使用
         if len(audio_tracks) == 1:
-            logger.info(f"[Select] ✓ 策略4成功: 只有1个音频轨道")
+            logger.debug(f"[Select] ✓ 策略4成功: 只有1个音频轨道")
             logger.info(f"  - track_id: {audio_tracks[0].get('track_id')}")
             audio_tracks[0]['mode'] = 'sendonly'
             audio_tracks[0]['needs_testing'] = True
@@ -546,9 +546,9 @@ class ONVIFAudioBackchannel:
             return audio_tracks[0]
         
         # 策略5: 选择第一个音频轨道（标记为需要测试）
-        logger.info(f"[Select] ✓ 策略5成功: 选择第一个音频轨道")
+        logger.debug(f"[Select] ✓ 策略5成功: 选择第一个音频轨道")
         logger.info(f"  - track_id: {audio_tracks[0].get('track_id')}")
-        logger.info(f"  - 注意: 需要实际测试SETUP是否成功")
+        logger.debug(f"  - 注意: 需要实际测试SETUP是否成功")
         audio_tracks[0]['mode'] = 'sendonly'
         audio_tracks[0]['needs_testing'] = True
         sdp_info['audio_backchannel_supported'] = True
@@ -565,17 +565,17 @@ class ONVIFAudioBackchannel:
             bool: 是否成功建立
         """
         try:
-            logger.info("=" * 60)
-            logger.info("[步骤3] RTSP SETUP - 建立Audio Back Channel")
-            logger.info("=" * 60)
+            logger.debug("=" * 60)
+            logger.debug("[步骤3] RTSP SETUP - 建立Audio Back Channel")
+            logger.debug("=" * 60)
             
             # 构建RTSP URI - 智能匹配control URL
             track_id = audio_track.get('track_id', '1')
             control_url = audio_track.get('track_id', '')  # 原始control URL
             
-            logger.info(f"[Info] Track ID: {track_id}")
-            logger.info(f"[Info] Control URL: {control_url}")
-            logger.info(f"[Info] Mode: {audio_track.get('mode', 'unknown')}")
+            logger.debug(f"[Info] Track ID: {track_id}")
+            logger.debug(f"[Info] Control URL: {control_url}")
+            logger.debug(f"[Info] Mode: {audio_track.get('mode', 'unknown')}")
             
             # 智能构建RTSP URI
             rtsp_uri = None
@@ -583,31 +583,31 @@ class ONVIFAudioBackchannel:
             # 策略1: 如果control_url已经是完整的RTSP URL
             if control_url.startswith('rtsp://'):
                 rtsp_uri = control_url
-                logger.info(f"[Strategy 1] 使用完整RTSP URL")
+                logger.debug(f"[Strategy 1] 使用完整RTSP URL")
             
             # 策略2: 如果track_id包含/audio/路径
             elif '/audio/' in control_url or track_id.startswith('/audio/'):
                 # 使用相对路径
                 rtsp_uri = f"rtsp://{quote(self.username)}:{quote(self.password)}@{self.camera_ip}:{self.camera_port}{control_url if control_url.startswith('/') else '/' + control_url}"
-                logger.info(f"[Strategy 2] 使用/audio/路径")
+                logger.debug(f"[Strategy 2] 使用/audio/路径")
             
             # 策略3: 如果track_id是数字（海康威视标准）
             elif track_id.isdigit():
                 track_id_full = f"trackID={track_id}"
                 rtsp_uri = f"rtsp://{quote(self.username)}:{quote(self.password)}@{self.camera_ip}:{self.camera_port}/audio/{track_id_full}"
-                logger.info(f"[Strategy 3] 使用trackID=格式（海康威视）")
+                logger.debug(f"[Strategy 3] 使用trackID=格式（海康威视）")
             
             # 策略4: 如果track_id是特殊关键字（如audio_backchannel）
             elif 'backchannel' in track_id.lower() or 'audio' in track_id.lower():
                 rtsp_uri = f"rtsp://{quote(self.username)}:{quote(self.password)}@{self.camera_ip}:{self.camera_port}/{track_id}"
-                logger.info(f"[Strategy 4] 使用特殊关键字路径")
+                logger.debug(f"[Strategy 4] 使用特殊关键字路径")
             
             # 策略5: 默认使用/audio/trackID=格式
             else:
                 rtsp_uri = f"rtsp://{quote(self.username)}:{quote(self.password)}@{self.camera_ip}:{self.camera_port}/audio/trackID={track_id}"
-                logger.info(f"[Strategy 5] 使用默认trackID=格式")
+                logger.debug(f"[Strategy 5] 使用默认trackID=格式")
             
-            logger.info(f"[Request] RTSP URI: {rtsp_uri}")
+            logger.debug(f"[Request] RTSP URI: {rtsp_uri}")
             
             # SETUP请求（建立反向音频通道）
             setup_request = (
@@ -621,21 +621,21 @@ class ONVIFAudioBackchannel:
             
             self.cseq += 1
             
-            logger.info("[Request] SETUP请求参数:")
-            logger.info(f"  Transport: RTP/AVP;unicast;client_port={self.local_rtp_port}-{self.local_rtcp_port};mode=record")
-            logger.info(f"  Require: www.onvif.org/ver20/backchannel")
+            logger.debug("[Request] SETUP请求参数:")
+            logger.debug(f"  Transport: RTP/AVP;unicast;client_port={self.local_rtp_port}-{self.local_rtcp_port};mode=record")
+            logger.debug(f"  Require: www.onvif.org/ver20/backchannel")
             
             self.rtsp_socket.send(setup_request.encode())
             
             # 接收响应
             response = self._receive_rtsp_response()
             
-            logger.info("[Response] SETUP响应:")
-            logger.info(response[:500])
+            logger.debug("[Response] SETUP响应:")
+            logger.debug(response[:500])
             
             # 检查认证要求
             if "401 Unauthorized" in response or "401" in response:
-                logger.info("[Auth] 需要Digest认证")
+                logger.debug("[Auth] 需要Digest认证")
                 
                 # 提取WWW-Authenticate头
                 auth_info = ""
@@ -661,15 +661,15 @@ class ONVIFAudioBackchannel:
                     
                     self.cseq += 1
                     
-                    logger.info("[Request] 发送带认证的SETUP请求")
+                    logger.debug("[Request] 发送带认证的SETUP请求")
                     
                     self.rtsp_socket.send(setup_request_auth.encode())
                     
                     # 接收认证后的响应
                     response = self._receive_rtsp_response()
                     
-                    logger.info("[Response] 认证后的响应:")
-                    logger.info(response[:500])
+                    logger.debug("[Response] 认证后的响应:")
+                    logger.debug(response[:500])
             
             # 检查响应
             if "200 OK" not in response:
@@ -684,7 +684,7 @@ class ONVIFAudioBackchannel:
                     # 提取Session ID
                     session_parts = line.split(':')[1].strip().split(';')
                     self.session_id = session_parts[0]
-                    logger.info(f"[Session] Session ID: {self.session_id}")
+                    logger.debug(f"[Session] Session ID: {self.session_id}")
                 
                 if 'Transport:' in line:
                     # 提取服务器端口
@@ -696,7 +696,7 @@ class ONVIFAudioBackchannel:
                             ports = param.split('=')[1].split('-')
                             self.audio_rtp_port = int(ports[0])
                             self.audio_rtcp_port = int(ports[1]) if len(ports) > 1 else self.audio_rtp_port + 1
-                            logger.info(f"[Transport] Server ports: RTP={self.audio_rtp_port}, RTCP={self.audio_rtcp_port}")
+                            logger.debug(f"[Transport] Server ports: RTP={self.audio_rtp_port}, RTCP={self.audio_rtcp_port}")
             
             return True
             
@@ -712,9 +712,9 @@ class ONVIFAudioBackchannel:
             bool: 是否成功
         """
         try:
-            logger.info("=" * 60)
-            logger.info("[步骤4] RTSP PLAY - 激活音频通道")
-            logger.info("=" * 60)
+            logger.debug("=" * 60)
+            logger.debug("[步骤4] RTSP PLAY - 激活音频通道")
+            logger.debug("=" * 60)
             
             if not self.session_id:
                 logger.error("[ERROR] 缺少Session ID")
@@ -735,20 +735,20 @@ class ONVIFAudioBackchannel:
             
             self.cseq += 1
             
-            logger.info("[Request] PLAY请求:")
-            logger.info(f"  Session: {self.session_id}")
+            logger.debug("[Request] PLAY请求:")
+            logger.debug(f"  Session: {self.session_id}")
             
             self.rtsp_socket.send(play_request.encode())
             
             # 接收响应
             response = self._receive_rtsp_response()
             
-            logger.info("[Response] PLAY响应:")
-            logger.info(response[:500])
+            logger.debug("[Response] PLAY响应:")
+            logger.debug(response[:500])
             
             # 检查认证要求
             if "401 Unauthorized" in response or "401" in response:
-                logger.info("[Auth] 需要Digest认证")
+                logger.debug("[Auth] 需要Digest认证")
                 
                 # 提取WWW-Authenticate头
                 auth_info = ""
@@ -774,22 +774,22 @@ class ONVIFAudioBackchannel:
                     
                     self.cseq += 1
                     
-                    logger.info("[Request] 发送带认证的PLAY请求")
+                    logger.debug("[Request] 发送带认证的PLAY请求")
                     
                     self.rtsp_socket.send(play_request_auth.encode())
                     
                     # 接收认证后的响应
                     response = self._receive_rtsp_response()
                     
-                    logger.info("[Response] 认证后的响应:")
-                    logger.info(response[:500])
+                    logger.debug("[Response] 认证后的响应:")
+                    logger.debug(response[:500])
             
             if "200 OK" not in response:
                 logger.error(f"[ERROR] PLAY失败")
                 return False
             
             logger.info("[OK] PLAY成功 - 音频通道已激活")
-            logger.info("[INFO] 现在可以发送音频数据到摄像机扬声器")
+            logger.debug("[INFO] 现在可以发送音频数据到摄像机扬声器")
             
             return True
             
@@ -841,7 +841,7 @@ class ONVIFAudioBackchannel:
             # 发送到摄像机的RTP端口
             if self.audio_rtp_port:
                 rtp_socket.sendto(rtp_packet, (self.camera_ip, self.audio_rtp_port))
-                logger.info(f"[RTP] 发送音频数据: {len(audio_data)}字节到端口{self.audio_rtp_port}")
+                logger.debug(f"[RTP] 发送音频数据: {len(audio_data)}字节到端口{self.audio_rtp_port}")
                 return True
             else:
                 logger.error("[ERROR] 未知的摄像机RTP端口")
@@ -859,9 +859,9 @@ class ONVIFAudioBackchannel:
             bool: 是否成功关闭
         """
         try:
-            logger.info("=" * 60)
-            logger.info("[步骤5] RTSP TEARDOWN - 关闭音频通道")
-            logger.info("=" * 60)
+            logger.debug("=" * 60)
+            logger.debug("[步骤5] RTSP TEARDOWN - 关闭音频通道")
+            logger.debug("=" * 60)
             
             if not self.session_id:
                 logger.warning("[WARN] 没有活动的Session")
@@ -881,15 +881,15 @@ class ONVIFAudioBackchannel:
             
             self.cseq += 1
             
-            logger.info("[Request] TEARDOWN请求")
+            logger.debug("[Request] TEARDOWN请求")
             
             self.rtsp_socket.send(teardown_request.encode())
             
             # 接收响应
             response = self._receive_rtsp_response()
             
-            logger.info("[Response] TEARDOWN响应:")
-            logger.info(response[:200])
+            logger.debug("[Response] TEARDOWN响应:")
+            logger.debug(response[:200])
             
             if "200 OK" not in response:
                 logger.warning(f"[WARN] TEARDOWN可能失败")
@@ -923,7 +923,7 @@ class AudioEncoder:
             codec: 编码类型（PCMA或PCMU）
         """
         self.codec = codec
-        logger.info(f"[Encoder] 初始化音频编码器: codec={codec}")
+        logger.debug(f"[Encoder] 初始化音频编码器: codec={codec}")
     
     def pcm_to_alaw(self, pcm_data: bytes) -> bytes:
         """
@@ -1012,7 +1012,7 @@ class RTPPacketBuilder:
         self.sequence_number = 0
         self.timestamp = 0
         
-        logger.info(f"[RTP] 初始化RTP包构建器: payload_type={payload_type}, sample_rate={sample_rate}")
+        logger.debug(f"[RTP] 初始化RTP包构建器: payload_type={payload_type}, sample_rate={sample_rate}")
     
     def build_rtp_packet(self, payload_data: bytes) -> bytes:
         """
@@ -1082,12 +1082,12 @@ def test_onvif_audio_backchannel(
     Returns:
         Dict: 测试结果
     """
-    logger.info("=" * 80)
-    logger.info("[测试] ONVIF Audio Back Channel - 标准协议测试")
-    logger.info("=" * 80)
-    logger.info(f"摄像机: {camera_ip}:{camera_port}")
-    logger.info(f"用户名: {username}")
-    logger.info("")
+    logger.debug("=" * 80)
+    logger.debug("[测试] ONVIF Audio Back Channel - 标准协议测试")
+    logger.debug("=" * 80)
+    logger.debug(f"摄像机: {camera_ip}:{camera_port}")
+    logger.debug(f"用户名: {username}")
+    logger.debug("")
     
     # 创建客户端
     client = ONVIFAudioBackchannel(
@@ -1137,13 +1137,13 @@ def test_onvif_audio_backchannel(
             if client.setup_audio_backchannel(audio_track):
                 # 步骤4: PLAY
                 if client.play():
-                    logger.info("[SUCCESS] Audio Back Channel已建立！")
-                    logger.info("[INFO] 现在可以发送音频数据到摄像机扬声器")
+                    logger.debug("[SUCCESS] Audio Back Channel已建立！")
+                    logger.debug("[INFO] 现在可以发送音频数据到摄像机扬声器")
                     
                     result['success'] = True
                     
                     # 保持连接5秒（测试）
-                    logger.info("[Test] 保持连接5秒...")
+                    logger.debug("[Test] 保持连接5秒...")
                     time.sleep(5)
                     
                     # 步骤5: TEARDOWN

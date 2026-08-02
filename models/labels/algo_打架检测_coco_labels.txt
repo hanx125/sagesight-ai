@@ -1,2 +1,2 @@
-fight
-nofight
+打架
+未打架

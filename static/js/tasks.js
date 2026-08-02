@@ -1292,7 +1292,7 @@ async function openEditModal(taskId, event) {
         if (detectorIouThreshold) detectorIouThreshold.value = detectorConfig.iou_threshold ?? 0.35;
         if (detectorMinBoxArea) detectorMinBoxArea.value = detectorConfig.min_box_area ?? 50;
         if (detectorDeviceId) detectorDeviceId.value = detectorConfig.device_id ?? 0;
-        if (detectorGpuMemLimit) detectorGpuMemLimit.value = detectorConfig.gpu_mem_limit ?? 6144;
+        if (detectorGpuMemLimit) detectorGpuMemLimit.value = detectorConfig.gpu_mem_limit ? Math.round(detectorConfig.gpu_mem_limit / 1024 / 1024) : 6144;
         if (detectorRknnTarget) detectorRknnTarget.value = detectorConfig.rknn_target || 'rk3588';
         if (detectorRknnCoreMask) detectorRknnCoreMask.value = detectorConfig.rknn_core_mask ?? 0;
         if (detectorRknnDeviceId) detectorRknnDeviceId.value = detectorConfig.rknn_device_id || '';
@@ -1442,6 +1442,32 @@ async function openEditModal(taskId, event) {
         if (displayTrajectoryThickness) displayTrajectoryThickness.value = trajectoryCfg.thickness ?? 1;
         if (displayTrajectoryPointSize) displayTrajectoryPointSize.value = trajectoryCfg.point_size ?? 2;
         if (displayTrajectoryPointColor) displayTrajectoryPointColor.value = colorToText(trajectoryCfg.point_color, '0,0,255');
+
+        // ✅ 加载运动区域绘制配置（motion_region）
+        const motionRegionCfg = displayConfig.motion_region || {};
+        const displayMotionRegionColor = document.getElementById('displayMotionRegionColor');
+        const displayMotionRegionThickness = document.getElementById('displayMotionRegionThickness');
+        const displayMotionRegionFillColor = document.getElementById('displayMotionRegionFillColor');
+        const displayMotionRegionFillAlpha = document.getElementById('displayMotionRegionFillAlpha');
+        if (displayMotionRegionColor) displayMotionRegionColor.value = colorToText(motionRegionCfg.color, '255,255,0');
+        if (displayMotionRegionThickness) displayMotionRegionThickness.value = motionRegionCfg.thickness ?? 1;
+        if (displayMotionRegionFillColor) displayMotionRegionFillColor.value = colorToText(motionRegionCfg.fill_color, '255,255,0');
+        if (displayMotionRegionFillAlpha) displayMotionRegionFillAlpha.value = motionRegionCfg.fill_alpha ?? 50;
+
+        // ✅ 加载屏幕闪烁报警配置（alarm）
+        const alarmCfg = displayConfig.alarm || {};
+        const alarmZoneEnterEnabled = document.getElementById('alarmZoneEnterEnabled');
+        const alarmLoiteringEnabled = document.getElementById('alarmLoiteringEnabled');
+        const alarmDuration = document.getElementById('alarmDuration');
+        const alarmBlinkInterval = document.getElementById('alarmBlinkInterval');
+        const alarmShowBanner = document.getElementById('alarmShowBanner');
+        const alarmThrottleInterval = document.getElementById('alarmThrottleInterval');
+        if (alarmZoneEnterEnabled) alarmZoneEnterEnabled.value = alarmCfg.zone_enter_enabled !== false ? 'true' : 'false';
+        if (alarmLoiteringEnabled) alarmLoiteringEnabled.value = alarmCfg.loitering_enabled !== false ? 'true' : 'false';
+        if (alarmDuration) alarmDuration.value = alarmCfg.duration ?? 3;
+        if (alarmBlinkInterval) alarmBlinkInterval.value = alarmCfg.blink_interval ?? 500;
+        if (alarmShowBanner) alarmShowBanner.value = alarmCfg.show_banner !== false ? 'true' : 'false';
+        if (alarmThrottleInterval) alarmThrottleInterval.value = alarmCfg.throttle_interval ?? 3000;
 
         document.getElementById('taskModal').classList.add('show');
 
@@ -1946,6 +1972,20 @@ async function saveTask() {
                 thickness: parseInt(document.getElementById('displayTrajectoryThickness')?.value) || 1,
                 point_size: parseInt(document.getElementById('displayTrajectoryPointSize')?.value) || 2,
                 point_color: parseColorInput(document.getElementById('displayTrajectoryPointColor')?.value, [0, 0, 255])
+            },
+            motion_region: {
+                color: parseColorInput(document.getElementById('displayMotionRegionColor')?.value, [255, 255, 0]),
+                thickness: parseInt(document.getElementById('displayMotionRegionThickness')?.value) || 1,
+                fill_color: parseColorInput(document.getElementById('displayMotionRegionFillColor')?.value, [255, 255, 0]),
+                fill_alpha: parseInt(document.getElementById('displayMotionRegionFillAlpha')?.value) || 50
+            },
+            alarm: {
+                zone_enter_enabled: document.getElementById('alarmZoneEnterEnabled')?.value === 'true',
+                loitering_enabled: document.getElementById('alarmLoiteringEnabled')?.value === 'true',
+                duration: parseInt(document.getElementById('alarmDuration')?.value) || 3,
+                blink_interval: parseInt(document.getElementById('alarmBlinkInterval')?.value) || 500,
+                show_banner: document.getElementById('alarmShowBanner')?.value === 'true',
+                throttle_interval: parseInt(document.getElementById('alarmThrottleInterval')?.value) || 3000
             }
         }
     };

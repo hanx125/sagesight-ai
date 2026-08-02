@@ -19,6 +19,26 @@ let selectedLabelsFile = null; // 选择的标签文件
 document.addEventListener('DOMContentLoaded', function() {
     loadAlgorithms();
     initWebSocket();
+
+    // 绑定筛选工具栏事件：条件变化时重新加载算法列表
+    const filterType = document.getElementById('filterType');
+    const filterStatus = document.getElementById('filterStatus');
+    const filterSearch = document.getElementById('filterSearch');
+
+    if (filterType) {
+        filterType.addEventListener('change', () => loadAlgorithms());
+    }
+    if (filterStatus) {
+        filterStatus.addEventListener('change', () => loadAlgorithms());
+    }
+    if (filterSearch) {
+        // 输入搜索加 300ms 防抖，避免每次按键都请求
+        let searchTimer = null;
+        filterSearch.addEventListener('input', () => {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => loadAlgorithms(), 300);
+        });
+    }
 });
 
 // ========================================

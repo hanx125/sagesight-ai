@@ -1,2 +1,2 @@
-climb
-noclimb
+攀爬
+未攀爬

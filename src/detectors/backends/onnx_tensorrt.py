@@ -23,6 +23,9 @@ import numpy as np
 import onnxruntime as ort
 
 from src.detectors.base import BaseDetector, Detection, DetectorConfig
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _setup_tensorrt_lib_path(config_tensorrt_lib_path: str = "") -> str:
@@ -45,13 +48,13 @@ def _setup_tensorrt_lib_path(config_tensorrt_lib_path: str = "") -> str:
     # 1. 使用配置文件中的路径（最高优先级）
     if config_tensorrt_lib_path and os.path.exists(config_tensorrt_lib_path):
         tensorrt_lib = config_tensorrt_lib_path
-        print(f"[ONNXTensorRTDetector] 使用配置文件中的 TensorRT 路径: {tensorrt_lib}")
+        logger.debug(f"[ONNXTensorRTDetector] 使用配置文件中的 TensorRT 路径: {tensorrt_lib}")
     
     # 2. 使用环境变量
     if not tensorrt_lib:
         tensorrt_lib = os.environ.get("TENSORRT_LIB_PATH", "")
         if tensorrt_lib:
-            print(f"[ONNXTensorRTDetector] 使用环境变量 TENSORRT_LIB_PATH: {tensorrt_lib}")
+            logger.debug(f"[ONNXTensorRTDetector] 使用环境变量 TENSORRT_LIB_PATH: {tensorrt_lib}")
     
     # 3. 自动检测常见路径（Windows）
     if not tensorrt_lib and os.name == 'nt':  # Windows
@@ -64,7 +67,7 @@ def _setup_tensorrt_lib_path(config_tensorrt_lib_path: str = "") -> str:
         for path in default_paths:
             if os.path.exists(path):
                 tensorrt_lib = path
-                print(f"[ONNXTensorRTDetector] 自动检测到 TensorRT 路径: {path}")
+                logger.debug(f"[ONNXTensorRTDetector] 自动检测到 TensorRT 路径: {path}")
                 break
     
     # 添加到系统 PATH
@@ -73,7 +76,7 @@ def _setup_tensorrt_lib_path(config_tensorrt_lib_path: str = "") -> str:
             os.environ["PATH"] = tensorrt_lib + ";" + os.environ.get("PATH", "")
         else:  # Linux
             os.environ["PATH"] = tensorrt_lib + ":" + os.environ.get("PATH", "")
-        print(f"[ONNXTensorRTDetector] TensorRT lib 路径已添加到 PATH")
+        logger.debug(f"[ONNXTensorRTDetector] TensorRT lib 路径已添加到 PATH")
     
     return tensorrt_lib
 
@@ -115,7 +118,7 @@ class ONNXTensorRTDetector(BaseDetector):
         self._engine_cache_path = config.tensorrt_engine_cache_path
         self._tensorrt_lib_path = config.tensorrt_lib_path
         
-        print(f"[ONNXTensorRTDetector] 初始化完成")
+        logger.debug(f"[ONNXTensorRTDetector] 初始化完成")
     
     def initialize(self):
         """
@@ -124,18 +127,18 @@ class ONNXTensorRTDetector(BaseDetector):
         此方法在创建对象后调用，用于延迟加载模型。
         """
         try:
-            print(f"[ONNXTensorRTDetector] 正在初始化检测器...")
-            print(f"[ONNXTensorRTDetector]   模型路径: {self.config.model_path}")
-            print(f"[ONNXTensorRTDetector]   Engine缓存路径: {self._engine_cache_path}")
-            print(f"[ONNXTensorRTDetector]   FP16模式: {self._use_fp16}")
+            logger.debug(f"[ONNXTensorRTDetector] 正在初始化检测器...")
+            logger.debug(f"[ONNXTensorRTDetector]   模型路径: {self.config.model_path}")
+            logger.debug(f"[ONNXTensorRTDetector]   Engine缓存路径: {self._engine_cache_path}")
+            logger.debug(f"[ONNXTensorRTDetector]   FP16模式: {self._use_fp16}")
             sys.stdout.flush()
             
             self.load_model()
             
-            print(f"[ONNXTensorRTDetector] 检测器初始化完成")
+            logger.debug(f"[ONNXTensorRTDetector] 检测器初始化完成")
             sys.stdout.flush()
         except Exception as e:
-            print(f"[ONNXTensorRTDetector] 检测器初始化失败: {e}")
+            logger.debug(f"[ONNXTensorRTDetector] 检测器初始化失败: {e}")
             sys.stdout.flush()
             raise
     
@@ -204,10 +207,10 @@ class ONNXTensorRTDetector(BaseDetector):
             # ========================================
             # 创建推理会话
             # ========================================
-            print(f"[ONNXTensorRTDetector] 正在加载模型并创建推理会话...")
-            print(f"[ONNXTensorRTDetector]   检查 Engine 缓存: {self._engine_cache_path}")
-            print(f"[ONNXTensorRTDetector]   如果缓存不存在，TensorRT 将编译新 Engine（可能耗时 2-5 分钟）")
-            print(f"[ONNXTensorRTDetector]   请观察控制台是否有 TensorRT 编译日志输出...")
+            logger.debug(f"[ONNXTensorRTDetector] 正在加载模型并创建推理会话...")
+            logger.debug(f"[ONNXTensorRTDetector]   检查 Engine 缓存: {self._engine_cache_path}")
+            logger.debug(f"[ONNXTensorRTDetector]   如果缓存不存在，TensorRT 将编译新 Engine（可能耗时 2-5 分钟）")
+            logger.debug(f"[ONNXTensorRTDetector]   请观察控制台是否有 TensorRT 编译日志输出...")
             sys.stdout.flush()
             
             self.session = ort.InferenceSession(
@@ -216,7 +219,7 @@ class ONNXTensorRTDetector(BaseDetector):
                 providers=providers
             )
             
-            print(f"[ONNXTensorRTDetector] 推理会话创建完成！")
+            logger.debug(f"[ONNXTensorRTDetector] 推理会话创建完成！")
             sys.stdout.flush()
             
             # 获取输入信息
@@ -228,27 +231,27 @@ class ONNXTensorRTDetector(BaseDetector):
             active_providers = self.session.get_providers()
             
             # 打印加载信息
-            print(f"[ONNXTensorRTDetector] ONNX 模型加载成功（TensorRT 后端）：{model_path}")
-            print(f"  输入名称：{self.input_name}")
-            print(f"  输入形状：{self.input_shape}")
-            print(f"  可用 Provider: {active_providers}")
-            print(f"  FP16 加速: {self._use_fp16}")
-            print(f"  Engine 缓存: {self._engine_cache_path}")
+            logger.debug(f"[ONNXTensorRTDetector] ONNX 模型加载成功（TensorRT 后端）：{model_path}")
+            logger.debug(f"  输入名称：{self.input_name}")
+            logger.debug(f"  输入形状：{self.input_shape}")
+            logger.debug(f"  可用 Provider: {active_providers}")
+            logger.debug(f"  FP16 加速: {self._use_fp16}")
+            logger.debug(f"  Engine 缓存: {self._engine_cache_path}")
             sys.stdout.flush()
             
             # 验证 TensorRT Provider 是否生效
             if 'TensorrtExecutionProvider' not in active_providers:
-                print(f"[ONNXTensorRTDetector] [警告] TensorRT EP 未激活！实际使用：{active_providers}")
-                print(f"[ONNXTensorRTDetector] 可能原因：")
-                print(f"    1. 首次运行正在编译 Engine（可能需要 2-5 分钟）")
-                print(f"    2. TensorRT 版本与 CUDA 版本不匹配")
-                print(f"    3. ONNX 模型包含 TensorRT 不支持的算子")
-                print(f"    4. 缺少 TensorRT 动态库")
+                logger.debug(f"[ONNXTensorRTDetector] [警告] TensorRT EP 未激活！实际使用：{active_providers}")
+                logger.debug(f"[ONNXTensorRTDetector] 可能原因：")
+                logger.debug(f"    1. 首次运行正在编译 Engine（可能需要 2-5 分钟）")
+                logger.debug(f"    2. TensorRT 版本与 CUDA 版本不匹配")
+                logger.debug(f"    3. ONNX 模型包含 TensorRT 不支持的算子")
+                logger.debug(f"    4. 缺少 TensorRT 动态库")
             else:
-                print(f"[ONNXTensorRTDetector] [OK] TensorRT EP 已确认激活")
+                logger.debug(f"[ONNXTensorRTDetector] [OK] TensorRT EP 已确认激活")
             
         except Exception as e:
-            print(f"[ONNXTensorRTDetector] TensorRT 加载失败：{e}")
+            logger.debug(f"[ONNXTensorRTDetector] TensorRT 加载失败：{e}")
             raise RuntimeError(f"模型加载失败：{e}")
     
     def infer(self, input_tensor: np.ndarray) -> List[Detection]:
@@ -306,8 +309,8 @@ class ONNXTensorRTDetector(BaseDetector):
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            print(f"[ONNXTensorRTDetector] 推理失败：{e}")
-            print(f"[ONNXTensorRTDetector] 错误详情:\n{error_details}")
+            logger.debug(f"[ONNXTensorRTDetector] 推理失败：{e}")
+            logger.debug(f"[ONNXTensorRTDetector] 错误详情:\n{error_details}")
             raise RuntimeError(f"推理失败：{e}")
     
     def unload_model(self):
@@ -322,7 +325,7 @@ class ONNXTensorRTDetector(BaseDetector):
             self.input_name = None
             self.input_shape = None
         
-        print("[ONNXTensorRTDetector] 模型已卸载")
+        logger.debug("[ONNXTensorRTDetector] 模型已卸载")
     
     def get_info(self) -> Dict:
         """

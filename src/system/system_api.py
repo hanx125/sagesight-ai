@@ -349,6 +349,85 @@ def download_log_file():
     return send_file(str(log_path), as_attachment=True, download_name=filename)
 
 
+def _collect_gpu_info():
+    """
+    收集 GPU/NPU 信息。
+    
+    优先级：
+    1. pynvml（如果 nvml.dll 可用）
+    2. nvidia-smi 命令解析（驱动可用但 nvml.dll 找不到时的回退方案）
+    
+    返回字段统一为：index, name, gpu_utilization, memory_total_mb, memory_used_mb, memory_percent
+    """
+    # 方案1：pynvml
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        gpu_count = pynvml.nvmlDeviceGetCount()
+        result = []
+        for i in range(gpu_count):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+            name = pynvml.nvmlDeviceGetName(handle)
+            if isinstance(name, bytes):
+                name = name.decode('utf-8')
+            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            result.append({
+                'index': i,
+                'name': name,
+                'gpu_utilization': util.gpu,
+                'memory_total': mem_info.total,
+                'memory_used': mem_info.used,
+                'memory_total_mb': round(mem_info.total / 1024 / 1024, 0),
+                'memory_used_mb': round(mem_info.used / 1024 / 1024, 0),
+                'memory_percent': round(mem_info.used / mem_info.total * 100, 1) if mem_info.total > 0 else 0
+            })
+        pynvml.nvmlShutdown()
+        if result:
+            return result
+    except Exception:
+        pass
+
+    # 方案2：nvidia-smi 命令解析（nvml.dll 找不到时的回退）
+    try:
+        import subprocess
+        proc = subprocess.run(
+            [
+                'nvidia-smi',
+                '--query-gpu=index,name,utilization.gpu,memory.total,memory.used',
+                '--format=csv,noheader,nounits',
+            ],
+            capture_output=True, text=True, timeout=3,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            result = []
+            for line in proc.stdout.strip().splitlines():
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) < 5:
+                    continue
+                idx = int(parts[0])
+                name = parts[1]
+                util = int(parts[2].split()[0]) if parts[2] else 0
+                mem_total = float(parts[3])
+                mem_used = float(parts[4])
+                result.append({
+                    'index': idx,
+                    'name': name,
+                    'gpu_utilization': util,
+                    'memory_total': int(mem_total * 1024 * 1024),
+                    'memory_used': int(mem_used * 1024 * 1024),
+                    'memory_total_mb': mem_total,
+                    'memory_used_mb': mem_used,
+                    'memory_percent': round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0,
+                })
+            if result:
+                return result
+    except Exception:
+        pass
+
+    return []
+
+
 # ========================================
 # 系统监控 API
 # ========================================
@@ -381,33 +460,9 @@ def get_system_monitor():
     # 进程信息
     process_count = len(psutil.pids())
     
-    # GPU信息（如果可用）
-    gpu_info = []
-    try:
-        import pynvml
-        pynvml.nvmlInit()
-        gpu_count = pynvml.nvmlDeviceGetCount()
-        for i in range(gpu_count):
-            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-            name = pynvml.nvmlDeviceGetName(handle)
-            if isinstance(name, bytes):
-                name = name.decode('utf-8')
-            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            gpu_info.append({
-                'index': i,
-                'name': name,
-                'gpu_utilization': util.gpu,
-                'memory_total': mem_info.total,
-                'memory_used': mem_info.used,
-                'memory_total_mb': round(mem_info.total / 1024 / 1024, 0),
-                'memory_used_mb': round(mem_info.used / 1024 / 1024, 0),
-                'memory_percent': round(mem_info.used / mem_info.total * 100, 1) if mem_info.total > 0 else 0
-            })
-        pynvml.nvmlShutdown()
-    except Exception:
-        gpu_info = []
-    
+    # GPU信息（优先 pynvml，失败则回退 nvidia-smi 命令解析）
+    gpu_info = _collect_gpu_info()
+
     return jsonify({
         'cpu': {
             'percent': cpu_percent,
@@ -503,13 +558,14 @@ def _save_system_config(config):
 
 @system_bp.route('/config', methods=['GET'])
 def get_system_config():
-    """获取存储/MQTT/WebSocket配置"""
+    """获取存储/MQTT/实时通信配置"""
     try:
         config = _load_system_config()
         return jsonify({
             'storage': config.get('storage', {}),
             'mqtt': config.get('mqtt', {}),
-            'websocket': config.get('websocket', {}),
+            'web_server': config.get('web_server', {}),
+            'database': config.get('database', {}),
             'video_file_upload': config.get('video_file_upload', {
                 'max_file_size_mb': 100,
                 'allowed_formats': ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv'],
@@ -547,13 +603,13 @@ def update_system_config():
             if 'config' in mqtt:
                 config.setdefault('mqtt', {}).setdefault('config', {}).update(mqtt['config'])
         
-        # 更新WebSocket配置
-        if 'websocket' in data:
-            ws = data['websocket']
-            if 'enabled' in ws:
-                config.setdefault('websocket', {})['enabled'] = ws['enabled']
-            if 'config' in ws:
-                config.setdefault('websocket', {}).setdefault('config', {}).update(ws['config'])
+        # 更新实时通信配置（Socket.IO + 原生 WebSocket）
+        if 'web_server' in data:
+            web_server = data['web_server']
+            if 'socketio' in web_server:
+                config.setdefault('web_server', {}).setdefault('socketio', {}).update(web_server['socketio'])
+            if 'raw_websocket' in web_server:
+                config.setdefault('web_server', {}).setdefault('raw_websocket', {}).update(web_server['raw_websocket'])
         
         _save_system_config(config)
         logger.info("系统配置已更新")
@@ -562,3 +618,206 @@ def update_system_config():
     except Exception as e:
         logger.error(f"更新系统配置失败: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+# ========================================
+# 数据库管理 API（路径配置以 system_config.yaml 为单一真相源）
+# ========================================
+
+@system_bp.route('/database/info', methods=['GET'])
+def get_database_info():
+    """获取当前数据库信息（路径、大小、类型、备份数量）"""
+    import os
+    try:
+        from src.system.system_config_loader import get_db_path, get_database_config
+        db_cfg = get_database_config()
+        db_path = get_db_path()
+        abs_path = os.path.join(_get_project_root(), db_path)
+
+        info = {
+            'path': db_path,
+            'type': db_cfg.get('type', 'sqlite'),
+            'pool_enabled': db_cfg.get('pool_enabled', False),
+            'pool_size': db_cfg.get('pool_size', 5),
+            'exists': os.path.exists(abs_path),
+            'size_bytes': 0,
+            'size_display': '不存在',
+        }
+
+        if info['exists']:
+            size = os.path.getsize(abs_path)
+            info['size_bytes'] = size
+            info['size_display'] = _format_file_size(size)
+
+        # 统计备份文件
+        backup_dir = os.path.join(_get_project_root(), 'data', 'backups')
+        backups = []
+        if os.path.isdir(backup_dir):
+            for f in sorted(os.listdir(backup_dir), reverse=True):
+                if f.startswith('tasks_') and f.endswith('.db'):
+                    fpath = os.path.join(backup_dir, f)
+                    backups.append({
+                        'filename': f,
+                        'size_display': _format_file_size(os.path.getsize(fpath)),
+                        'created_at': os.path.getmtime(fpath),
+                    })
+        info['backup_count'] = len(backups)
+        info['backups'] = backups[:20]  # 最多返回 20 条
+
+        return jsonify(info)
+    except Exception as e:
+        logger.error(f"获取数据库信息失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@system_bp.route('/database/path', methods=['PUT'])
+def update_database_path():
+    """更新数据库路径配置（写入 system_config.yaml，重启后生效）"""
+    try:
+        data = request.get_json()
+        new_path = (data or {}).get('path', '').strip()
+
+        if not new_path:
+            return jsonify({'error': '路径不能为空'}), 400
+
+        # 安全校验：只允许 .db/.sqlite 扩展名
+        if not new_path.endswith(('.db', '.sqlite', '.sqlite3')):
+            return jsonify({'error': '数据库路径必须以 .db 或 .sqlite 结尾'}), 400
+
+        config = _load_system_config()
+        config.setdefault('database', {})['path'] = new_path
+        _save_system_config(config)
+        logger.info(f"数据库路径已更新为: {new_path}（重启后生效）")
+
+        return jsonify({
+            'success': True,
+            'message': f'数据库路径已更新为 {new_path}，需重启服务后生效',
+            'path': new_path
+        })
+    except Exception as e:
+        logger.error(f"更新数据库路径失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@system_bp.route('/database/backup', methods=['POST'])
+def backup_database():
+    """立即备份数据库（复制当前 db 文件到 data/backups/）"""
+    import shutil
+    from datetime import datetime
+    try:
+        from src.system.system_config_loader import get_db_path
+        db_path = get_db_path()
+        abs_path = os.path.join(_get_project_root(), db_path)
+
+        if not os.path.exists(abs_path):
+            return jsonify({'error': '数据库文件不存在，无法备份'}), 404
+
+        backup_dir = os.path.join(_get_project_root(), 'data', 'backups')
+        os.makedirs(backup_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_name = f'tasks_{timestamp}.db'
+        backup_path = os.path.join(backup_dir, backup_name)
+
+        shutil.copy2(abs_path, backup_path)
+        size = os.path.getsize(backup_path)
+        logger.info(f"数据库已备份到: {backup_path} ({_format_file_size(size)})")
+
+        return jsonify({
+            'success': True,
+            'message': f'备份成功: {backup_name}',
+            'backup': {
+                'filename': backup_name,
+                'size_display': _format_file_size(size),
+                'created_at': os.path.getmtime(backup_path),
+            }
+        })
+    except Exception as e:
+        logger.error(f"数据库备份失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@system_bp.route('/database/restore', methods=['POST'])
+def restore_database():
+    """恢复数据库备份（上传备份文件覆盖当前数据库，重启后生效）"""
+    try:
+        from src.system.system_config_loader import get_db_path
+
+        if 'file' not in request.files:
+            return jsonify({'error': '请选择备份文件'}), 400
+
+        upload_file = request.files['file']
+        if not upload_file.filename:
+            return jsonify({'error': '文件名为空'}), 400
+
+        db_path = get_db_path()
+        abs_path = os.path.join(_get_project_root(), db_path)
+        backup_dir = os.path.join(_get_project_root(), 'data', 'backups')
+        os.makedirs(backup_dir, exist_ok=True)
+
+        # 先保存上传文件到临时目录
+        temp_path = os.path.join(backup_dir, f'upload_{upload_file.filename}')
+        upload_file.save(temp_path)
+
+        # 备份当前数据库（恢复前的快照，防止误操作）
+        if os.path.exists(abs_path):
+            from datetime import datetime
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            pre_backup = os.path.join(backup_dir, f'pre_restore_{ts}.db')
+            import shutil
+            shutil.copy2(abs_path, pre_backup)
+
+        # 覆盖当前数据库
+        import shutil
+        shutil.move(temp_path, abs_path)
+        logger.info(f"数据库已从上传文件恢复: {upload_file.filename}")
+
+        return jsonify({
+            'success': True,
+            'message': f'已从 {upload_file.filename} 恢复数据库，需重启服务后生效'
+        })
+    except Exception as e:
+        logger.error(f"数据库恢复失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@system_bp.route('/database/backups/<filename>', methods=['DELETE'])
+def delete_backup(filename: str):
+    """删除指定的备份文件"""
+    import os
+    try:
+        # 安全校验：文件名不能含路径分隔符
+        if '/' in filename or '\\' in filename or '..' in filename:
+            return jsonify({'error': '非法文件名'}), 400
+
+        backup_dir = os.path.join(_get_project_root(), 'data', 'backups')
+        backup_path = os.path.join(backup_dir, filename)
+
+        if not os.path.exists(backup_path):
+            return jsonify({'error': '备份文件不存在'}), 404
+
+        os.remove(backup_path)
+        logger.info(f"已删除备份文件: {filename}")
+
+        return jsonify({'success': True, 'message': f'已删除 {filename}'})
+    except Exception as e:
+        logger.error(f"删除备份文件失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+def _get_project_root() -> str:
+    """获取项目根目录"""
+    import os
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _format_file_size(size_bytes: int) -> str:
+    """格式化文件大小"""
+    if size_bytes < 1024:
+        return f'{size_bytes} B'
+    elif size_bytes < 1024 * 1024:
+        return f'{size_bytes / 1024:.1f} KB'
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f'{size_bytes / (1024 * 1024):.2f} MB'
+    else:
+        return f'{size_bytes / (1024 * 1024 * 1024):.2f} GB'

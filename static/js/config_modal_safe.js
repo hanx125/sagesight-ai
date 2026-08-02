@@ -25,15 +25,6 @@ function safeGetValue(elementId, defaultValue) {
 // 测试所有新增字段是否存在于DOM中
 function testNewFields() {
     const newFields = [
-        // display_config.debug_info
-        'debugShowFps',
-        'debugShowDetectionCount',
-        'debugShowTrackCount',
-        'debugShowFrameId',
-        'debugFpsPosition',
-        'debugFontScale',
-        'debugTextColor',
-
         // event_config
         'eventGifEnabled',
     ];

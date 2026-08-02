@@ -236,7 +236,7 @@ def get_stream_play_urls(server_host: str, http_port: int, rtmp_port: int, rtsp_
         'rtmp': f"rtmp://{server_host}:{rtmp_port}/{app}/{stream_id}",
         'rtsp': f"rtsp://{server_host}:{rtsp_port}/{app}/{stream_id}",
         'http-flv': f"http://{server_host}:{http_port}/{app}/{stream_id}.live.flv{http_secret_param}",  # ZLM 直播流需要 .live.flv 格式 + secret鉴权
-        'ws-flv': f"ws://{server_host}:80/{app}/{stream_id}.live.flv{ws_secret_param}",  # WebSocket 端口固定为 80 + secret鉴权
+        'ws-flv': f"ws://{server_host}:{http_port}/{app}/{stream_id}.live.flv{ws_secret_param}",  # WebSocket-FLV，端口与HTTP端口一致
         'hls': f"http://{server_host}:{http_port}/{app}/{stream_id}/hls.m3u8{http_secret_param}",  # HLS也需要鉴权
         'rtc': f"http://{server_host}:{http_port}/index/api/webrtc?app={app}&stream={stream_id}&type=play{rtc_secret_param}",  # WebRTC播放地址，使用HTTP API端口
         'rtcs': f"https://{server_host}:{http_port}/index/api/webrtc?app={app}&stream={stream_id}&type=play{rtc_secret_param}",  # WebRTC HTTPS播放地址，使用HTTP API端口
@@ -439,7 +439,7 @@ class StreamService:
             http_port = server.get('http_port', 88)
             rtmp_port = server.get('rtmp_port', 1935)
             rtsp_port = server.get('rtsp_port', 554)
-            secret = server.get('secret', 'FpvUDVyWlqohv98EEE5Of3UcFhc18Ipt')
+            secret = server.get('secret') or server.get('config', {}).get('secret', '')
             
             # 固定的流参数
             app = self.STREAM_APP
@@ -582,7 +582,7 @@ class StreamService:
             http_port = server.get('http_port', 88)
             rtmp_port = server.get('rtmp_port', 1935)
             rtsp_port = server.get('rtsp_port', 554)
-            secret = server.get('secret', server.get('config', {}).get('secret', 'FpvUDVyWlqohv98EEE5Of3UcFhc18Ipt'))
+            secret = server.get('secret') or server.get('config', {}).get('secret', '')
             
             # 固定的流参数
             app = self.STREAM_APP
@@ -673,7 +673,7 @@ class StreamService:
             http_port = server.get('http_port', 88)
             rtmp_port = server.get('rtmp_port', 1935)
             rtsp_port = server.get('rtsp_port', 554)
-            secret = server.get('secret', 'FpvUDVyWlqohv98EEE5Of3UcFhc18Ipt')
+            secret = server.get('secret') or server.get('config', {}).get('secret', '')
             
             # 固定的流参数
             app = self.STREAM_APP
@@ -739,9 +739,9 @@ class StreamService:
             # 提取服务器配置
             server_host = server.get('host', 'localhost')
             http_port = server.get('http_port', 88)
-            rtmp_port = server.get('port', 1935)
-            rtsp_port = server.get('config', {}).get('rtsp_port', 554)
-            secret = server.get('secret', server.get('config', {}).get('secret', 'FpvUDVyWlqohv98EEE5Of3UcFhc18Ipt'))
+            rtmp_port = server.get('rtmp_port', 1935)
+            rtsp_port = server.get('rtsp_port', 554)
+            secret = server.get('secret') or server.get('config', {}).get('secret', '')
             
             # 固定的流参数
             app = self.STREAM_APP

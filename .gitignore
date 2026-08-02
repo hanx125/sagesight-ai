@@ -1,166 +1,156 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# ========================================
+# 白名单模式：默认忽略所有文件，仅上传指定文件到远程仓库
+# ========================================
+# 工作原理：
+#   1. `*`           默认忽略所有文件
+#   2. `!*/`         允许进入所有目录（必须，否则无法访问子目录中的文件）
+#   3. `!*.py` 等    显式允许指定文件类型
+#   4. 末尾的显式忽略（如 `*.onnx`、`output/`）覆盖允许规则，确保大文件/敏感文件不被提交
+# ========================================
 
-# C extensions
-*.so
+# 默认忽略所有文件
+*
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+# 允许进入所有目录（必须放在允许文件类型之前）
+!*/
 
-# PyInstaller
-*.manifest
-*.spec
+# ========================================
+# 允许上传的文件类型
+# ========================================
+# 源代码
+!*.py
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# 配置文件
+!*.yaml
+!*.yml
+!*.json
+!*.ini
+!*.conf
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
+# Web 前端资源
+!*.html
+!*.css
+!*.js
+!*.ts
+!*.wasm
+!*.map
 
-# Translations
-*.mo
-*.pot
+# 字体文件
+!*.woff
+!*.woff2
+!*.ttf
 
-# Django stuff:
-*.log
-local_settings.py
+# 文档与文本
+!*.md
+!*.txt
 
-# Flask stuff:
-instance/
-.webassets-cache
+# 图片资源（docs 截图、static 静态资源）
+!*.png
+!*.jpg
+!*.jpeg
+!*.gif
+!*.svg
+!*.ico
 
-# Scrapy stuff:
-.scrapy
+# RK3588 平台头文件（libs/librga/include/）
+!*.h
 
-# Sphinx documentation
-docs/_build/
+# 共享库与二进制（平台相关库，如 RK3588 RGA 库）
+!*.so
+!*.dll
 
-# PyBuilder
-target/
+# ========================================
+# 允许上传的根文件（无扩展名，需显式列出）
+# ========================================
+!.gitignore
+!LICENSE
+!VERSION
+!requirements.txt
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# ========================================
+# 显式忽略：即使符合上述类型也不追踪
+# ========================================
+# 模型文件（体积大，通过算法管理页面上传，不提交仓库）
+*.onnx
+*.rknn
+*.pt
+*.pth
+*.engine
+*.plan
 
-# pyenv
-.python-version
+# 数据库文件
+*.db
+*.db-shm
+*.db-wal
+*.db.bak
 
-# celery beat schedule file
-celerybeat-schedule
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-python/
-TraeAI-*/
-.idea/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-
-# ==================== 项目特定忽略 ====================
+# 视频/媒体文件（体积大）
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.wmv
+*.flv
 
 # 日志文件
-logs/
 *.log
 
-# 输出文件（事件图片、GIF等）
+# 证书与密钥（敏感信息）
+*.pem
+*.key
+*.crt
+
+# 环境变量与密钥配置
+*.env
+
+# Python 编译缓存
+*.pyc
+*.pyo
+
+# ========================================
+# 显式忽略的目录（运行时产物 / IDE / 第三方）
+# ========================================
+# Python 缓存
+__pycache__/
+
+# 运行时输出（事件图片、GIF）
 output/
+
+# 日志目录
+logs/
+
+# TensorRT 引擎缓存
+trt_cache/
+
+# AI 流状态标记（运行时生成）
+data/ai_stream_flags/
+
+# 上传的视频文件
+uploads/video_files/
+
+# 第三方参考项目（不提交）
+frigate/
+
+# IDE 与调试目录
+.trae/
+.dbg/
+.idea/
+.vscode/
+
+# Python 虚拟环境
+.venv/
+venv/
+env/
+ENV/
 
 # 临时文件
 *.tmp
 *.temp
 *.swp
 *.swo
+*.bak
 
-# SQLite临时文件
-*.db-shm
-*.db-wal
-
-# 测试文件
-test_*.py
-test_*.html
-test_*.mp4
-test_*.avi
-benchmark_output.txt
-
-# 性能分析文件
-profile_*.py
-
-# 启动脚本（已废弃）
-start.bat
-start_web.bat
-stop.bat
-
-# TensorRT缓存
-trt_cache/
-*.engine
-*.plan
-
-# 模型文件（太大，不上传，全局忽略所有目录）
-*.onnx
-*.rknn
-*.pt
-*.pth
-
-# 配置备份文件
-config/*.bak
-config/*.backup
-
-# 数据库文件（根据需要可以上传）
-# data/*.db
-
-# MinIO临时文件
-.minio/
-
-# FTP临时文件
-.ftp/
-
-# 临时分析脚本（用于调试和性能分析）
+# 临时分析脚本（调试用）
 analyze_*.py
 check_*.py
 diagnose_*.py
@@ -177,25 +167,9 @@ build_*.py
 download_*.py
 create_*.py
 
-# 数据库文件
-data/*.db
-data/*.db-shm
-data/*.db-wal
-data/*.db.bak
-
-# AI 流状态标记文件（运行时生成）
-data/ai_stream_flags/
-
-# 上传的视频文件（不提交到仓库）
-uploads/video_files/*.mp4
-uploads/video_files/*.avi
-uploads/video_files/*.mkv
-
-# 共享内存清理脚本
+# 共享内存清理脚本（运行时工具，不提交）
 scripts/cleanup_shared_memory.py
 
-# 第三方参考项目
-frigate/
-
-# 临时分析输出
+# 测试产物
+benchmark_output.txt
 process_analysis.txt

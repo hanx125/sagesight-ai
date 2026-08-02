@@ -8,6 +8,9 @@ import subprocess
 import json
 from typing import Tuple, Optional
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_video_file_info(video_file: str) -> Optional[dict]:
@@ -27,7 +30,7 @@ def get_video_file_info(video_file: str) -> Optional[dict]:
         None: 如果获取失败
     """
     if not Path(video_file).exists():
-        print(f"[VideoUtils] 视频文件不存在: {video_file}")
+        logger.debug(f"[VideoUtils] 视频文件不存在: {video_file}")
         return None
 
     try:
@@ -51,7 +54,7 @@ def get_video_file_info(video_file: str) -> Optional[dict]:
 
         if result.returncode != 0:
             stderr_text = result.stderr.decode('utf-8', errors='ignore')
-            print(f"[VideoUtils] ffprobe 失败: {stderr_text}")
+            logger.debug(f"[VideoUtils] ffprobe 失败: {stderr_text}")
             return None
 
         # 手动解码 JSON 输出（忽略无法解码的字符）
@@ -68,7 +71,7 @@ def get_video_file_info(video_file: str) -> Optional[dict]:
                 break
 
         if not video_stream:
-            print(f"[VideoUtils] 未找到视频流: {video_file}")
+            logger.debug(f"[VideoUtils] 未找到视频流: {video_file}")
             return None
 
         # 提取视频信息
@@ -98,16 +101,16 @@ def get_video_file_info(video_file: str) -> Optional[dict]:
         }
 
     except subprocess.TimeoutExpired:
-        print(f"[VideoUtils] ffprobe 超时: {video_file}")
+        logger.debug(f"[VideoUtils] ffprobe 超时: {video_file}")
         return None
     except json.JSONDecodeError as e:
-        print(f"[VideoUtils] JSON 解析失败: {e}")
+        logger.debug(f"[VideoUtils] JSON 解析失败: {e}")
         return None
     except UnicodeDecodeError as e:
-        print(f"[VideoUtils] 编码错误: {e}")
+        logger.debug(f"[VideoUtils] 编码错误: {e}")
         return None
     except Exception as e:
-        print(f"[VideoUtils] 获取视频信息失败: {e}")
+        logger.debug(f"[VideoUtils] 获取视频信息失败: {e}")
         return None
 
 
