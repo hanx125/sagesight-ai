@@ -68,11 +68,10 @@ class EventOutput:
         self.auto_cleanup = image_cfg.get('auto_cleanup', True)  # 是否自动清理
         self.cleanup_interval_hours = image_cfg.get('cleanup_interval_hours', 24)  # 清理间隔
 
-        # ✅ 新增：读取服务器配置（用于生成完整的 HTTP URL）
-        system_cfg = config.get('system_config', {})
-        web_server_cfg = system_cfg.get('web_server', {})
-        self.server_host = web_server_cfg.get('host', 'localhost')
-        self.server_port = web_server_cfg.get('port', 5556)
+        # ✅ 新增：读取服务器配置（统一通过 system_config_loader 获取，单一真相源）
+        from src.system.system_config_loader import get_web_server_host, get_web_server_port
+        self.server_host = get_web_server_host('localhost')
+        self.server_port = get_web_server_port()
 
         # 上次清理时间
         self.last_cleanup_time = 0

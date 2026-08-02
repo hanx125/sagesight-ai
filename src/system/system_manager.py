@@ -115,16 +115,8 @@ DEFAULT_STREAMING_SERVERS = [
 
 def _get_web_base_url() -> str:
     """从 system_config.yaml 读取 Web 服务地址，构造 hook_url_prefix。"""
-    try:
-        cfg_path = Path(__file__).resolve().parents[2] / 'config' / 'system_config.yaml'
-        with open(cfg_path, 'r', encoding='utf-8') as f:
-            cfg = yaml.safe_load(f) or {}
-        web = cfg.get('web_server', {})
-        host = web.get('host', '127.0.0.1')
-        port = web.get('port', 5556)
-        return f'http://{host}:{port}'
-    except Exception:
-        return 'http://127.0.0.1:5556'
+    from src.system.system_config_loader import get_webhook_base_url
+    return get_webhook_base_url()
 
 
 # ========================================

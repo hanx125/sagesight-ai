@@ -41,7 +41,8 @@ class EventCleanupService:
         self.ftp_cfg = storage_cfg.get('ftp', {})
 
         # Web服务器配置（用于解析本地URL）
-        self.web_port = self.config.get('web_server', {}).get('port', 5556)
+        from src.system.system_config_loader import get_web_server_port
+        self.web_port = get_web_server_port()
 
         # 延迟初始化 outputter（避免在未配置时报错）
         self._minio_outputter = None

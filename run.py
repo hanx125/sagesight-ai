@@ -1263,11 +1263,9 @@ if __name__ == '__main__':
     from src.events.event_cleanup_service import start_event_cleanup_scheduler
     start_event_cleanup_scheduler()
 
-    # 读取端口配置
-    from src.system.system_config_loader import load_system_config
-    sys_cfg = load_system_config()
-    web_cfg = sys_cfg.get('web_server', {})
-    port = web_cfg.get('port', 5556)
+    # 读取端口配置（统一通过集中访问器，单一真相源）
+    from src.system.system_config_loader import get_web_server_port
+    port = get_web_server_port()
 
     # 显示访问地址
     logger.info(f"\n[Main] Web管理平台访问地址: http://localhost:{port}")

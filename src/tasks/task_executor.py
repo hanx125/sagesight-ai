@@ -830,13 +830,9 @@ class MultiCameraTaskExecutor:
         以文件 I/O 方式检测某摄像机是否启用 AI 流（替代 Manager dict 代理）。
         """
         try:
-            config_path = Path(project_root) / 'config' / 'system_config.yaml'
-            with open(config_path, 'r', encoding='utf-8') as f:
-                system_cfg = yaml.safe_load(f) or {}
-
-            web_server_cfg = system_cfg.get('web_server', {})
-            host = web_server_cfg.get('host', '127.0.0.1')
-            port = web_server_cfg.get('port', 5556)
+            from src.system.system_config_loader import get_web_server_host, get_web_server_port
+            host = get_web_server_host('127.0.0.1')
+            port = get_web_server_port()
 
             # 显示配置（框颜色、线宽等）
             display_config = self.task_config.get('display_config', {})
@@ -857,16 +853,10 @@ class MultiCameraTaskExecutor:
 
         except Exception as e:
             logger.debug(f"[MultiCameraExecutor-{self.task_id}] AI 流配置构建失败，使用默认值: {e}")
-            # 兜底也从配置文件读取 host/port，避免硬编码
-            try:
-                _cfg_path = Path(project_root) / 'config' / 'system_config.yaml'
-                with open(_cfg_path, 'r', encoding='utf-8') as f:
-                    _cfg = yaml.safe_load(f) or {}
-                _web = _cfg.get('web_server', {})
-                _host = _web.get('host', '127.0.0.1')
-                _port = _web.get('port', 5556)
-            except Exception:
-                _host, _port = '127.0.0.1', 5556
+            # 兜底通过集中访问器读取 host/port（单一真相源，避免硬编码）
+            from src.system.system_config_loader import get_web_server_host, get_web_server_port
+            _host = get_web_server_host('127.0.0.1')
+            _port = get_web_server_port()
             return {
                 'interval': 2,
                 'api_url': f'http://{_host}:{_port}/api/ai-stream/push',
