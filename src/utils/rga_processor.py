@@ -224,6 +224,15 @@ class RGAProcessor:
         if x2 <= x1 or y2 <= y1:
             raise RuntimeError(f"region 越界或为空：{region}，帧尺寸({W}x{H})")
 
+        # RGA 对 YUV420p 源格式的 srect 宽高要求为偶数（U/V 按 2x2 下采样）
+        # 奇数宽高会触发 RgaBlit fail: Invalid argument，此处向下对齐到偶数
+        if (x2 - x1) % 2 != 0:
+            x2 -= 1
+        if (y2 - y1) % 2 != 0:
+            y2 -= 1
+        if x2 <= x1 or y2 <= y1:
+            raise RuntimeError(f"region 对齐后为空：{region}，帧尺寸({W}x{H})")
+
         # ---- 重建标准 I420 布局（RGA 要求 Y/Cb/Cr 平面连续）----
         # merge_yuv_planes 把 U/V reshape 为 (H//4, W)，需还原为 (H//2, W//2)
         y_plane = yuv_frame[:H, :W]
