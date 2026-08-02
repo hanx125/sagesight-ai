@@ -451,7 +451,10 @@ async function saveConfig() {
                 showNotification('配置已保存', 'success');
             }
             closeConfigModal();
-            loadTasks(); // 刷新任务列表
+            // 刷新任务列表（tasks.js 已改造为 IIFE 命名空间）
+            if (window.Tasks && typeof window.Tasks.loadTasks === 'function') {
+                window.Tasks.loadTasks();
+            }
         } else {
             showNotification(result.error || '保存配置失败', 'error');
         }

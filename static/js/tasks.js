@@ -2275,6 +2275,7 @@ function escapeHtml(text) {
 // ========================================
 return {
     applyTaskFilters: applyTaskFilters,
+    loadTasks: loadTasks,
     openCreateModal: openCreateModal,
     openEditModal: openEditModal,
     openDeleteModal: openDeleteModal,
