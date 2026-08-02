@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 
 {% block title %}事件列表{% endblock %}
 
@@ -57,13 +57,13 @@
         <div class="filter-left">
             <div class="filter-group">
                 <label>任务：</label>
-                <select id="filterTask" onchange="applyEventFilters()">
+                <select id="filterTask" onchange="Events.applyEventFilters()">
                     <option value="">全部任务</option>
                 </select>
             </div>
             <div class="filter-group">
                 <label>类型：</label>
-                <select id="filterType" onchange="applyEventFilters()">
+                <select id="filterType" onchange="Events.applyEventFilters()">
                     <option value="">全部类型</option>
                     <option value="tracking">目标跟踪</option>
                     <option value="zone">区域检测</option>
@@ -72,16 +72,16 @@
             </div>
             <div class="filter-group">
                 <label>类别：</label>
-                <select id="filterClass" onchange="applyEventFilters()">
+                <select id="filterClass" onchange="Events.applyEventFilters()">
                     <option value="">全部类别</option>
                 </select>
             </div>
             <div class="filter-actions">
-                <button class="btn btn-secondary" onclick="resetFilters()">重置</button>
+                <button class="btn btn-secondary" onclick="Events.resetFilters()">重置</button>
             </div>
         </div>
         <div class="filter-right">
-            <button class="btn btn-danger" onclick="openClearModal()">
+            <button class="btn btn-danger" onclick="Events.openClearModal()">
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
                 </svg>
@@ -96,12 +96,12 @@
             <h3>事件记录</h3>
             <div class="events-header-right">
                 <div class="view-toggle">
-                    <button class="view-btn active" onclick="setView('card')" title="卡片视图">
+                    <button class="view-btn active" onclick="Events.setView('card')" title="卡片视图">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M4 11h5V5H4v6zm0 7h5v-6H4v6zm6 0h5v-6h-5v6zm6 0h5v-6h-5v6zm-6-7h5V5h-5v6zm6-6v6h5V5h-5z"/>
                         </svg>
                     </button>
-                    <button class="view-btn" onclick="setView('table')" title="表格视图">
+                    <button class="view-btn" onclick="Events.setView('table')" title="表格视图">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
                         </svg>
@@ -148,20 +148,20 @@
         <!-- 分页控件 -->
         <div class="pagination-container" id="pagination">
             <span class="pagination-info" id="paginationInfo">共 0 条事件</span>
-            <button class="pagination-btn prev" onclick="prevPage()" id="prevBtn" disabled>
+            <button class="pagination-btn prev" onclick="Events.prevPage()" id="prevBtn" disabled>
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
                 </svg>
                 上一页
             </button>
             <div id="pageNumbers"></div>
-            <button class="pagination-btn next" onclick="nextPage()" id="nextBtn" disabled>
+            <button class="pagination-btn next" onclick="Events.nextPage()" id="nextBtn" disabled>
                 下一页
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
                 </svg>
             </button>
-            <select class="page-size-select" id="pageSizeSelect" onchange="changePageSize()">
+            <select class="page-size-select" id="pageSizeSelect" onchange="Events.changePageSize()">
                 <option value="10">10条/页</option>
                 <option value="20" selected>20条/页</option>
                 <option value="50">50条/页</option>
@@ -176,14 +176,14 @@
     <div class="modal-content modal-large">
         <div class="modal-header">
             <h3>事件详情</h3>
-            <button class="modal-close" onclick="closeEventDetailModal()">&times;</button>
+            <button class="modal-close" onclick="Events.closeEventDetailModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="event-detail-content">
                 <div class="event-detail-image-container">
                     <div class="event-media-switcher">
-                        <button class="btn btn-sm btn-primary" id="showImageBtn" onclick="switchEventMedia('image')">显示图片</button>
-                        <button class="btn btn-sm btn-secondary" id="showGifBtn" onclick="switchEventMedia('gif')">显示GIF</button>
+                        <button class="btn btn-sm btn-primary" id="showImageBtn" onclick="Events.switchEventMedia('image')">显示图片</button>
+                        <button class="btn btn-sm btn-secondary" id="showGifBtn" onclick="Events.switchEventMedia('gif')">显示GIF</button>
                     </div>
                     <img id="eventDetailImage" src="" alt="事件图片" class="event-detail-image" style="display: block;">
                     <img id="eventDetailGif" src="" alt="事件GIF" class="event-detail-image" style="display: none;">
@@ -256,7 +256,7 @@
             </div>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeEventDetailModal()">关闭</button>
+            <button type="button" class="btn btn-secondary" onclick="Events.closeEventDetailModal()">关闭</button>
         </div>
     </div>
 </div>
@@ -266,13 +266,13 @@
     <div class="modal-content">
         <div class="modal-header">
             <h3>清理过期事件</h3>
-            <button class="modal-close" onclick="closeClearModal()">&times;</button>
+            <button class="modal-close" onclick="Events.closeClearModal()">&times;</button>
         </div>
         <div class="modal-body">
             <p>选择要清理的时间范围：</p>
             <div class="form-group">
                 <label for="clearDays">清理多少天前的事件：</label>
-                <select id="clearDays" onchange="toggleCustomDaysInput()">
+                <select id="clearDays" onchange="Events.toggleCustomDaysInput()">
                     <option value="default">使用配置默认天数（推荐）</option>
                     <option value="7">7天前</option>
                     <option value="14">14天前</option>
@@ -289,8 +289,8 @@
             <p class="warning-text">⚠️ 此操作将删除过期事件的数据库记录及其对应的存储文件（本地图片/GIF、MinIO 对象、FTP 文件），不可恢复，请谨慎操作。</p>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeClearModal()">取消</button>
-            <button type="button" class="btn btn-danger" onclick="confirmClear()">确认清理</button>
+            <button type="button" class="btn btn-secondary" onclick="Events.closeClearModal()">取消</button>
+            <button type="button" class="btn btn-danger" onclick="Events.confirmClear()">确认清理</button>
         </div>
     </div>
 </div>
@@ -645,14 +645,17 @@
 </style>
 
 <script>
-    let currentPage = 1;
-    let perPage = 20;
-    let totalEvents = 0;
-    let totalPages = 1;
-    let currentEvents = [];
-    let currentView = 'card';
+window.Events = (function() {
 
-    document.addEventListener('DOMContentLoaded', function() {
+    var currentPage = 1;
+    var perPage = 20;
+    var totalEvents = 0;
+    var totalPages = 1;
+    var currentEvents = [];
+    var currentView = 'card';
+
+    // 注册页面初始化函数（支持 pjax 局部加载）
+    SageSight.registerPage('/events', function() {
         loadStats();
         loadTasksFilter();
         loadEvents();
@@ -662,7 +665,7 @@
     function setView(view) {
         currentView = view;
         document.querySelectorAll('.view-btn').forEach(btn => btn.classList.remove('active'));
-        document.querySelector(`.view-btn[onclick="setView('${view}')"]`).classList.add('active');
+        document.querySelector(`.view-btn[onclick="Events.setView('${view}')"]`).classList.add('active');
         
         document.getElementById('eventsListCard').style.display = view === 'card' ? 'grid' : 'none';
         document.getElementById('eventsListTable').style.display = view === 'table' ? 'block' : 'none';
@@ -695,7 +698,7 @@
         }
     }
 
-    let taskNameMap = {};
+    var taskNameMap = {};
 
     async function loadTasksFilter() {
         try {
@@ -813,7 +816,7 @@
                 <td>${(event.entered_zones && event.entered_zones.length) ? event.entered_zones.join('、') : '-'}</td>
                 <td>${event.zone_name || '-'}${(event.loitered_zones && event.loitered_zones.length) ? ' <span class="loitering-flag" title="徘徊区域: ' + event.loitered_zones.join('、') + '">⚠徘徊</span>' : ''}</td>
                 <td class="action-cell">
-                    <button class="btn btn-sm btn-primary action-btn" onclick="openEventDetail('${event.event_id}')">详情</button>
+                    <button class="btn btn-sm btn-primary action-btn" onclick="Events.openEventDetail('${event.event_id}')">详情</button>
                 </td>
             </tr>`;
         }).join('');
@@ -857,7 +860,7 @@
         }
 
         return `
-            <div class="event-card" data-event-id="${event.event_id}" onclick="openEventDetail('${event.event_id}')">
+            <div class="event-card" data-event-id="${event.event_id}" onclick="Events.openEventDetail('${event.event_id}')">
                 ${imageSection}
                 <div class="event-card-content">
                     <div class="event-card-header">
@@ -919,6 +922,9 @@
         const pageNumbers = document.getElementById('pageNumbers');
         const paginationInfo = document.getElementById('paginationInfo');
 
+        // pjax 导航后 DOM 可能已被替换
+        if (!prevBtn || !nextBtn || !pageNumbers || !paginationInfo) return;
+
         // 更新信息
         const startItem = totalEvents > 0 ? (currentPage - 1) * perPage + 1 : 0;
         const endItem = Math.min(currentPage * perPage, totalEvents);
@@ -939,21 +945,21 @@
         }
 
         if (startPage > 1) {
-            pageHtml += `<button class="pagination-btn" onclick="goToPage(1)">1</button>`;
+            pageHtml += `<button class="pagination-btn" onclick="Events.goToPage(1)">1</button>`;
             if (startPage > 2) {
                 pageHtml += `<span class="pagination-ellipsis">...</span>`;
             }
         }
 
         for (let i = startPage; i <= endPage; i++) {
-            pageHtml += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</button>`;
+            pageHtml += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" onclick="Events.goToPage(${i})">${i}</button>`;
         }
 
         if (endPage < totalPages) {
             if (endPage < totalPages - 1) {
                 pageHtml += `<span class="pagination-ellipsis">...</span>`;
             }
-            pageHtml += `<button class="pagination-btn" onclick="goToPage(${totalPages})">${totalPages}</button>`;
+            pageHtml += `<button class="pagination-btn" onclick="Events.goToPage(${totalPages})">${totalPages}</button>`;
         }
 
         pageNumbers.innerHTML = pageHtml;
@@ -1222,7 +1228,7 @@
 
     // ✅ 实时事件 WebSocket：统一监听 new_event / event_update / gif_ready
     // 卡片视图与表格视图均通过 [data-event-id] 统一定位，状态徽章实时刷新
-    let eventGifSocket = null;
+    var eventGifSocket = null;
     function initEventGifWebSocket() {
         try {
             eventGifSocket = io('/ws', {
@@ -1332,5 +1338,27 @@
         }
     }
     initEventGifWebSocket();
+
+    // ========================================
+    // 暴露命名空间：供 HTML onclick/onchange 调用
+    // ========================================
+    return {
+        setView: setView,
+        applyEventFilters: applyEventFilters,
+        resetFilters: resetFilters,
+        goToPage: goToPage,
+        prevPage: prevPage,
+        nextPage: nextPage,
+        changePageSize: changePageSize,
+        openEventDetail: openEventDetail,
+        closeEventDetailModal: closeEventDetailModal,
+        switchEventMedia: switchEventMedia,
+        openClearModal: openClearModal,
+        closeClearModal: closeClearModal,
+        confirmClear: confirmClear,
+        toggleCustomDaysInput: toggleCustomDaysInput
+    };
+
+})();
 </script>
 {% endblock %}

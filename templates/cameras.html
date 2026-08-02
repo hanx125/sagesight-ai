@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 
 {% block title %}流媒体{% endblock %}
 
@@ -57,7 +57,7 @@
         <div class="filter-left">
             <div class="filter-group">
                 <label>状态：</label>
-                <select id="filterStatus" onchange="applyFilters()">
+                <select id="filterStatus" onchange="Cameras.applyFilters()">
                     <option value="">全部</option>
                     <option value="online">在线</option>
                     <option value="offline">离线</option>
@@ -66,7 +66,7 @@
             </div>
             <div class="filter-group">
                 <label>启用：</label>
-                <select id="filterEnabled" onchange="applyFilters()">
+                <select id="filterEnabled" onchange="Cameras.applyFilters()">
                     <option value="">全部</option>
                     <option value="true">已启用</option>
                     <option value="false">已禁用</option>
@@ -74,14 +74,14 @@
             </div>
             <div class="filter-group">
                 <label>搜索：</label>
-                <input type="text" id="filterSearch" placeholder="搜索摄像机名称/IP..." oninput="applyFilters()">
+                <input type="text" id="filterSearch" placeholder="搜索摄像机名称/IP..." oninput="Cameras.applyFilters()">
             </div>
             <div class="filter-actions">
-                <button class="btn btn-secondary" onclick="resetFilters()">重置</button>
+                <button class="btn btn-secondary" onclick="Cameras.resetFilters()">重置</button>
             </div>
         </div>
         <div class="filter-right">
-            <button class="btn btn-secondary" onclick="openDirectoryModal()">
+            <button class="btn btn-secondary" onclick="Cameras.openDirectoryModal()">
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
                 </svg>
@@ -93,7 +93,7 @@
                 </svg>
                 添加视频文件
             </button>
-            <button class="btn btn-primary" onclick="openDiscoverModal()">
+            <button class="btn btn-primary" onclick="Cameras.openDiscoverModal()">
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
                 </svg>
@@ -107,12 +107,12 @@
         <div class="cameras-header">
             <h3>摄像机列表</h3>
             <div class="view-toggle">
-                <button class="view-btn active" id="cardViewBtn" onclick="setViewMode('card')">
+                <button class="view-btn active" id="cardViewBtn" onclick="Cameras.setViewMode('card')">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M4 4h7v7H4zm0 9h7v7H4zm9-9h7v7h-7zm0 9h7v7h-7z"/>
                     </svg>
                 </button>
-                <button class="view-btn" id="listViewBtn" onclick="setViewMode('list')">
+                <button class="view-btn" id="listViewBtn" onclick="Cameras.setViewMode('list')">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M4 14h4v-4H4zm0 5h4v-4H4zm0-10h4V5H4zm5 5h4v-4H9zm0 5h4v-4H9zm0-10h4V5H9zm5 5h4v-4h-4zm0 5h4v-4h-4zm0-10h4V5h-4zm5 5h4v-4h-4zm0 5h4v-4h-4zm0-10h4V5h-4z"/>
                     </svg>
@@ -139,20 +139,20 @@
         <!-- 分页组件 -->
         <div id="paginationContainer" class="pagination-container" style="display: none;">
             <span class="pagination-info" id="paginationInfo"></span>
-            <button class="pagination-btn prev" id="prevPageBtn" onclick="goToPrevPage()">
+            <button class="pagination-btn prev" id="prevPageBtn" onclick="Cameras.goToPrevPage()">
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
                 </svg>
                 上一页
             </button>
             <div id="pageNumbers"></div>
-            <button class="pagination-btn next" id="nextPageBtn" onclick="goToNextPage()">
+            <button class="pagination-btn next" id="nextPageBtn" onclick="Cameras.goToNextPage()">
                 下一页
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
                 </svg>
             </button>
-            <select class="page-size-select" id="pageSizeSelect" onchange="changePageSize()">
+            <select class="page-size-select" id="pageSizeSelect" onchange="Cameras.changePageSize()">
                 <option value="10">10条/页</option>
                 <option value="20" selected>20条/页</option>
                 <option value="50">50条/页</option>
@@ -167,24 +167,24 @@
     <div class="modal-content modal-large">
         <div class="modal-header">
             <h3>新增摄像机</h3>
-            <button class="modal-close" onclick="closeDiscoverModal()">&times;</button>
+            <button class="modal-close" onclick="Cameras.closeDiscoverModal()">&times;</button>
         </div>
         <div class="modal-body">
             <!-- Tab导航 -->
             <div class="discover-tabs">
-                <button class="discover-tab active" onclick="switchDiscoverTab('scan')">
+                <button class="discover-tab active" onclick="Cameras.switchDiscoverTab('scan')">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
                     </svg>
                     ONVIF扫描
                 </button>
-                <button class="discover-tab" onclick="switchDiscoverTab('manual')">
+                <button class="discover-tab" onclick="Cameras.switchDiscoverTab('manual')">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
                     </svg>
                     手动添加
                 </button>
-                <button class="discover-tab" onclick="switchDiscoverTab('network')">
+                <button class="discover-tab" onclick="Cameras.switchDiscoverTab('network')">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
                     </svg>
@@ -198,7 +198,7 @@
                     <p>使用ONVIF协议自动发现同一网段内的摄像机设备</p>
                 </div>
                 <div class="discover-actions" style="text-align: center; padding: 20px 0;">
-                    <button class="btn btn-primary" id="discoverBtn" onclick="startDiscover()">
+                    <button class="btn btn-primary" id="discoverBtn" onclick="Cameras.startDiscover()">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
                         </svg>
@@ -223,7 +223,7 @@
                     <p>手动填写ONVIF摄像机信息，适合跨网段或已知设备的添加</p>
                 </div>
                 <div class="discover-actions" style="text-align: center; padding: 20px 0;">
-                    <button class="btn btn-primary" onclick="closeDiscoverModal(); openManualAddModal()">
+                    <button class="btn btn-primary" onclick="Cameras.closeDiscoverModal(); Cameras.openManualAddModal()">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
                         </svg>
@@ -260,7 +260,7 @@
                     </div>
 
                     <div class="form-actions">
-                        <button type="button" class="btn btn-primary" id="networkScanBtn" onclick="startNetworkScan()">
+                        <button type="button" class="btn btn-primary" id="networkScanBtn" onclick="Cameras.startNetworkScan()">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
                             </svg>
@@ -281,7 +281,7 @@
             </div>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeDiscoverModal()">关闭</button>
+            <button type="button" class="btn btn-secondary" onclick="Cameras.closeDiscoverModal()">关闭</button>
         </div>
     </div>
 </div>
@@ -291,7 +291,7 @@
     <div class="modal-content">
         <div class="modal-header">
             <h3>ONVIF注册摄像机</h3>
-            <button class="modal-close" onclick="closeOnvifRegisterModal()">&times;</button>
+            <button class="modal-close" onclick="Cameras.closeOnvifRegisterModal()">&times;</button>
         </div>
         <div class="modal-body">
             <form id="onvifRegisterForm">
@@ -322,8 +322,8 @@
             </form>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeOnvifRegisterModal()">取消</button>
-            <button type="button" class="btn btn-primary" onclick="registerOnvifCamera()">注册</button>
+            <button type="button" class="btn btn-secondary" onclick="Cameras.closeOnvifRegisterModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="Cameras.registerOnvifCamera()">注册</button>
         </div>
     </div>
 </div>
@@ -333,7 +333,7 @@
     <div class="modal-content">
         <div class="modal-header">
             <h3 id="modalTitle">添加摄像机</h3>
-            <button class="modal-close" onclick="closeModal()">&times;</button>
+            <button class="modal-close" onclick="Cameras.closeModal()">&times;</button>
         </div>
         <div class="modal-body">
             <form id="cameraForm">
@@ -403,8 +403,8 @@
             </form>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button>
-            <button type="button" class="btn btn-primary" onclick="saveCamera()">保存</button>
+            <button type="button" class="btn btn-secondary" onclick="Cameras.closeModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="Cameras.saveCamera()">保存</button>
         </div>
     </div>
 </div>
@@ -414,14 +414,14 @@
     <div class="modal-content modal-large">
         <div class="modal-header">
             <h3>目录管理</h3>
-            <button class="modal-close" onclick="closeDirectoryModal()">&times;</button>
+            <button class="modal-close" onclick="Cameras.closeDirectoryModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="directory-container">
                 <!-- 左侧：目录列表 -->
                 <div class="directory-left">
                     <div class="directory-toolbar">
-                        <button class="btn btn-primary" onclick="openAddDirectoryModal()">
+                        <button class="btn btn-primary" onclick="Cameras.openAddDirectoryModal()">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
                             </svg>
@@ -441,7 +441,7 @@
                             <select id="moveToDirectorySelect" class="move-select">
                                 <!-- 目标目录选项将通过JS动态加载 -->
                             </select>
-                            <button class="btn btn-secondary btn-sm" onclick="moveSelectedCameras()">移动选中</button>
+                            <button class="btn btn-secondary btn-sm" onclick="Cameras.moveSelectedCameras()">移动选中</button>
                         </div>
                     </div>
                     <div class="directory-cameras-list" id="directoryCamerasList">
@@ -451,7 +451,7 @@
             </div>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeDirectoryModal()">关闭</button>
+            <button type="button" class="btn btn-secondary" onclick="Cameras.closeDirectoryModal()">关闭</button>
         </div>
     </div>
 </div>
@@ -461,7 +461,7 @@
     <div class="modal-content">
         <div class="modal-header">
             <h3 id="directoryEditTitle">新建目录</h3>
-            <button class="modal-close" onclick="closeDirectoryEditModal()">&times;</button>
+            <button class="modal-close" onclick="Cameras.closeDirectoryEditModal()">&times;</button>
         </div>
         <div class="modal-body">
             <form id="directoryForm">
@@ -487,8 +487,8 @@
             </form>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeDirectoryEditModal()">取消</button>
-            <button type="button" class="btn btn-primary" onclick="saveDirectory()">保存</button>
+            <button type="button" class="btn btn-secondary" onclick="Cameras.closeDirectoryEditModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="Cameras.saveDirectory()">保存</button>
         </div>
     </div>
 </div>
@@ -498,15 +498,15 @@
     <div class="modal-content">
         <div class="modal-header">
             <h3>确认删除</h3>
-            <button class="modal-close" onclick="closeDeleteModal()">&times;</button>
+            <button class="modal-close" onclick="Cameras.closeDeleteModal()">&times;</button>
         </div>
         <div class="modal-body">
             <p>确定要删除摄像机 "<span id="deleteCameraName"></span>" 吗？</p>
             <p class="warning-text">此操作不可恢复。</p>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">取消</button>
-            <button type="button" class="btn btn-danger" onclick="confirmDelete()">删除</button>
+            <button type="button" class="btn btn-secondary" onclick="Cameras.closeDeleteModal()">取消</button>
+            <button type="button" class="btn btn-danger" onclick="Cameras.confirmDelete()">删除</button>
         </div>
     </div>
 </div>
@@ -516,14 +516,14 @@
     <div class="modal-content modal-medium">
         <div class="modal-header">
             <h3 id="cameraDetailTitle">摄像机详情</h3>
-            <button class="modal-close" onclick="closeCameraDetailModal()">&times;</button>
+            <button class="modal-close" onclick="Cameras.closeCameraDetailModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div id="cameraDetailContent"></div>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeCameraDetailModal()">关闭</button>
-            <button type="button" class="btn btn-primary" onclick="editCurrentCamera()">编辑</button>
+            <button type="button" class="btn btn-secondary" onclick="Cameras.closeCameraDetailModal()">关闭</button>
+            <button type="button" class="btn btn-primary" onclick="Cameras.editCurrentCamera()">编辑</button>
         </div>
     </div>
 </div>
@@ -600,6 +600,6 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{{ url_for('static', filename='js/cameras.js') }}"></script>
+<script src="{{ url_for('static', filename='js/cameras.js') }}?v=20260802"></script>
 <script src="{{ url_for('static', filename='js/video_file_upload.js') }}"></script>
 {% endblock %}

@@ -1,22 +1,36 @@
 /**
  * SageSight AI - 系统管理页面 JavaScript
  */
+window.System = (function() {
 
 // ========================================
 // 全局变量
 // ========================================
 
-let servers = [];
-let currentServerId = null;
-let deleteServerId = null;
-let users = [];
-let deleteUserUserId = null;
+var servers = [];
+var currentServerId = null;
+var deleteServerId = null;
+var users = [];
+var deleteUserUserId = null;
+
+// 资源监控图表（CPU/内存/磁盘/加速器4条波浪线）
+var resourceChart = null;
+// 历史采样数据缓冲（最多保留 30 个采样点）
+var RESOURCE_HISTORY_MAX = 30;
+var resourceHistory = {
+    labels: [],
+    cpu: [],
+    memory: [],
+    disk: [],
+    accelerator: []   // GPU 或 NPU（按设备类型动态命名）
+};
 
 // ========================================
 // 页面初始化
 // ========================================
 
-document.addEventListener('DOMContentLoaded', function() {
+// 注册页面初始化函数（支持 pjax 局部加载）
+SageSight.registerPage('/system', function() {
     loadUsers();
     loadStreamingServers();
     initWebSocket();
@@ -92,18 +106,13 @@ function renderServersList() {
                     <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
                 </svg>
                 <p>暂无流媒体服务器配置</p>
-                <button class="btn btn-primary" onclick="openCreateServerModal()">添加服务器</button>
+                <button class="btn btn-primary" onclick="System.openCreateServerModal()">添加服务器</button>
             </div>
         `;
         return;
     }
     
     serversList.innerHTML = servers.map(server => {
-        const statusClass = server.status === 'online' ? 'online' : 
-                           (server.status === 'offline' ? 'offline' : 'unknown');
-        const statusText = server.status === 'online' ? '在线' : 
-                          (server.status === 'offline' ? '离线' : '未知');
-        
         const typeLabel = getServerTypeLabel(server.server_type);
         const protocolLabel = getProtocolLabel(server.protocol);
         
@@ -118,9 +127,6 @@ function renderServersList() {
                     <div class="server-info">
                         <h4 class="server-name">${escapeHtml(server.name)}</h4>
                         <span class="server-type">${typeLabel}</span>
-                    </div>
-                    <div class="server-status-badge ${statusClass}">
-                        ${statusText}
                     </div>
                     ${server.is_default ? '<span class="default-badge">默认</span>' : ''}
                 </div>
@@ -179,21 +185,21 @@ function renderServersList() {
                 <div class="server-card-footer">
                     <div class="server-actions">
                         ${!server.is_default ? `
-                        <button class="server-btn" onclick="setDefaultServer(${server.id})">
+                        <button class="server-btn" onclick="System.setDefaultServer(${server.id})">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>
                             </svg>
                             设为默认
                         </button>
                         ` : ''}
-                        <button class="server-btn" onclick="openEditServerModal(${server.id})">
+                        <button class="server-btn" onclick="System.openEditServerModal(${server.id})">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
                             </svg>
                             编辑
                         </button>
                         ${!server.is_default ? `
-                        <button class="server-btn danger" onclick="openDeleteServerModal(${server.id}, '${escapeHtml(server.name)}')">
+                        <button class="server-btn danger" onclick="System.openDeleteServerModal(${server.id}, '${escapeHtml(server.name)}')">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
                             </svg>
@@ -477,10 +483,10 @@ function renderUsers() {
                     </div>
                     <div class="user-cell-time">${formatTime(user.created_at)}</div>
                     <div class="user-cell-actions">
-                        <button class="btn-icon" title="编辑" onclick="openEditUserModal(${user.id})">
+                        <button class="btn-icon" title="编辑" onclick="System.openEditUserModal(${user.id})">
                             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
                         </button>
-                        <button class="btn-icon btn-icon-danger" title="删除" onclick="openDeleteUserModal(${user.id})">
+                        <button class="btn-icon btn-icon-danger" title="删除" onclick="System.openDeleteUserModal(${user.id})">
                             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                         </button>
                     </div>
@@ -743,22 +749,26 @@ function downloadLogFile() {
 // 系统监控
 // ========================================
 
-let monitorInterval = null;
-
 async function loadMonitorData() {
     const container = document.getElementById('monitorContent');
-    
+    // pjax 导航后或非 system 页面时 DOM 元素可能不存在
+    if (!container) return;
+
     try {
         const response = await fetch('/api/system/monitor');
         const data = await response.json();
-        
+
+        // fetch 期间 DOM 可能已被 pjax 替换，重新检查
+        if (!document.getElementById('monitorContent')) return;
+
         if (response.ok) {
             renderMonitorData(data);
+            updateResourceChart(data);
         } else {
             container.innerHTML = '<div class="monitor-empty">加载监控数据失败</div>';
         }
     } catch (error) {
-        container.innerHTML = '<div class="monitor-empty">加载监控数据失败</div>';
+        if (container) container.innerHTML = '<div class="monitor-empty">加载监控数据失败</div>';
         console.error('加载监控数据失败:', error);
     }
 }
@@ -881,51 +891,226 @@ function renderMonitorData(data) {
             
             ${gpuHtml}
         </div>
-        
-        <div class="monitor-system-info">
-            <h4>系统信息</h4>
-            <div class="monitor-grid" style="grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));">
-                <div class="monitor-stat">
-                    <span class="monitor-stat-label">操作系统</span>
-                    <span class="monitor-stat-value">${escapeHtml(data.system.platform)}</span>
-                </div>
-                <div class="monitor-stat">
-                    <span class="monitor-stat-label">主机名</span>
-                    <span class="monitor-stat-value">${escapeHtml(data.system.hostname)}</span>
-                </div>
-                <div class="monitor-stat">
-                    <span class="monitor-stat-label">Python版本</span>
-                    <span class="monitor-stat-value">${escapeHtml(data.system.python_version)}</span>
-                </div>
-                <div class="monitor-stat">
-                    <span class="monitor-stat-label">运行时间</span>
-                    <span class="monitor-stat-value">${data.system.uptime_str}</span>
-                </div>
-                <div class="monitor-stat">
-                    <span class="monitor-stat-label">进程数</span>
-                    <span class="monitor-stat-value">${data.system.process_count}</span>
-                </div>
-                <div class="monitor-stat">
-                    <span class="monitor-stat-label">网络发送</span>
-                    <span class="monitor-stat-value">${data.network.sent_mb}MB</span>
-                </div>
-                <div class="monitor-stat">
-                    <span class="monitor-stat-label">网络接收</span>
-                    <span class="monitor-stat-value">${data.network.recv_mb}MB</span>
+    `;
+
+    // 系统信息渲染到独立容器（位于图表下方）
+    const sysInfoContainer = document.getElementById('monitorSystemInfo');
+    if (sysInfoContainer) {
+        sysInfoContainer.innerHTML = `
+            <div class="monitor-system-info">
+                <h4>系统信息</h4>
+                <div class="monitor-grid" style="grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));">
+                    <div class="monitor-stat">
+                        <span class="monitor-stat-label">操作系统</span>
+                        <span class="monitor-stat-value">${escapeHtml(data.system.platform)}</span>
+                    </div>
+                    <div class="monitor-stat">
+                        <span class="monitor-stat-label">主机名</span>
+                        <span class="monitor-stat-value">${escapeHtml(data.system.hostname)}</span>
+                    </div>
+                    <div class="monitor-stat">
+                        <span class="monitor-stat-label">Python版本</span>
+                        <span class="monitor-stat-value">${escapeHtml(data.system.python_version)}</span>
+                    </div>
+                    <div class="monitor-stat">
+                        <span class="monitor-stat-label">运行时间</span>
+                        <span class="monitor-stat-value">${data.system.uptime_str}</span>
+                    </div>
+                    <div class="monitor-stat">
+                        <span class="monitor-stat-label">进程数</span>
+                        <span class="monitor-stat-value">${data.system.process_count}</span>
+                    </div>
+                    <div class="monitor-stat">
+                        <span class="monitor-stat-label">网络发送</span>
+                        <span class="monitor-stat-value">${data.network.sent_mb}MB</span>
+                    </div>
+                    <div class="monitor-stat">
+                        <span class="monitor-stat-label">网络接收</span>
+                        <span class="monitor-stat-value">${data.network.recv_mb}MB</span>
+                    </div>
                 </div>
             </div>
-        </div>
-    `;
+        `;
+    }
+}
+
+// ========================================
+// 资源动态可视化图表（CPU/内存/磁盘/加速器4条波浪线）
+// ========================================
+
+/**
+ * 初始化资源趋势图表（波浪线折线图）
+ * - 4 条曲线：CPU、内存、磁盘、加速器（GPU/NPU，按设备类型动态命名）
+ * - tension: 0.4 产生平滑波浪线效果
+ * - 保持最近 30 个采样点滚动显示
+ */
+function initResourceChart() {
+    const canvas = document.getElementById('resourceChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    // pjax 导航后旧 canvas 可能已被替换，销毁失效的图表实例
+    if (resourceChart && !document.body.contains(resourceChart.canvas)) {
+        resourceChart.destroy();
+        resourceChart = null;
+    }
+
+    // 已初始化且有效则不重复创建
+    if (resourceChart) return;
+
+    const ctx = canvas.getContext('2d');
+    resourceChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: 'CPU 使用率(%)',
+                    data: [],
+                    borderColor: '#ff6384',
+                    backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.4,          // 波浪线平滑度
+                    fill: false,
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                    cubicInterpolationMode: 'monotone'
+                },
+                {
+                    label: '内存使用率(%)',
+                    data: [],
+                    borderColor: '#36a2eb',
+                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    fill: false,
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                    cubicInterpolationMode: 'monotone'
+                },
+                {
+                    label: '磁盘使用率(%)',
+                    data: [],
+                    borderColor: '#ffce56',
+                    backgroundColor: 'rgba(255, 206, 86, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    fill: false,
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                    cubicInterpolationMode: 'monotone'
+                },
+                {
+                    label: '加速器使用率(%)',
+                    data: [],
+                    borderColor: '#4bc0c0',
+                    backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    fill: false,
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                    cubicInterpolationMode: 'monotone'
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            animation: { duration: 300 },
+            scales: {
+                y: {
+                    min: 0,
+                    max: 100,
+                    ticks: { callback: (v) => v + '%', font: { size: 11 } },
+                    grid: { color: 'rgba(0,0,0,0.05)' }
+                },
+                x: {
+                    ticks: { maxTicksLimit: 8, font: { size: 11 } },
+                    grid: { display: false }
+                }
+            },
+            plugins: {
+                legend: {
+                    position: 'top',
+                    align: 'end',
+                    labels: { boxWidth: 12, font: { size: 12 }, usePointStyle: true }
+                },
+                tooltip: {
+                    callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%` }
+                }
+            }
+        }
+    });
+}
+
+/**
+ * 根据最新监控数据更新图表（追加一个采样点，超出上限则滚动丢弃最旧点）
+ * 加速器标签根据设备类型动态显示（GPU/NPU），不绑定具体厂商
+ */
+function updateResourceChart(data) {
+    if (!resourceChart) return;
+
+    const now = new Date();
+    const label = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+
+    // 取第一个加速器（GPU/NPU）的使用率；无加速器设备时记录 0
+    const accelerators = data.accelerators || data.gpu || [];
+    const accUtil = accelerators.length > 0 ? (accelerators[0].gpu_utilization || 0) : 0;
+
+    // 动态更新加速器数据集标签（GPU/NPU）
+    if (accelerators.length > 0) {
+        const accLabel = accelerators[0].device_type === 'npu' ? 'NPU 使用率(%)' : 'GPU 使用率(%)';
+        if (resourceChart.data.datasets[3].label !== accLabel) {
+            resourceChart.data.datasets[3].label = accLabel;
+        }
+    }
+
+    // 追加新采样点
+    resourceHistory.labels.push(label);
+    resourceHistory.cpu.push(Number(data.cpu.percent) || 0);
+    resourceHistory.memory.push(Number(data.memory.percent) || 0);
+    resourceHistory.disk.push(Number(data.disk.percent) || 0);
+    resourceHistory.accelerator.push(Number(accUtil) || 0);
+
+    // 超出上限则丢弃最旧点（滚动窗口）
+    if (resourceHistory.labels.length > RESOURCE_HISTORY_MAX) {
+        resourceHistory.labels.shift();
+        resourceHistory.cpu.shift();
+        resourceHistory.memory.shift();
+        resourceHistory.disk.shift();
+        resourceHistory.accelerator.shift();
+    }
+
+    // 同步到图表
+    resourceChart.data.labels = resourceHistory.labels;
+    resourceChart.data.datasets[0].data = resourceHistory.cpu;
+    resourceChart.data.datasets[1].data = resourceHistory.memory;
+    resourceChart.data.datasets[2].data = resourceHistory.disk;
+    resourceChart.data.datasets[3].data = resourceHistory.accelerator;
+    resourceChart.update('none');   // 关闭过渡动画，避免刷新抖动
+}
+
+/**
+ * 清空资源图表历史数据（离开监控页时调用）
+ */
+function clearResourceChart() {
+    resourceHistory = { labels: [], cpu: [], memory: [], disk: [], accelerator: [] };
+    if (resourceChart) {
+        resourceChart.data.labels = [];
+        resourceChart.data.datasets.forEach(ds => ds.data = []);
+        resourceChart.update('none');
+    }
 }
 
 // ========================================
 // 标签页切换扩展
 // ========================================
 
-const _originalSwitchTab = switchTab;
+var _originalSwitchTab = switchTab;
 switchTab = function(tabId) {
     _originalSwitchTab(tabId);
-    
+
     // 切换到日志页时加载日志
     if (tabId === 'logs') {
         loadLogFiles();
@@ -933,19 +1118,23 @@ switchTab = function(tabId) {
     }
     // 切换到监控页时加载数据
     if (tabId === 'monitor') {
+        // 初始化图表（首次进入）
+        initResourceChart();
         loadMonitorData();
-        // ✅ 修复：使用 TimerManager 启动系统监控
+        // 使用 TimerManager 启动系统监控定时器
         if (window.TimerManager) {
             TimerManager.startSystemMonitor();
         }
-        // 旧的定时器已移除
-        // monitorInterval = setInterval(loadMonitorData, 5000);
     } else {
-        // 离开监控页停止刷新
-        if (monitorInterval) {
-            clearInterval(monitorInterval);
-            monitorInterval = null;
+        // 离开监控页：停止定时器并清理图表，避免后台空跑和内存占用
+        if (window.TimerManager && TimerManager.stopSystemMonitor) {
+            TimerManager.stopSystemMonitor();
         }
+        clearResourceChart();
+    }
+    // 切换到 Web 服务配置页时加载配置
+    if (tabId === 'webserver') {
+        loadWebServerConfig();
     }
     // 切换到全局配置页时加载配置
     if (tabId === 'config') {
@@ -993,21 +1182,8 @@ async function loadSystemConfig() {
             document.getElementById('mqttTopic').value = mqttConfig.topic || 'sagesight/events';
             document.getElementById('mqttQos').value = String(mqttConfig.qos ?? 1);
             document.getElementById('mqttRetain').value = String(mqttConfig.retain || false);
-            
-            // 实时通信配置（Socket.IO + 原生 WebSocket）
-            const webServer = data.web_server || {};
-            const socketio = webServer.socketio || {};
-            document.getElementById('socketioCors').value = socketio.cors_allowed_origins || '*';
-            const rawWs = webServer.raw_websocket || {};
-            document.getElementById('rawWebsocketEnabled').checked = rawWs.enabled !== false;
-            document.getElementById('rawWebsocketPath').value = rawWs.path || '/ws/raw';
-            // 动态生成第三方接入地址（用当前访问的 host:port，避免硬编码端口）
-            const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-            const wsPath = rawWs.path || '/ws/raw';
-            const wsUrlEl = document.getElementById('rawWebsocketUrl');
-            if (wsUrlEl) {
-                wsUrlEl.textContent = `${wsProto}://${window.location.host}${wsPath}`;
-            }
+
+            // 实时通信配置已迁移至「Web服务配置」标签页，此处不再加载
         }
     } catch (error) {
         showNotification('加载配置失败', 'error');
@@ -1043,16 +1219,8 @@ async function saveSystemConfig() {
                 qos: parseInt(document.getElementById('mqttQos').value),
                 retain: document.getElementById('mqttRetain').value === 'true'
             }
-        },
-        web_server: {
-            socketio: {
-                cors_allowed_origins: document.getElementById('socketioCors').value || '*'
-            },
-            raw_websocket: {
-                enabled: document.getElementById('rawWebsocketEnabled').checked,
-                path: document.getElementById('rawWebsocketPath').value || '/ws/raw'
-            }
         }
+        // 实时通信配置已迁移至「Web服务配置」标签页，此处不再保存
     };
     
     try {
@@ -1072,6 +1240,116 @@ async function saveSystemConfig() {
     } catch (error) {
         showNotification('保存配置失败', 'error');
         console.error('保存系统配置失败:', error);
+    }
+}
+
+// ========================================
+// Web 服务配置管理（端口/调试/CORS/Socket.IO/原生 WebSocket）
+// ========================================
+
+/**
+ * 加载 Web 服务配置到表单
+ * 复用 /api/system/config 接口（返回完整 web_server 段）
+ */
+async function loadWebServerConfig() {
+    try {
+        const response = await fetch('/api/system/config');
+        const data = await response.json();
+
+        if (!response.ok) {
+            showNotification('加载 Web 服务配置失败', 'error');
+            return;
+        }
+
+        const webServer = data.web_server || {};
+
+        // 基础服务配置
+        document.getElementById('wsPort').value = webServer.port || 5556;
+        document.getElementById('wsCorsEnabled').value = String(webServer.cors_enabled !== false);
+        document.getElementById('wsDebug').value = String(webServer.debug === true);
+        document.getElementById('wsStaticDir').value = webServer.static_dir || 'static';
+        document.getElementById('wsTemplateDir').value = webServer.template_dir || 'templates';
+
+        // Socket.IO 通道
+        const socketio = webServer.socketio || {};
+        document.getElementById('wsSocketioEnabled').checked = socketio.enabled !== false;
+        document.getElementById('wsSocketioNamespace').value = socketio.namespace || '/ws';
+        document.getElementById('wsSocketioCors').value = socketio.cors_allowed_origins || '*';
+
+        // 原生 WebSocket 通道
+        const rawWs = webServer.raw_websocket || {};
+        document.getElementById('wsRawWebsocketEnabled').checked = rawWs.enabled !== false;
+        document.getElementById('wsRawWebsocketPath').value = rawWs.path || '/ws/raw';
+
+        // 动态生成第三方接入地址（用当前访问的 host:port，避免硬编码端口）
+        const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const wsPath = rawWs.path || '/ws/raw';
+        const wsUrlEl = document.getElementById('wsRawWebsocketUrl');
+        if (wsUrlEl) {
+            wsUrlEl.value = `${wsProto}://${window.location.host}${wsPath}`;
+        }
+    } catch (error) {
+        showNotification('加载 Web 服务配置失败', 'error');
+        console.error('加载 Web 服务配置失败:', error);
+    }
+}
+
+/**
+ * 保存 Web 服务配置
+ * 提交完整 web_server 段（端口/调试/CORS/Socket.IO/原生 WebSocket）
+ * 端口、静态/模板目录需重启服务生效；其余配置即时保存
+ */
+async function saveWebServerConfig() {
+    const port = parseInt(document.getElementById('wsPort').value);
+    if (!port || port < 1 || port > 65535) {
+        showNotification('请输入有效端口（1-65535）', 'error');
+        return;
+    }
+
+    const configData = {
+        web_server: {
+            port: port,
+            cors_enabled: document.getElementById('wsCorsEnabled').value === 'true',
+            debug: document.getElementById('wsDebug').value === 'true',
+            static_dir: document.getElementById('wsStaticDir').value.trim() || 'static',
+            template_dir: document.getElementById('wsTemplateDir').value.trim() || 'templates',
+            socketio: {
+                enabled: document.getElementById('wsSocketioEnabled').checked,
+                namespace: document.getElementById('wsSocketioNamespace').value.trim() || '/ws',
+                cors_allowed_origins: document.getElementById('wsSocketioCors').value.trim() || '*'
+            },
+            raw_websocket: {
+                enabled: document.getElementById('wsRawWebsocketEnabled').checked,
+                path: document.getElementById('wsRawWebsocketPath').value.trim() || '/ws/raw'
+            }
+        }
+    };
+
+    try {
+        const response = await fetch('/api/system/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(configData)
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            const msg = result.message || '配置已保存';
+            // 端口或目录变更时提醒重启
+            const oldPort = window.location.port;
+            const newPort = String(port);
+            if (oldPort && oldPort !== newPort) {
+                showNotification(`${msg}。端口已变更（${oldPort} → ${newPort}），需重启服务后通过新端口访问`, 'success');
+            } else {
+                showNotification(msg + '，部分配置需重启服务后生效', 'success');
+            }
+        } else {
+            showNotification(result.error || '保存失败', 'error');
+        }
+    } catch (error) {
+        showNotification('保存 Web 服务配置失败', 'error');
+        console.error('保存 Web 服务配置失败:', error);
     }
 }
 
@@ -1118,7 +1396,7 @@ function renderBackupList(backups) {
                     <div style="font-size:13px;color:var(--text-primary);">${b.filename}</div>
                     <div style="font-size:12px;color:var(--text-secondary);">${dateStr} · ${b.size_display}</div>
                 </div>
-                <button class="btn btn-secondary btn-sm" style="color:#f44336;font-size:12px;padding:4px 8px;" onclick="deleteBackup('${b.filename}')">删除</button>
+                <button class="btn btn-secondary btn-sm" style="color:#f44336;font-size:12px;padding:4px 8px;" onclick="System.deleteBackup('${b.filename}')">删除</button>
             </div>
         `;
     }).join('');
@@ -1223,3 +1501,38 @@ async function deleteBackup(filename) {
         console.error('删除备份失败:', error);
     }
 }
+
+// ========================================
+// 暴露命名空间：供 HTML onclick/onchange 调用
+// ========================================
+return {
+    switchTab: switchTab,
+    openCreateUserModal: openCreateUserModal,
+    openCreateServerModal: openCreateServerModal,
+    openEditServerModal: openEditServerModal,
+    openDeleteServerModal: openDeleteServerModal,
+    closeServerModal: closeServerModal,
+    saveServer: saveServer,
+    closeDeleteServerModal: closeDeleteServerModal,
+    confirmDeleteServer: confirmDeleteServer,
+    setDefaultServer: setDefaultServer,
+    openEditUserModal: openEditUserModal,
+    openDeleteUserModal: openDeleteUserModal,
+    closeUserModal: closeUserModal,
+    saveUser: saveUser,
+    closeDeleteUserModal: closeDeleteUserModal,
+    confirmDeleteUser: confirmDeleteUser,
+    loadLogContent: loadLogContent,
+    downloadLogFile: downloadLogFile,
+    clearLogFile: clearLogFile,
+    loadMonitorData: loadMonitorData,
+    saveWebServerConfig: saveWebServerConfig,
+    saveSystemConfig: saveSystemConfig,
+    loadDatabaseInfo: loadDatabaseInfo,
+    backupDatabase: backupDatabase,
+    restoreDatabase: restoreDatabase,
+    saveDatabasePath: saveDatabasePath,
+    deleteBackup: deleteBackup
+};
+
+})();

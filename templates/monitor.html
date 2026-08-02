@@ -14,7 +14,7 @@
         <div class="sidebar-header">
             <h3>摄像机列表</h3>
             <div class="sidebar-search">
-                <input type="text" id="cameraSearch" placeholder="搜索摄像机..." oninput="filterCameras()">
+                <input type="text" id="cameraSearch" placeholder="搜索摄像机..." oninput="Monitor.filterCameras()">
             </div>
         </div>
 
@@ -39,16 +39,16 @@
             <div class="toolbar-left">
                 <div class="layout-selector">
                     <span class="layout-label">布局:</span>
-                    <button class="layout-btn active" data-layout="1" onclick="setLayout(1)">
+                    <button class="layout-btn active" data-layout="1" onclick="Monitor.setLayout(1)">
                         <span class="layout-num">1</span>
                     </button>
-                    <button class="layout-btn" data-layout="2" onclick="setLayout(2)">
+                    <button class="layout-btn" data-layout="2" onclick="Monitor.setLayout(2)">
                         <span class="layout-num">2</span>
                     </button>
-                    <button class="layout-btn" data-layout="4" onclick="setLayout(4)">
+                    <button class="layout-btn" data-layout="4" onclick="Monitor.setLayout(4)">
                         <span class="layout-num">4</span>
                     </button>
-                    <button class="layout-btn" data-layout="9" onclick="setLayout(9)">
+                    <button class="layout-btn" data-layout="9" onclick="Monitor.setLayout(9)">
                         <span class="layout-num">9</span>
                     </button>
                 </div>
@@ -58,19 +58,19 @@
             </div>
             
             <div class="toolbar-right">
-                <button class="toolbar-btn" onclick="clearAllScreens()">
+                <button class="toolbar-btn" onclick="Monitor.clearAllScreens()">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
                     </svg>
                     清空画面
                 </button>
-                <button class="toolbar-btn" onclick="autoArrange()">
+                <button class="toolbar-btn" onclick="Monitor.autoArrange()">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M3 13h2v-2H3zm0 4h2v-2H3zm0-8h2V7H3zm4 4h2v-2H7zm0 4h2v-2H7zm0-8h2V7H7zm4 4h2v-2h-2zm0 4h2v-2h-2zm0-8h2V7h-2zm4 4h2v-2h-2zm0 4h2v-2h-2zm0-8h2V7h-2zm4 4h2v-2h-2zm0 4h2v-2h-2zm0-8h2V7h-2z"/>
                     </svg>
                     自动排列
                 </button>
-                <button class="toolbar-btn fullscreen-btn" onclick="toggleFullscreen()">
+                <button class="toolbar-btn fullscreen-btn" onclick="Monitor.toggleMonitorWallFullscreen()">
                     <svg viewBox="0 0 24 24" fill="currentColor" id="fullscreenIcon">
                         <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
                     </svg>
@@ -124,17 +124,17 @@
         <div class="modal-header">
             <h3 id="singleScreenTitle">摄像机画面</h3>
             <div class="single-screen-controls">
-                <button class="control-btn" id="singleScreenAIModeBtn" onclick="toggleSingleAIMode()" title="切换 AI/普通模式">
+                <button class="control-btn" id="singleScreenAIModeBtn" onclick="Monitor.toggleSingleAIMode()" title="切换 AI/普通模式">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM8 15c0-1.66 1.34-3 3-3 .35 0 .69.07 1 .18V6h5v2h-3v7.03A3.003 3.003 0 0 1 11 18c-1.66 0-3-1.34-3-3z"/>
                     </svg>
                 </button>
-                <button class="control-btn" onclick="toggleSingleFullscreen()">
+                <button class="control-btn" onclick="Monitor.toggleSingleFullscreen()">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
                     </svg>
                 </button>
-                <button class="control-btn" onclick="closeSingleScreen()">
+                <button class="control-btn" onclick="Monitor.closeSingleScreen()">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
                     </svg>
@@ -153,17 +153,17 @@
                         <div class="channel-list-wrap">
                             <div class="channel-list-item selected">
                                 <div class="ch-btn-left">
-                                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" class="ch-btn-play" onclick="playCurrentStream()">
+                                    <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" class="ch-btn-play" onclick="Monitor.playCurrentStream()">
                                         <path d="M8 5v14l11-7z"/>
                                     </svg>
                                 </div>
                                 <span class="ch-name" id="singleChName">Camera 01</span>
-                                <div class="stream-type" onclick="toggleStreamSelector()">
+                                <div class="stream-type" onclick="Monitor.toggleStreamSelector()">
                                     <i class="fa fa-video-camera"></i>
                                     <i class="fa fa-angle-down"></i>
                                     <span id="streamTypeText">子码流</span>
                                 </div>
-                                <div class="record-btn-circle" id="recordBtnCircle" onclick="toggleRecording()"></div>
+                                <div class="record-btn-circle" id="recordBtnCircle" onclick="Monitor.toggleRecording()"></div>
                             </div>
                         </div>
                     </div>
@@ -214,7 +214,7 @@
                                 </div>
                             </div>
                             <!-- 中心停止按钮 -->
-                            <button class="ptz-stop-button" onclick="ptzStop()" title="停止">
+                            <button class="ptz-stop-button" onclick="Monitor.ptzStop()" title="停止">
                                 <svg viewBox="0 0 24 24" class="ptz-stop-icon">
                                     <rect x="6" y="6" width="12" height="12" rx="2"/>
                                 </svg>
@@ -237,13 +237,13 @@
                     <!-- 变焦/聚焦/光圈 -->
                     <div class="ptz-advanced">
                         <div class="ptz-advanced-item">
-                            <button onclick="ptzZoom('out')" title="调焦 -">
+                            <button onclick="Monitor.ptzZoom('out')" title="调焦 -">
                                 <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
                                     <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2" fill="none"/>
                                     <path d="M21 21l-4.35-4.35M8 11h6" stroke="currentColor" stroke-width="2"/>
                                 </svg>
                             </button>
-                            <button onclick="ptzZoom('in')" title="调焦 +">
+                            <button onclick="Monitor.ptzZoom('in')" title="调焦 +">
                                 <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
                                     <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2" fill="none"/>
                                     <path d="M21 21l-4.35-4.35M11 8v6M8 11h6" stroke="currentColor" stroke-width="2"/>
@@ -251,13 +251,13 @@
                             </button>
                         </div>
                         <div class="ptz-advanced-item">
-                            <button onclick="ptzFocus('out')" title="聚焦 -">
+                            <button onclick="Monitor.ptzFocus('out')" title="聚焦 -">
                                 <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
                                     <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/>
                                     <path d="M12 5v2M12 17v2M5 12h2M17 12h2" stroke="currentColor" stroke-width="2"/>
                                 </svg>
                             </button>
-                            <button onclick="ptzFocus('in')" title="聚焦 +">
+                            <button onclick="Monitor.ptzFocus('in')" title="聚焦 +">
                                 <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
                                     <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/>
                                     <path d="M12 5v2M12 17v2M5 12h2M17 12h2" stroke="currentColor" stroke-width="2"/>
@@ -266,13 +266,13 @@
                             </button>
                         </div>
                         <div class="ptz-advanced-item">
-                            <button onclick="ptzIris('out')" title="光圈 -">
+                            <button onclick="Monitor.ptzIris('out')" title="光圈 -">
                                 <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
                                     <circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2" fill="none"/>
                                     <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2" fill="none"/>
                                 </svg>
                             </button>
-                            <button onclick="ptzIris('in')" title="光圈 +">
+                            <button onclick="Monitor.ptzIris('in')" title="光圈 +">
                                 <svg viewBox="0 0 24 24" class="ptz-advanced-icon">
                                     <circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2" fill="none"/>
                                     <circle cx="12" cy="12" r="2" fill="currentColor"/>
@@ -283,19 +283,19 @@
 
                     <!-- 其他功能按钮（一行显示5个图标） -->
                     <div class="ptz-functions">
-                        <button class="ptz-function-button" onclick="toggleLight()" title="灯光">
+                        <button class="ptz-function-button" onclick="Monitor.toggleLight()" title="灯光">
                             <i class="fa fa-lightbulb"></i>
                         </button>
-                        <button class="ptz-function-button" onclick="toggleWiper()" title="雨刷">
+                        <button class="ptz-function-button" onclick="Monitor.toggleWiper()" title="雨刷">
                             <i class="fa fa-tint"></i>
                         </button>
-                        <button class="ptz-function-button" onclick="auxFocus()" title="辅助聚焦">
+                        <button class="ptz-function-button" onclick="Monitor.auxFocus()" title="辅助聚焦">
                             <i class="fa fa-crosshairs"></i>
                         </button>
-                        <button class="ptz-function-button" onclick="lensInit()" title="镜头初始化">
+                        <button class="ptz-function-button" onclick="Monitor.lensInit()" title="镜头初始化">
                             <i class="fa fa-refresh"></i>
                         </button>
-                        <button class="ptz-function-button" onclick="toggleManualTrack()" title="手动跟踪">
+                        <button class="ptz-function-button" onclick="Monitor.toggleManualTrack()" title="手动跟踪">
                             <i class="fa fa-user"></i>
                         </button>
                     </div>
@@ -303,11 +303,11 @@
                     <!-- 预置点/巡航标签页 -->
                     <div class="ptz-tabs">
                         <div class="ptz-tabs-header">
-                            <div class="ptz-tab-item active" onclick="switchPtzTab('preset')" id="tabPreset">
+                            <div class="ptz-tab-item active" onclick="Monitor.switchPtzTab('preset')" id="tabPreset">
                                 <i class="fa fa-bell"></i>
                                 <span>预置点</span>
                             </div>
-                            <div class="ptz-tab-item" onclick="switchPtzTab('patrol')" id="tabPatrol">
+                            <div class="ptz-tab-item" onclick="Monitor.switchPtzTab('patrol')" id="tabPatrol">
                                 <i class="fa fa-route"></i>
                                 <span>巡航</span>
                             </div>
@@ -322,13 +322,13 @@
                                     <div class="preset-item-content">
                                         <span class="preset-name">预置点 1</span>
                                         <div class="preset-actions">
-                                            <button onclick="gotoPreset(1)" title="调用">
+                                            <button onclick="Monitor.gotoPreset(1)" title="调用">
                                                 <i class="fa fa-play"></i>
                                             </button>
-                                            <button onclick="setPreset(1)" title="设置">
+                                            <button onclick="Monitor.setPreset(1)" title="设置">
                                                 <i class="fa fa-cog"></i>
                                             </button>
-                                            <button onclick="deletePreset(1)" title="删除">
+                                            <button onclick="Monitor.deletePreset(1)" title="删除">
                                                 <i class="fa fa-trash"></i>
                                             </button>
                                         </div>
@@ -339,13 +339,13 @@
                                     <div class="preset-item-content">
                                         <span class="preset-name">预置点 2</span>
                                         <div class="preset-actions">
-                                            <button onclick="gotoPreset(2)" title="调用">
+                                            <button onclick="Monitor.gotoPreset(2)" title="调用">
                                                 <i class="fa fa-play"></i>
                                             </button>
-                                            <button onclick="setPreset(2)" title="设置">
+                                            <button onclick="Monitor.setPreset(2)" title="设置">
                                                 <i class="fa fa-cog"></i>
                                             </button>
-                                            <button onclick="deletePreset(2)" title="删除">
+                                            <button onclick="Monitor.deletePreset(2)" title="删除">
                                                 <i class="fa fa-trash"></i>
                                             </button>
                                         </div>
@@ -353,7 +353,7 @@
                                 </div>
                             </div>
                             <div class="preset-footer">
-                                <button id="addPresetBtn" onclick="addNewPreset()" class="add-preset-btn">
+                                <button id="addPresetBtn" onclick="Monitor.addNewPreset()" class="add-preset-btn">
                                     <i class="fa fa-plus"></i>
                                     <span>添加预置点</span>
                                 </button>
@@ -371,16 +371,16 @@
                                             <span class="patrol-points">预置点数: 5</span>
                                         </div>
                                         <div class="patrol-actions">
-                                            <button onclick="startPatrol(1)" title="调用">
+                                            <button onclick="Monitor.startPatrol(1)" title="调用">
                                                 <i class="fa fa-play"></i>
                                             </button>
-                                            <button onclick="stopPatrol(1)" title="停止">
+                                            <button onclick="Monitor.stopPatrol(1)" title="停止">
                                                 <i class="fa fa-stop"></i>
                                             </button>
-                                            <button onclick="editPatrol(1)" title="编辑">
+                                            <button onclick="Monitor.editPatrol(1)" title="编辑">
                                                 <i class="fa fa-edit"></i>
                                             </button>
-                                            <button onclick="deletePatrol(1)" title="删除">
+                                            <button onclick="Monitor.deletePatrol(1)" title="删除">
                                                 <i class="fa fa-trash"></i>
                                             </button>
                                         </div>
@@ -394,16 +394,16 @@
                                             <span class="patrol-points">预置点数: 3</span>
                                         </div>
                                         <div class="patrol-actions">
-                                            <button onclick="startPatrol(2)" title="调用">
+                                            <button onclick="Monitor.startPatrol(2)" title="调用">
                                                 <i class="fa fa-play"></i>
                                             </button>
-                                            <button onclick="stopPatrol(2)" title="停止">
+                                            <button onclick="Monitor.stopPatrol(2)" title="停止">
                                                 <i class="fa fa-stop"></i>
                                             </button>
-                                            <button onclick="editPatrol(2)" title="编辑">
+                                            <button onclick="Monitor.editPatrol(2)" title="编辑">
                                                 <i class="fa fa-edit"></i>
                                             </button>
-                                            <button onclick="deletePatrol(2)" title="删除">
+                                            <button onclick="Monitor.deletePatrol(2)" title="删除">
                                                 <i class="fa fa-trash"></i>
                                             </button>
                                         </div>
@@ -411,7 +411,7 @@
                                 </div>
                             </div>
                             <div class="patrol-footer">
-                                <button onclick="addNewPatrol()" class="add-patrol-btn">
+                                <button onclick="Monitor.addNewPatrol()" class="add-patrol-btn">
                                     <i class="fa fa-plus"></i>
                                     <span>添加巡航路径</span>
                                 </button>
@@ -532,7 +532,7 @@
     <div class="modal-content modal-small">
         <div class="modal-header">
             <h3>语音对讲</h3>
-            <button class="modal-close" onclick="closeVoiceTalk()">&times;</button>
+            <button class="modal-close" onclick="Monitor.closeVoiceTalk()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="voice-talk-container">
@@ -544,7 +544,7 @@
                     <span>准备就绪</span>
                 </div>
                 <div class="voice-talk-controls">
-                    <button class="voice-btn" id="voiceTalkBtn" onclick="toggleVoiceTalk()">
+                    <button class="voice-btn" id="voiceTalkBtn" onclick="Monitor.toggleVoiceTalk()">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/>
                         </svg>
@@ -561,14 +561,14 @@
     <div class="modal-content modal-large">
         <div class="modal-header">
             <h3>事件详情</h3>
-            <button class="modal-close" onclick="closeMonitorEventDetail()">&times;</button>
+            <button class="modal-close" onclick="Monitor.closeMonitorEventDetail()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="event-detail-content">
                 <div class="event-detail-image-container">
                     <div class="event-media-switcher">
-                        <button class="btn btn-sm btn-primary" id="monitorShowImageBtn" onclick="switchMonitorEventMedia('image')">显示图片</button>
-                        <button class="btn btn-sm btn-secondary" id="monitorShowGifBtn" onclick="switchMonitorEventMedia('gif')">显示GIF</button>
+                        <button class="btn btn-sm btn-primary" id="monitorShowImageBtn" onclick="Monitor.switchMonitorEventMedia('image')">显示图片</button>
+                        <button class="btn btn-sm btn-secondary" id="monitorShowGifBtn" onclick="Monitor.switchMonitorEventMedia('gif')">显示GIF</button>
                     </div>
                     <img id="monitorEventImage" src="" alt="事件图片" class="event-detail-image" style="display: block;">
                     <img id="monitorEventGif" src="" alt="事件GIF" class="event-detail-image" style="display: none;">
@@ -636,7 +636,7 @@
             </div>
         </div>
         <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeMonitorEventDetail()">关闭</button>
+            <button class="btn btn-secondary" onclick="Monitor.closeMonitorEventDetail()">关闭</button>
         </div>
     </div>
 </div>
@@ -646,14 +646,14 @@
     <div class="modal-content">
         <div class="modal-header">
             <h3>截图预览</h3>
-            <button class="modal-close" onclick="closeSnapshotModal()">&times;</button>
+            <button class="modal-close" onclick="Monitor.closeSnapshotModal()">&times;</button>
         </div>
         <div class="modal-body">
             <img id="snapshotImage" class="snapshot-preview" src="" alt="截图">
         </div>
         <div class="modal-footer">
-            <button class="btn btn-secondary" onclick="closeSnapshotModal()">关闭</button>
-            <button class="btn btn-primary" onclick="downloadSnapshot()">下载</button>
+            <button class="btn btn-secondary" onclick="Monitor.closeSnapshotModal()">关闭</button>
+            <button class="btn btn-primary" onclick="Monitor.downloadSnapshot()">下载</button>
         </div>
     </div>
 </div>
@@ -662,523 +662,9 @@
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/ZLMRTCClient.js') }}"></script>
 <script src="{{ url_for('static', filename='js/jessibuca/jessibuca.js') }}"></script>
-<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260731"></script>
+<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260802"></script>
 <script src="{{ url_for('static', filename='js/ptz_joystick.js') }}"></script>
 <script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}?v=20260801"></script>
-<script>
-// ========================================
-// 驾驶舱事件列表功能
-// ========================================
-
-let monitorEvents = [];
-let eventWebSocket = null;
-
-// 初始化事件列表
-async function initMonitorEventList() {
-    await loadMonitorTasks();  // 先加载任务映射，确保事件渲染时任务名称可用
-    loadMonitorEvents();
-    initEventWebSocket();
-}
-
-// 加载任务列表
-let monitorTaskMap = {};  // 任务ID到名称的映射
-
-async function loadMonitorTasks() {
-    try {
-        const response = await fetch('/api/tasks?per_page=1000');
-        const data = await response.json();
-        const tasks = data.tasks || data || [];
-        const select = document.getElementById('eventTaskFilter');
-
-        // 清空旧选项（保留"全部任务"）
-        select.innerHTML = '<option value="">全部任务</option>';
-
-        // 构建任务映射并填充下拉框
-        monitorTaskMap = {};
-        tasks.forEach(task => {
-            monitorTaskMap[task.id] = task.task_name;
-            const option = document.createElement('option');
-            option.value = task.id;
-            option.textContent = task.task_name;
-            select.appendChild(option);
-        });
-    } catch (error) {
-        console.error('加载任务列表失败:', error);
-    }
-}
-
-// 根据task_id获取任务名称
-function getTaskNameById(taskId) {
-    return monitorTaskMap[taskId] || '';
-}
-
-// 加载事件列表
-async function loadMonitorEvents() {
-    try {
-        const taskFilter = document.getElementById('eventTaskFilter').value;
-        let url = '/api/events?per_page=50';
-        if (taskFilter) {
-            url += `&task_id=${taskFilter}`;
-        }
-
-        const response = await fetch(url);
-        const data = await response.json();
-        monitorEvents = data.events || [];
-
-        renderMonitorEvents();
-        updateEventCount();
-    } catch (error) {
-        console.error('加载事件列表失败:', error);
-    }
-}
-
-// 渲染事件列表
-function renderMonitorEvents() {
-    const scroller = document.getElementById('eventScroller');
-    scroller.innerHTML = '';
-
-    monitorEvents.forEach(event => {
-        const eventCard = createMonitorEventCard(event);
-        scroller.appendChild(eventCard);
-    });
-
-    // 自动滚动到底部（显示最新事件）
-    scroller.scrollTop = 0;
-}
-
-// 创建事件卡片
-function createMonitorEventCard(event) {
-    const card = document.createElement('div');
-    card.className = 'monitor-event-card';
-    card.dataset.eventId = event.event_id;  // ✅ 用于 event_update/gif_ready 查找卡片
-    card.onclick = () => showMonitorEventDetail(event);
-
-    const imageContainer = document.createElement('div');
-    imageContainer.className = 'event-image-container';
-
-    // ✅ 优先使用 GIF 动画作为封面（如果有），其次使用图片
-    const gifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
-    const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
-    const coverUrl = gifUrl || imageUrl;  // GIF 优先
-
-    if (coverUrl) {
-        const img = document.createElement('img');
-        img.src = coverUrl;
-        img.alt = gifUrl ? `事件GIF ${event.event_id}` : `事件 ${event.event_id}`;
-        img.style.objectFit = 'cover';
-        img.onerror = () => {
-            imageContainer.innerHTML = '<div class="event-no-image"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></div>';
-        };
-        imageContainer.appendChild(img);
-
-        // ✅ 如果有 GIF，添加 GIF 标识
-        if (gifUrl) {
-            const gifBadge = document.createElement('div');
-            gifBadge.className = 'gif-badge';
-            gifBadge.innerHTML = '🎬 GIF';
-            imageContainer.appendChild(gifBadge);
-            card._gifUrl = gifUrl;
-            card._hasGif = true;
-        }
-    } else {
-        imageContainer.innerHTML = '<div class="event-no-image"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></div>';
-    }
-
-    card.appendChild(imageContainer);
-
-    const infoContainer = document.createElement('div');
-    infoContainer.className = 'event-info-container';
-    const statusInfo = getStatusDisplay(event.status);
-    infoContainer.innerHTML = `
-        <div class="event-info-row">
-            <span class="event-status ${statusInfo.className}">${statusInfo.text}</span>
-            <span class="event-tag tag-class">${event.class_name || '-'}</span>
-        </div>
-        <div class="event-info-row">
-            <span class="event-tag tag-task">${getTaskNameById(event.task_id) || '-'}</span>
-            <span class="event-tag tag-time">${formatEventTime(event.start_time || event.created_at)}</span>
-        </div>
-    `;
-    card.appendChild(infoContainer);
-
-    return card;
-}
-
-// 显示事件详情
-function showMonitorEventDetail(event) {
-    const modal = document.getElementById('monitorEventDetailModal');
-
-    // 存储当前事件的媒体URL（用于切换）
-    window._currentMonitorEvent = event;
-
-    // 设置图片
-    const rawImageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
-    const eventImage = document.getElementById('monitorEventImage');
-
-    // ✅ 修复：将相对路径转换为完整的 HTTP URL（避免 HTTPS 协议错误）
-    let imageUrl = rawImageUrl;
-    if (rawImageUrl && !rawImageUrl.startsWith('http')) {
-        // 相对路径（如 output/images/xxx.jpg）转换为完整 URL
-        imageUrl = `http://${window.location.hostname}:${window.location.port}/${rawImageUrl.replace(/\\/g, '/')}`;
-    }
-
-    // 设置GIF
-    const rawGifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
-    const eventGif = document.getElementById('monitorEventGif');
-
-    // ✅ 修复：将相对路径转换为完整的 HTTP URL
-    let gifUrl = rawGifUrl;
-    if (rawGifUrl && !rawGifUrl.startsWith('http')) {
-        gifUrl = `http://${window.location.hostname}:${window.location.port}/${rawGifUrl.replace(/\\/g, '/')}`;
-    }
-
-    // 默认显示图片
-    if (imageUrl) {
-        eventImage.src = imageUrl;
-        eventImage.style.display = 'block';
-        eventGif.style.display = 'none';
-        document.getElementById('monitorEventNoMedia').style.display = 'none';
-        // 更新按钮状态
-        document.getElementById('monitorShowImageBtn').classList.remove('btn-secondary');
-        document.getElementById('monitorShowImageBtn').classList.add('btn-primary');
-        document.getElementById('monitorShowGifBtn').classList.remove('btn-primary');
-        document.getElementById('monitorShowGifBtn').classList.add('btn-secondary');
-    } else if (gifUrl) {
-        // 如果没有图片但有GIF，显示GIF
-        eventGif.src = gifUrl;
-        eventGif.style.display = 'block';
-        eventImage.style.display = 'none';
-        document.getElementById('monitorEventNoMedia').style.display = 'none';
-        // 更新按钮状态
-        document.getElementById('monitorShowImageBtn').classList.remove('btn-primary');
-        document.getElementById('monitorShowImageBtn').classList.add('btn-secondary');
-        document.getElementById('monitorShowGifBtn').classList.remove('btn-secondary');
-        document.getElementById('monitorShowGifBtn').classList.add('btn-primary');
-    } else {
-        // 都没有，显示占位符
-        eventImage.style.display = 'none';
-        eventGif.style.display = 'none';
-        document.getElementById('monitorEventNoMedia').style.display = 'block';
-    }
-
-    // 设置GIF URL（即使当前不显示）
-    if (gifUrl) {
-        eventGif.src = gifUrl;
-    }
-
-    // 设置详情信息
-    document.getElementById('monitorEventId').textContent = event.event_id || '-';
-    document.getElementById('monitorEventType').textContent = formatEventType(event.type);
-
-    // 事件状态：使用统一映射渲染徽章
-    const detailStatusInfo = getStatusDisplay(event.status);
-    const detailStatusEl = document.getElementById('monitorEventStatus');
-    detailStatusEl.textContent = detailStatusInfo.text;
-    detailStatusEl.className = `event-status ${detailStatusInfo.className}`;
-
-    document.getElementById('monitorEventClass').textContent = event.class_name || '-';
-    document.getElementById('monitorEventChannel').textContent = event.channel_name || event.camera_id || '-';
-    document.getElementById('monitorEventTask').textContent = getTaskNameById(event.task_id) || event.task_name || '-';
-    document.getElementById('monitorEventAlgorithm').textContent = event.algorithm || '-';
-    document.getElementById('monitorEventEnteredZones').textContent =
-        (event.entered_zones && event.entered_zones.length) ? event.entered_zones.join('、') : '-';
-    document.getElementById('monitorEventZoneName').textContent = event.zone_name || '-';
-    const loiteredZones = event.loitered_zones || [];
-    document.getElementById('monitorEventLoiteredZones').textContent =
-        loiteredZones.length ? loiteredZones.join('、') : '-';
-    document.getElementById('monitorEventStartTime').textContent = formatEventTime(event.start_time);
-    document.getElementById('monitorEventEndTime').textContent = formatEventTime(event.end_time);
-    document.getElementById('monitorEventTime').textContent = formatEventTime(event.created_at);
-
-    // 如果缺少 channel_name，异步从 API 获取并更新
-    if (!event.channel_name && event.event_id) {
-        fetch(`/api/tasks/events/${event.event_id}`)
-            .then(r => r.json())
-            .then(data => {
-                if (data.channel_name) {
-                    document.getElementById('monitorEventChannel').textContent = data.channel_name;
-                }
-            })
-            .catch(() => {});
-    }
-
-    modal.style.display = 'flex';
-}
-
-// 切换事件媒体显示（图片/GIF）
-function switchMonitorEventMedia(type) {
-    const event = window._currentMonitorEvent;
-    if (!event) return;
-
-    const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
-    const gifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
-
-    const eventImage = document.getElementById('monitorEventImage');
-    const eventGif = document.getElementById('monitorEventGif');
-    const noMedia = document.getElementById('monitorEventNoMedia');
-
-    if (type === 'image') {
-        if (imageUrl) {
-            eventImage.src = imageUrl;
-            eventImage.style.display = 'block';
-            eventGif.style.display = 'none';
-            noMedia.style.display = 'none';
-            // 更新按钮状态
-            document.getElementById('monitorShowImageBtn').classList.remove('btn-secondary');
-            document.getElementById('monitorShowImageBtn').classList.add('btn-primary');
-            document.getElementById('monitorShowGifBtn').classList.remove('btn-primary');
-            document.getElementById('monitorShowGifBtn').classList.add('btn-secondary');
-        } else {
-            // 无图片
-            eventImage.style.display = 'none';
-            eventGif.style.display = 'none';
-            noMedia.style.display = 'block';
-        }
-    } else if (type === 'gif') {
-        if (gifUrl) {
-            eventGif.src = gifUrl;
-            eventGif.style.display = 'block';
-            eventImage.style.display = 'none';
-            noMedia.style.display = 'none';
-            // 更新按钮状态
-            document.getElementById('monitorShowImageBtn').classList.remove('btn-primary');
-            document.getElementById('monitorShowImageBtn').classList.add('btn-secondary');
-            document.getElementById('monitorShowGifBtn').classList.remove('btn-secondary');
-            document.getElementById('monitorShowGifBtn').classList.add('btn-primary');
-        } else {
-            // 无GIF
-            eventImage.style.display = 'none';
-            eventGif.style.display = 'none';
-            noMedia.style.display = 'block';
-        }
-    }
-}
-
-// 关闭事件详情
-function closeMonitorEventDetail() {
-    const modal = document.getElementById('monitorEventDetailModal');
-    modal.style.display = 'none';
-}
-
-// 初始化WebSocket实时推送
-function initEventWebSocket() {
-    if (eventWebSocket) return;
-
-    try {
-        eventWebSocket = io('/ws', {
-            transports: ['websocket', 'polling']
-        });
-
-        eventWebSocket.on('new_event', (event) => {
-            console.log('收到新事件:', event);
-            addNewEventToMonitor(event);
-        });
-
-        // ✅ 新增：事件状态更新（跟踪结束）
-        eventWebSocket.on('event_update', (data) => {
-            console.log('收到事件更新:', data);
-            updateMonitorEventCard(data);
-        });
-
-        // ✅ 新增：GIF 生成完成
-        eventWebSocket.on('gif_ready', (data) => {
-            console.log('收到GIF完成:', data);
-            updateMonitorEventGif(data);
-        });
-
-        eventWebSocket.on('connect', () => {
-            console.log('事件WebSocket已连接');
-        });
-
-        eventWebSocket.on('disconnect', () => {
-            console.log('事件WebSocket已断开');
-        });
-    } catch (error) {
-        console.error('初始化事件WebSocket失败:', error);
-    }
-}
-
-// 添加新事件到列表（滚动显示）
-function addNewEventToMonitor(event) {
-    // 检查任务过滤
-    const taskFilter = document.getElementById('eventTaskFilter').value;
-    if (taskFilter && event.task_id != taskFilter) {
-        return;
-    }
-
-    // 添加到列表顶部
-    monitorEvents.unshift(event);
-
-    // 限制最多显示100个
-    if (monitorEvents.length > 100) {
-        monitorEvents.pop();
-    }
-
-    // 创建新事件卡片
-    const scroller = document.getElementById('eventScroller');
-    const eventCard = createMonitorEventCard(event);
-
-    // 添加动画效果
-    eventCard.style.animation = 'slideInFromTop 0.3s ease';
-
-    // 插入到顶部
-    scroller.insertBefore(eventCard, scroller.firstChild);
-
-    // 滚动到顶部显示新事件
-    scroller.scrollTo({
-        top: 0,
-        behavior: 'smooth'
-    });
-
-    // 更新计数
-    updateEventCount();
-
-    // 播放提示音（可选）
-    playEventNotificationSound();
-}
-
-// ✅ 新增：更新已显示事件卡片的状态（跟踪结束）
-function updateMonitorEventCard(data) {
-    const card = document.querySelector(`[data-event-id="${data.event_id}"]`);
-    if (!card) {
-        console.log(`未找到事件卡片: ${data.event_id}`);
-        return;
-    }
-
-    // ✅ 使用实际 status 值显示对应中文与样式（不再硬编码"已结束"）
-    const statusInfo = getStatusDisplay(data.status);
-    let statusBadge = card.querySelector('.event-status');
-    if (!statusBadge) {
-        // 卡片上没有状态标识，创建一个
-        statusBadge = document.createElement('span');
-        card.querySelector('.event-info-container').appendChild(statusBadge);
-    }
-    statusBadge.textContent = statusInfo.text;
-    statusBadge.className = `event-status ${statusInfo.className}`;
-
-    // 更新内存中事件对象（用于点击查看详情时显示最新数据）
-    const eventIdx = monitorEvents.findIndex(e => e.event_id === data.event_id);
-    if (eventIdx >= 0) {
-        if (data.status) monitorEvents[eventIdx].status = data.status;
-        if (data.data) {
-            if (data.data.confidence !== undefined) monitorEvents[eventIdx].confidence = data.data.confidence;
-            if (data.data.end_time) monitorEvents[eventIdx].end_time = data.data.end_time;
-        }
-    }
-}
-
-// ✅ 新增：更新已显示事件卡片的 GIF（GIF 生成完成）
-function updateMonitorEventGif(data) {
-    const card = document.querySelector(`[data-event-id="${data.event_id}"]`);
-    if (!card) {
-        console.log(`未找到事件卡片（GIF）: ${data.event_id}`);
-        return;
-    }
-
-    const gifUrl = data.local_gif_url || data.minio_gif_url || data.ftp_gif_url;
-    if (!gifUrl) return;
-
-    // 添加 GIF 标识
-    const imageContainer = card.querySelector('.event-image-container');
-    if (!imageContainer) return;
-
-    let gifBadge = imageContainer.querySelector('.gif-badge');
-    if (!gifBadge) {
-        gifBadge = document.createElement('div');
-        gifBadge.className = 'gif-badge';
-        gifBadge.innerHTML = '🎬 GIF';
-        imageContainer.appendChild(gifBadge);
-    }
-
-    // ✅ 封面图片替换为 GIF 动画
-    const coverImg = imageContainer.querySelector('img');
-    if (coverImg) {
-        coverImg.src = gifUrl;
-        coverImg.alt = '事件GIF动画';
-        coverImg.style.objectFit = 'cover';
-    }
-
-    // 存储 GIF URL 到卡片对象（点击查看详情时使用）
-    card._gifUrl = gifUrl;
-    // ✅ 标记卡片已有 GIF（防止重新渲染时丢失）
-    card._hasGif = true;
-    card._gifData = data;
-
-    // 更新内存中事件对象（不修改卡片状态标签）
-    const eventIdx = monitorEvents.findIndex(e => e.event_id === data.event_id);
-    if (eventIdx >= 0) {
-        monitorEvents[eventIdx].local_gif_url = data.local_gif_url || '';
-        monitorEvents[eventIdx].minio_gif_url = data.minio_gif_url || '';
-        monitorEvents[eventIdx].ftp_gif_url = data.ftp_gif_url || '';
-    }
-}
-
-// 更新事件计数
-function updateEventCount() {
-    document.getElementById('eventCount').textContent = `事件: ${monitorEvents.length}`;
-}
-
-// 格式化事件类型
-function formatEventType(type) {
-    const typeMap = {
-        'tracking': '目标跟踪',
-        'zone': '区域检测',
-        'loitering': '徘徊检测',
-        'track_start': '跟踪开始',
-        'track_end': '跟踪结束',
-        'track_update': '跟踪更新',
-        'detection': '检测'
-    };
-    return typeMap[type] || type;
-}
-
-// ✅ 事件状态 -> 中文 + 样式类的统一映射
-function getStatusDisplay(status) {
-    const statusMap = {
-        'tracking_start':  { text: '跟踪开始', className: 'status-start' },
-        'tracking_update': { text: '跟踪更新', className: 'status-update' },
-        'tracking_end':    { text: '已结束',   className: 'status-ended' }
-    };
-    return statusMap[status] || { text: status || '未知', className: 'status-unknown' };
-}
-
-// 格式化事件时间
-function formatEventTime(timestamp) {
-    if (!timestamp) return '-';
-
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diff = now - date;
-
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-
-    if (minutes < 1) return '刚刚';
-    if (minutes < 60) return `${minutes}分钟前`;
-    if (hours < 24) return `${hours}小时前`;
-    if (days < 7) return `${days}天前`;
-
-    return date.toLocaleString('zh-CN', {
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-    });
-}
-
-// 播放提示音
-function playEventNotificationSound() {
-    // 可选：播放音频提示
-    // const audio = new Audio('/static/sounds/notification.mp3');
-    // audio.play();
-}
-
-// 页面加载时初始化
-document.addEventListener('DOMContentLoaded', function() {
-    initMonitorEventList();
-});
-</script>
 
 <style>
 /* 右侧事件列表样式 */

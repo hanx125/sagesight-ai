@@ -1,40 +1,41 @@
 /**
  * SageSight AI - 监控墙页面 JavaScript
  */
+window.Monitor = (function() {
 
 // ========================================
 // 全局变量
 // ========================================
 
-let cameras = [];
-let directories = [];
-let currentLayout = 1;
-let screens = [];
-let selectedScreenIndex = 0;
-let currentSingleCamera = null;
-let voiceTalkActive = false;
-let mediaRecorder = null;
-let recordedChunks = [];
-let snapshotData = null;
-let expandedDirs = new Set(); // 记录展开的目录ID
-let ptzSpeed = 3;  // 云台速度（1-5）
-let ptzMoving = false;  // 云台是否正在移动
-let streamStatusInterval = null;  // 流状态更新定时器
+var cameras = [];
+var directories = [];
+var currentLayout = 1;
+var screens = [];
+var selectedScreenIndex = 0;
+var currentSingleCamera = null;
+var voiceTalkActive = false;
+var mediaRecorder = null;
+var recordedChunks = [];
+var snapshotData = null;
+var expandedDirs = new Set(); // 记录展开的目录ID
+var ptzSpeed = 3;  // 云台速度（1-5）
+var ptzMoving = false;  // 云台是否正在移动
+var streamStatusInterval = null;  // 流状态更新定时器
 
 // AI 视频流相关
-let aiStreamMode = {};  // {screenIndex: true/false} 记录每个画面是否使用 AI 模式
-let aiStreamCanvas = {};  // {screenIndex: canvasElement} AI 流 Canvas 元素
-let singleScreenAIMode = false;  // 单画面是否使用 AI 模式
-let aiStreamSubscriptions = {};  // {cameraId: {screenIndexes: Set, image: Image}} AI 流订阅记录
-let aiFrameCanvases = {};  // {cameraId: canvasElement} 单画面 AI Canvas
+var aiStreamMode = {};  // {screenIndex: true/false} 记录每个画面是否使用 AI 模式
+var aiStreamCanvas = {};  // {screenIndex: canvasElement} AI 流 Canvas 元素
+var singleScreenAIMode = false;  // 单画面是否使用 AI 模式
+var aiStreamSubscriptions = {};  // {cameraId: {screenIndexes: Set, image: Image}} AI 流订阅记录
+var aiFrameCanvases = {};  // {cameraId: canvasElement} 单画面 AI Canvas
 
 // AI 流渲染合并：每帧 WS 消息只缓存最新帧，requestAnimationFrame 合批渲染
 // （浏览器刷新率 60Hz 已天然限流，无需全局限流丢帧）
-let _pendingAIFrames = {};   // {cameraId: frameBase64} 待渲染的最新帧
-let _rafScheduled = false;   // 是否已安排 rAF 任务
+var _pendingAIFrames = {};   // {cameraId: frameBase64} 待渲染的最新帧
+var _rafScheduled = false;   // 是否已安排 rAF 任务
 
 // 统计信息
-let aiStats = {
+var aiStats = {
     totalFrames: 0,
     droppedFrames: 0,
     renderedFrames: 0
@@ -44,13 +45,17 @@ let aiStats = {
 // 页面初始化
 // ========================================
 
-document.addEventListener('DOMContentLoaded', function() {
+// 注册页面初始化函数（支持 pjax 局部加载）
+SageSight.registerPage('/', function() {
     loadCameras();
     setLayout(1);
     initWebSocket();
     initDragDrop();
     fetchAlarmConfig();
     loadAlarmConfigCache();
+    initPtzSlider();
+    // 初始化事件列表（已合并到本 IIFE 内，直接调用）
+    initMonitorEventList();
 });
 
 // ========================================
@@ -59,7 +64,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // 报警配置：全局兜底值（从 display_config.yaml 的 alarm 段拉取）
 // 真正生效的是每任务独立配置（见 _alarmConfigByTask），此处仅作兜底
-let _alarmConfig = {
+var _alarmConfig = {
     zone_enter_enabled: true,
     loitering_enabled: true,
     duration: 3,
@@ -70,12 +75,12 @@ let _alarmConfig = {
 
 // 每任务报警配置缓存：{task_id: alarm 配置}
 // 单一真相源为任务表 display_config.alarm，此处仅缓存运行中任务的配置
-let _alarmConfigByTask = {};
+var _alarmConfigByTask = {};
 
 // 报警运行时状态
-let _alarmBlinkTimer = null;     // 闪烁切换定时器
-let _alarmStopTimer = null;     // 闪烁停止定时器
-let _alarmLastTrigger = {};     // {type: timestamp} 节流记录
+var _alarmBlinkTimer = null;     // 闪烁切换定时器
+var _alarmStopTimer = null;     // 闪烁停止定时器
+var _alarmLastTrigger = {};     // {type: timestamp} 节流记录
 
 // 归一化 alarm 配置（补全缺失字段为默认值）
 function normalizeAlarmConfig(alarm) {
@@ -420,7 +425,7 @@ function renderCameraTree() {
     if (unassignedCameras.length > 0) {
         html += `
             <div class="dir-node">
-                <div class="dir-header" onclick="toggleDirNode(this)">
+                <div class="dir-header" onclick="Monitor.toggleDirNode(this)">
                     <svg class="dir-arrow" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/>
                     </svg>
@@ -446,7 +451,7 @@ function renderDirNode(dir, depth) {
     
     let html = `
         <div class="dir-node" data-dir-id="${dir.id}">
-            <div class="dir-header" onclick="toggleDirNode(this)" style="padding-left: ${12 + depth * 16}px;">
+            <div class="dir-header" onclick="Monitor.toggleDirNode(this)" style="padding-left: ${12 + depth * 16}px;">
                 <svg class="dir-arrow ${isExpanded ? 'expanded' : ''}" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/>
                 </svg>
@@ -490,17 +495,17 @@ function renderCameraItem(camera, depth) {
                 <span class="camera-item-name">${escapeHtml(camera.name)}</span>
             </div>
             <div class="camera-item-actions">
-                <button class="camera-item-btn" onclick="playOnSelectedScreen('${camera.id}', false)" title="普通播放">
+                <button class="camera-item-btn" onclick="Monitor.playOnSelectedScreen('${camera.id}', false)" title="普通播放">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M8 5v14l11-7z"/>
                     </svg>
                 </button>
-                <button class="camera-item-btn ai-btn" onclick="playOnSelectedScreen('${camera.id}', true)" title="AI 播放">
+                <button class="camera-item-btn ai-btn" onclick="Monitor.playOnSelectedScreen('${camera.id}', true)" title="AI 播放">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM8 15c0-1.66 1.34-3 3-3 .35 0 .69.07 1 .18V6h5v2h-3v7.03A3.003 3.003 0 0 1 11 18c-1.66 0-3-1.34-3-3z"/>
                     </svg>
                 </button>
-                <button class="camera-item-btn" onclick="openSingleScreen('${camera.id}', event)">
+                <button class="camera-item-btn" onclick="Monitor.openSingleScreen('${camera.id}', event)">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
                     </svg>
@@ -639,7 +644,7 @@ function generateScreens(count) {
         html += `
             <div class="screen-cell" 
                  data-index="${i}"
-                 onclick="selectScreen(${i})"
+                 onclick="Monitor.selectScreen(${i})"
                  ondragover="handleDragOver(event)"
                  ondrop="handleDrop(event, ${i})">
                 <div class="screen-content" id="screenContent${i}">
@@ -653,17 +658,17 @@ function generateScreens(count) {
                 <div class="screen-overlay">
                     <div class="screen-info" id="screenInfo${i}"></div>
                     <div class="screen-controls">
-                        <button class="screen-btn" onclick="toggleAIMode(${i}, event)" title="切换 AI/普通模式">
+                        <button class="screen-btn" onclick="Monitor.toggleAIMode(${i}, event)" title="切换 AI/普通模式">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM8 15c0-1.66 1.34-3 3-3 .35 0 .69.07 1 .18V6h5v2h-3v7.03A3.003 3.003 0 0 1 11 18c-1.66 0-3-1.34-3-3z"/>
                             </svg>
                         </button>
-                        <button class="screen-btn" onclick="openSingleScreenFromWall(${i}, event)">
+                        <button class="screen-btn" onclick="Monitor.openSingleScreenFromWall(${i}, event)">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
                             </svg>
                         </button>
-                        <button class="screen-btn" onclick="clearScreen(${i}, event)">
+                        <button class="screen-btn" onclick="Monitor.clearScreen(${i}, event)">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
                             </svg>
@@ -791,8 +796,8 @@ function playOnScreen(screenIndex, cameraId, useAIMode = false) {
 // 播放视频流（h265web为主，Jessibuca备用）
 // ========================================
 
-let webrtcPlayers = {}; // WebRTC播放器实例
-let jessibucaPlayers = {}; // Jessibuca播放器实例（备用）
+var webrtcPlayers = {}; // WebRTC播放器实例
+var jessibucaPlayers = {}; // Jessibuca播放器实例（备用）
 
 function playStream(containerId, camera) {
     console.log(`播放摄像机: ${camera.id}, rtc_stream=${camera.rtc_stream}, http_stream=${camera.http_stream}`);
@@ -1515,13 +1520,13 @@ function loadPresets(cameraId) {
                             <div class="preset-item-content">
                                 <span class="preset-name">${preset.name}</span>
                                 <div class="preset-actions">
-                                    <button onclick="gotoPreset('${preset.id}')" title="调用">
+                                    <button onclick="Monitor.gotoPreset('${preset.id}')" title="调用">
                                         <i class="fa fa-play"></i>
                                     </button>
-                                    <button onclick="setPreset('${preset.id}')" title="设置">
+                                    <button onclick="Monitor.setPreset('${preset.id}')" title="设置">
                                         <i class="fa fa-cog"></i>
                                     </button>
-                                    <button onclick="deletePreset('${preset.id}')" title="删除">
+                                    <button onclick="Monitor.deletePreset('${preset.id}')" title="删除">
                                         <i class="fa fa-trash"></i>
                                     </button>
                                 </div>
@@ -1573,16 +1578,16 @@ function loadPatrols(cameraId) {
                                     <span class="patrol-points">预置点数: ${patrol.points}</span>
                                 </div>
                                 <div class="patrol-actions">
-                                    <button onclick="startPatrol(${patrol.id})" title="调用">
+                                    <button onclick="Monitor.startPatrol(${patrol.id})" title="调用">
                                         <i class="fa fa-play"></i>
                                     </button>
-                                    <button onclick="stopPatrol(${patrol.id})" title="停止">
+                                    <button onclick="Monitor.stopPatrol(${patrol.id})" title="停止">
                                         <i class="fa fa-stop"></i>
                                     </button>
-                                    <button onclick="editPatrol(${patrol.id})" title="编辑">
+                                    <button onclick="Monitor.editPatrol(${patrol.id})" title="编辑">
                                         <i class="fa fa-edit"></i>
                                     </button>
-                                    <button onclick="deletePatrol(${patrol.id})" title="删除">
+                                    <button onclick="Monitor.deletePatrol(${patrol.id})" title="删除">
                                         <i class="fa fa-trash"></i>
                                     </button>
                                 </div>
@@ -1833,16 +1838,19 @@ async function updateStreamStatus(containerId) {
 }
 
 // ========================================
-// 全屏功能
+// 全屏功能（电视墙单独全屏，仅 monitorWall 元素进入浏览器全屏）
 // ========================================
 
-function toggleFullscreen() {
+function toggleMonitorWallFullscreen() {
     const monitorWall = document.getElementById('monitorWall');
-    
-    if (document.fullscreenElement) {
+    if (!monitorWall) return;
+
+    if (document.fullscreenElement === monitorWall) {
         document.exitFullscreen();
     } else {
-        monitorWall.requestFullscreen();
+        monitorWall.requestFullscreen().catch(function(err) {
+            console.error('电视墙全屏失败:', err);
+        });
     }
 }
 
@@ -2092,8 +2100,8 @@ function escapeHtml(text) {
 // 控制面板交互（海康威视风格）
 // ========================================
 
-let currentStreamType = 'sub';  // 当前码流类型（子码流）
-let isRecording = false;  // 录像状态
+var currentStreamType = 'sub';  // 当前码流类型（子码流）
+var isRecording = false;  // 录像状态
 
 // 码流切换显示
 function toggleStreamSelector() {
@@ -2381,23 +2389,15 @@ function updateSingleScreenInfo(camera) {
     }
 }
 
-// 初始化
-document.addEventListener('DOMContentLoaded', function() {
-    initPtzSlider();
-});
-
-// 如果页面已加载，立即初始化
-if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    initPtzSlider();
-}
+// initPtzSlider 已合并到页面初始化函数中（SageSight.registerPage）
 
 // ========================================
 // 预置点/巡航管理功能
 // ========================================
 
-let presets = [];  // 预置点列表
-let patrols = [];   // 巡航路径列表
-let currentPtzTab = 'preset';  // 当前标签页
+var presets = [];  // 预置点列表
+var patrols = [];   // 巡航路径列表
+var currentPtzTab = 'preset';  // 当前标签页
 
 // 标签页切换
 function switchPtzTab(tabName) {
@@ -2699,16 +2699,16 @@ function addNewPatrol() {
                           <span class="patrol-points">预置点数: 0</span>
                       </div>
                       <div class="patrol-actions">
-                          <button onclick="startPatrol(${newPatrolId})" title="调用">
+                          <button onclick="Monitor.startPatrol(${newPatrolId})" title="调用">
                               <i class="fa fa-play"></i>
                           </button>
-                          <button onclick="stopPatrol(${newPatrolId})" title="停止">
+                          <button onclick="Monitor.stopPatrol(${newPatrolId})" title="停止">
                               <i class="fa fa-stop"></i>
                           </button>
-                          <button onclick="editPatrol(${newPatrolId})" title="编辑">
+                          <button onclick="Monitor.editPatrol(${newPatrolId})" title="编辑">
                               <i class="fa fa-edit"></i>
                           </button>
-                          <button onclick="deletePatrol(${newPatrolId})" title="删除">
+                          <button onclick="Monitor.deletePatrol(${newPatrolId})" title="删除">
                               <i class="fa fa-trash"></i>
                           </button>
                       </div>
@@ -2723,3 +2723,534 @@ function addNewPatrol() {
           showNotification('添加巡航路径请求失败', 'error');
       });
 }
+
+// ========================================
+// 驾驶舱事件列表功能（从 monitor.html 内联脚本合并）
+// ========================================
+
+var monitorEvents = [];
+var eventWebSocket = null;
+var monitorTaskMap = {};  // 任务ID到名称的映射
+
+// 初始化事件列表
+async function initMonitorEventList() {
+    await loadMonitorTasks();  // 先加载任务映射，确保事件渲染时任务名称可用
+    loadMonitorEvents();
+    initEventWebSocket();
+}
+
+// 加载任务列表
+async function loadMonitorTasks() {
+    try {
+        const response = await fetch('/api/tasks?per_page=1000');
+        const data = await response.json();
+        const taskList = data.tasks || data || [];
+        const select = document.getElementById('eventTaskFilter');
+        if (!select) return;  // 防御性：DOM 未就绪时不填充下拉框
+
+        // 清空旧选项（保留"全部任务"）
+        select.innerHTML = '<option value="">全部任务</option>';
+
+        // 构建任务映射并填充下拉框
+        monitorTaskMap = {};
+        taskList.forEach(task => {
+            monitorTaskMap[task.id] = task.task_name;
+            const option = document.createElement('option');
+            option.value = task.id;
+            option.textContent = task.task_name;
+            select.appendChild(option);
+        });
+    } catch (error) {
+        console.error('加载任务列表失败:', error);
+    }
+}
+
+// 根据task_id获取任务名称
+function getTaskNameById(taskId) {
+    return monitorTaskMap[taskId] || '';
+}
+
+// 加载事件列表
+async function loadMonitorEvents() {
+    try {
+        const filterEl = document.getElementById('eventTaskFilter');
+        const taskFilter = filterEl ? filterEl.value : '';
+        let url = '/api/events?per_page=50';
+        if (taskFilter) {
+            url += `&task_id=${taskFilter}`;
+        }
+
+        const response = await fetch(url);
+        const data = await response.json();
+        monitorEvents = data.events || [];
+
+        renderMonitorEvents();
+        updateEventCount();
+    } catch (error) {
+        console.error('加载事件列表失败:', error);
+    }
+}
+
+// 渲染事件列表
+function renderMonitorEvents() {
+    const scroller = document.getElementById('eventScroller');
+    if (!scroller) return;  // 防御性：DOM 未就绪时不渲染
+    scroller.innerHTML = '';
+
+    monitorEvents.forEach(event => {
+        const eventCard = createMonitorEventCard(event);
+        scroller.appendChild(eventCard);
+    });
+
+    // 自动滚动到底部（显示最新事件）
+    scroller.scrollTop = 0;
+}
+
+// 创建事件卡片
+function createMonitorEventCard(event) {
+    const card = document.createElement('div');
+    card.className = 'monitor-event-card';
+    card.dataset.eventId = event.event_id;  // 用于 event_update/gif_ready 查找卡片
+    card.onclick = () => showMonitorEventDetail(event);
+
+    const imageContainer = document.createElement('div');
+    imageContainer.className = 'event-image-container';
+
+    // 优先使用 GIF 动画作为封面（如果有），其次使用图片
+    const gifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
+    const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
+    const coverUrl = gifUrl || imageUrl;  // GIF 优先
+
+    if (coverUrl) {
+        const img = document.createElement('img');
+        img.src = coverUrl;
+        img.alt = gifUrl ? `事件GIF ${event.event_id}` : `事件 ${event.event_id}`;
+        img.style.objectFit = 'cover';
+        img.onerror = () => {
+            imageContainer.innerHTML = '<div class="event-no-image"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></div>';
+        };
+        imageContainer.appendChild(img);
+
+        // 如果有 GIF，添加 GIF 标识
+        if (gifUrl) {
+            const gifBadge = document.createElement('div');
+            gifBadge.className = 'gif-badge';
+            gifBadge.innerHTML = '🎬 GIF';
+            imageContainer.appendChild(gifBadge);
+            card._gifUrl = gifUrl;
+            card._hasGif = true;
+        }
+    } else {
+        imageContainer.innerHTML = '<div class="event-no-image"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></div>';
+    }
+
+    card.appendChild(imageContainer);
+
+    const infoContainer = document.createElement('div');
+    infoContainer.className = 'event-info-container';
+    const statusInfo = getStatusDisplay(event.status);
+    infoContainer.innerHTML = `
+        <div class="event-info-row">
+            <span class="event-status ${statusInfo.className}">${statusInfo.text}</span>
+            <span class="event-tag tag-class">${event.class_name || '-'}</span>
+        </div>
+        <div class="event-info-row">
+            <span class="event-tag tag-task">${getTaskNameById(event.task_id) || '-'}</span>
+            <span class="event-tag tag-time">${formatEventTime(event.start_time || event.created_at)}</span>
+        </div>
+    `;
+    card.appendChild(infoContainer);
+
+    return card;
+}
+
+// 显示事件详情
+function showMonitorEventDetail(event) {
+    const modal = document.getElementById('monitorEventDetailModal');
+
+    // 存储当前事件的媒体URL（用于切换）
+    window._currentMonitorEvent = event;
+
+    // 设置图片
+    const rawImageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
+    const eventImage = document.getElementById('monitorEventImage');
+
+    // 将相对路径转换为完整的 HTTP URL（避免 HTTPS 协议错误）
+    let imageUrl = rawImageUrl;
+    if (rawImageUrl && !rawImageUrl.startsWith('http')) {
+        imageUrl = `http://${window.location.hostname}:${window.location.port}/${rawImageUrl.replace(/\\/g, '/')}`;
+    }
+
+    // 设置GIF
+    const rawGifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
+    const eventGif = document.getElementById('monitorEventGif');
+
+    // 将相对路径转换为完整的 HTTP URL
+    let gifUrl = rawGifUrl;
+    if (rawGifUrl && !rawGifUrl.startsWith('http')) {
+        gifUrl = `http://${window.location.hostname}:${window.location.port}/${rawGifUrl.replace(/\\/g, '/')}`;
+    }
+
+    // 默认显示图片
+    if (imageUrl) {
+        eventImage.src = imageUrl;
+        eventImage.style.display = 'block';
+        eventGif.style.display = 'none';
+        document.getElementById('monitorEventNoMedia').style.display = 'none';
+        document.getElementById('monitorShowImageBtn').classList.remove('btn-secondary');
+        document.getElementById('monitorShowImageBtn').classList.add('btn-primary');
+        document.getElementById('monitorShowGifBtn').classList.remove('btn-primary');
+        document.getElementById('monitorShowGifBtn').classList.add('btn-secondary');
+    } else if (gifUrl) {
+        eventGif.src = gifUrl;
+        eventGif.style.display = 'block';
+        eventImage.style.display = 'none';
+        document.getElementById('monitorEventNoMedia').style.display = 'none';
+        document.getElementById('monitorShowImageBtn').classList.remove('btn-primary');
+        document.getElementById('monitorShowImageBtn').classList.add('btn-secondary');
+        document.getElementById('monitorShowGifBtn').classList.remove('btn-secondary');
+        document.getElementById('monitorShowGifBtn').classList.add('btn-primary');
+    } else {
+        eventImage.style.display = 'none';
+        eventGif.style.display = 'none';
+        document.getElementById('monitorEventNoMedia').style.display = 'block';
+    }
+
+    // 设置GIF URL（即使当前不显示）
+    if (gifUrl) {
+        eventGif.src = gifUrl;
+    }
+
+    // 设置详情信息
+    document.getElementById('monitorEventId').textContent = event.event_id || '-';
+    document.getElementById('monitorEventType').textContent = formatEventType(event.type);
+
+    // 事件状态：使用统一映射渲染徽章
+    const detailStatusInfo = getStatusDisplay(event.status);
+    const detailStatusEl = document.getElementById('monitorEventStatus');
+    detailStatusEl.textContent = detailStatusInfo.text;
+    detailStatusEl.className = `event-status ${detailStatusInfo.className}`;
+
+    document.getElementById('monitorEventClass').textContent = event.class_name || '-';
+    document.getElementById('monitorEventChannel').textContent = event.channel_name || event.camera_id || '-';
+    document.getElementById('monitorEventTask').textContent = getTaskNameById(event.task_id) || event.task_name || '-';
+    document.getElementById('monitorEventAlgorithm').textContent = event.algorithm || '-';
+    document.getElementById('monitorEventEnteredZones').textContent =
+        (event.entered_zones && event.entered_zones.length) ? event.entered_zones.join('、') : '-';
+    document.getElementById('monitorEventZoneName').textContent = event.zone_name || '-';
+    const loiteredZones = event.loitered_zones || [];
+    document.getElementById('monitorEventLoiteredZones').textContent =
+        loiteredZones.length ? loiteredZones.join('、') : '-';
+    document.getElementById('monitorEventStartTime').textContent = formatEventTime(event.start_time);
+    document.getElementById('monitorEventEndTime').textContent = formatEventTime(event.end_time);
+    document.getElementById('monitorEventTime').textContent = formatEventTime(event.created_at);
+
+    // 如果缺少 channel_name，异步从 API 获取并更新
+    if (!event.channel_name && event.event_id) {
+        fetch(`/api/tasks/events/${event.event_id}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.channel_name) {
+                    const chEl = document.getElementById('monitorEventChannel');
+                    if (chEl) chEl.textContent = data.channel_name;
+                }
+            })
+            .catch(() => {});
+    }
+
+    modal.style.display = 'flex';
+}
+
+// 切换事件媒体显示（图片/GIF）
+function switchMonitorEventMedia(type) {
+    const event = window._currentMonitorEvent;
+    if (!event) return;
+
+    const imageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url || '';
+    const gifUrl = event.local_gif_url || event.minio_gif_url || event.ftp_gif_url || '';
+
+    const eventImage = document.getElementById('monitorEventImage');
+    const eventGif = document.getElementById('monitorEventGif');
+    const noMedia = document.getElementById('monitorEventNoMedia');
+
+    if (type === 'image') {
+        if (imageUrl) {
+            eventImage.src = imageUrl;
+            eventImage.style.display = 'block';
+            eventGif.style.display = 'none';
+            noMedia.style.display = 'none';
+            document.getElementById('monitorShowImageBtn').classList.remove('btn-secondary');
+            document.getElementById('monitorShowImageBtn').classList.add('btn-primary');
+            document.getElementById('monitorShowGifBtn').classList.remove('btn-primary');
+            document.getElementById('monitorShowGifBtn').classList.add('btn-secondary');
+        } else {
+            eventImage.style.display = 'none';
+            eventGif.style.display = 'none';
+            noMedia.style.display = 'block';
+        }
+    } else if (type === 'gif') {
+        if (gifUrl) {
+            eventGif.src = gifUrl;
+            eventGif.style.display = 'block';
+            eventImage.style.display = 'none';
+            noMedia.style.display = 'none';
+            document.getElementById('monitorShowImageBtn').classList.remove('btn-primary');
+            document.getElementById('monitorShowImageBtn').classList.add('btn-secondary');
+            document.getElementById('monitorShowGifBtn').classList.remove('btn-secondary');
+            document.getElementById('monitorShowGifBtn').classList.add('btn-primary');
+        } else {
+            eventImage.style.display = 'none';
+            eventGif.style.display = 'none';
+            noMedia.style.display = 'block';
+        }
+    }
+}
+
+// 关闭事件详情
+function closeMonitorEventDetail() {
+    const modal = document.getElementById('monitorEventDetailModal');
+    if (modal) modal.style.display = 'none';
+}
+
+// 初始化WebSocket实时推送
+function initEventWebSocket() {
+    // 复用仍处于连接状态的 socket（监听器回调时会查询最新 DOM，无需重新绑定）
+    if (eventWebSocket && eventWebSocket.connected) return;
+
+    // 旧连接已断开或不存在，清理后重建
+    if (eventWebSocket) {
+        try { eventWebSocket.disconnect(); } catch (e) {}
+        eventWebSocket = null;
+    }
+
+    try {
+        eventWebSocket = io('/ws', {
+            transports: ['websocket', 'polling']
+        });
+
+        eventWebSocket.on('new_event', (event) => {
+            addNewEventToMonitor(event);
+        });
+
+        eventWebSocket.on('event_update', (data) => {
+            updateMonitorEventCard(data);
+        });
+
+        eventWebSocket.on('gif_ready', (data) => {
+            updateMonitorEventGif(data);
+        });
+
+        eventWebSocket.on('connect', () => {
+            console.log('事件WebSocket已连接');
+        });
+
+        eventWebSocket.on('disconnect', () => {
+            console.log('事件WebSocket已断开');
+        });
+    } catch (error) {
+        console.error('初始化事件WebSocket失败:', error);
+    }
+}
+
+// 添加新事件到列表（滚动显示）
+function addNewEventToMonitor(event) {
+    const scroller = document.getElementById('eventScroller');
+    if (!scroller) {
+        monitorEvents.unshift(event);
+        return;
+    }
+
+    const taskFilterEl = document.getElementById('eventTaskFilter');
+    const taskFilter = taskFilterEl ? taskFilterEl.value : '';
+    if (taskFilter && event.task_id != taskFilter) {
+        return;
+    }
+
+    monitorEvents.unshift(event);
+
+    if (monitorEvents.length > 100) {
+        monitorEvents.pop();
+    }
+
+    const eventCard = createMonitorEventCard(event);
+    eventCard.style.animation = 'slideInFromTop 0.3s ease';
+    scroller.insertBefore(eventCard, scroller.firstChild);
+    scroller.scrollTo({ top: 0, behavior: 'smooth' });
+    updateEventCount();
+    playEventNotificationSound();
+}
+
+// 更新已显示事件卡片的状态（跟踪结束）
+function updateMonitorEventCard(data) {
+    const card = document.querySelector(`[data-event-id="${data.event_id}"]`);
+    if (!card) return;
+
+    const statusInfo = getStatusDisplay(data.status);
+    let statusBadge = card.querySelector('.event-status');
+    if (!statusBadge) {
+        statusBadge = document.createElement('span');
+        const infoContainer = card.querySelector('.event-info-container');
+        if (infoContainer) infoContainer.appendChild(statusBadge);
+    }
+    statusBadge.textContent = statusInfo.text;
+    statusBadge.className = `event-status ${statusInfo.className}`;
+
+    const eventIdx = monitorEvents.findIndex(e => e.event_id === data.event_id);
+    if (eventIdx >= 0) {
+        if (data.status) monitorEvents[eventIdx].status = data.status;
+        if (data.data) {
+            if (data.data.confidence !== undefined) monitorEvents[eventIdx].confidence = data.data.confidence;
+            if (data.data.end_time) monitorEvents[eventIdx].end_time = data.data.end_time;
+        }
+    }
+}
+
+// 更新已显示事件卡片的 GIF（GIF 生成完成）
+function updateMonitorEventGif(data) {
+    const card = document.querySelector(`[data-event-id="${data.event_id}"]`);
+    if (!card) return;
+
+    const gifUrl = data.local_gif_url || data.minio_gif_url || data.ftp_gif_url;
+    if (!gifUrl) return;
+
+    const imageContainer = card.querySelector('.event-image-container');
+    if (!imageContainer) return;
+
+    let gifBadge = imageContainer.querySelector('.gif-badge');
+    if (!gifBadge) {
+        gifBadge = document.createElement('div');
+        gifBadge.className = 'gif-badge';
+        gifBadge.innerHTML = '🎬 GIF';
+        imageContainer.appendChild(gifBadge);
+    }
+
+    const coverImg = imageContainer.querySelector('img');
+    if (coverImg) {
+        coverImg.src = gifUrl;
+        coverImg.alt = '事件GIF动画';
+        coverImg.style.objectFit = 'cover';
+    }
+
+    card._gifUrl = gifUrl;
+    card._hasGif = true;
+    card._gifData = data;
+
+    const eventIdx = monitorEvents.findIndex(e => e.event_id === data.event_id);
+    if (eventIdx >= 0) {
+        monitorEvents[eventIdx].local_gif_url = data.local_gif_url || '';
+        monitorEvents[eventIdx].minio_gif_url = data.minio_gif_url || '';
+        monitorEvents[eventIdx].ftp_gif_url = data.ftp_gif_url || '';
+    }
+}
+
+// 更新事件计数
+function updateEventCount() {
+    const el = document.getElementById('eventCount');
+    if (el) el.textContent = `事件: ${monitorEvents.length}`;
+}
+
+// 格式化事件类型
+function formatEventType(type) {
+    const typeMap = {
+        'tracking': '目标跟踪',
+        'zone': '区域检测',
+        'loitering': '徘徊检测',
+        'track_start': '跟踪开始',
+        'track_end': '跟踪结束',
+        'track_update': '跟踪更新',
+        'detection': '检测'
+    };
+    return typeMap[type] || type;
+}
+
+// 事件状态 -> 中文 + 样式类的统一映射
+function getStatusDisplay(status) {
+    const statusMap = {
+        'tracking_start':  { text: '跟踪开始', className: 'status-start' },
+        'tracking_update': { text: '跟踪更新', className: 'status-update' },
+        'tracking_end':    { text: '已结束',   className: 'status-ended' }
+    };
+    return statusMap[status] || { text: status || '未知', className: 'status-unknown' };
+}
+
+// 格式化事件时间
+function formatEventTime(timestamp) {
+    if (!timestamp) return '-';
+
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now - date;
+
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return '刚刚';
+    if (minutes < 60) return `${minutes}分钟前`;
+    if (hours < 24) return `${hours}小时前`;
+    if (days < 7) return `${days}天前`;
+
+    return date.toLocaleString('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+// 播放提示音
+function playEventNotificationSound() {
+    // 可选：播放音频提示
+}
+
+// ========================================
+// 暴露命名空间：供 HTML onclick/onchange 调用
+// ========================================
+return {
+    setLayout: setLayout,
+    clearAllScreens: clearAllScreens,
+    autoArrange: autoArrange,
+    toggleMonitorWallFullscreen: toggleMonitorWallFullscreen,
+    playCurrentStream: playCurrentStream,
+    toggleStreamSelector: toggleStreamSelector,
+    toggleRecording: toggleRecording,
+    toggleSingleFullscreen: toggleSingleFullscreen,
+    toggleSingleAIMode: toggleSingleAIMode,
+    closeSingleScreen: closeSingleScreen,
+    ptzStop: ptzStop,
+    ptzZoom: ptzZoom,
+    ptzFocus: ptzFocus,
+    ptzIris: ptzIris,
+    toggleLight: toggleLight,
+    toggleWiper: toggleWiper,
+    auxFocus: auxFocus,
+    lensInit: lensInit,
+    toggleManualTrack: toggleManualTrack,
+    switchPtzTab: switchPtzTab,
+    gotoPreset: gotoPreset,
+    setPreset: setPreset,
+    deletePreset: deletePreset,
+    startPatrol: startPatrol,
+    stopPatrol: stopPatrol,
+    editPatrol: editPatrol,
+    deletePatrol: deletePatrol,
+    addNewPreset: addNewPreset,
+    addNewPatrol: addNewPatrol,
+    closeSnapshotModal: closeSnapshotModal,
+    downloadSnapshot: downloadSnapshot,
+    closeVoiceTalk: closeVoiceTalk,
+    toggleVoiceTalk: toggleVoiceTalk,
+    filterCameras: filterCameras,
+    clearScreen: clearScreen,
+    openSingleScreen: openSingleScreen,
+    openSingleScreenFromWall: openSingleScreenFromWall,
+    playOnSelectedScreen: playOnSelectedScreen,
+    selectScreen: selectScreen,
+    toggleAIMode: toggleAIMode,
+    toggleDirNode: toggleDirNode,
+    loadMonitorEvents: loadMonitorEvents,
+    closeMonitorEventDetail: closeMonitorEventDetail,
+    switchMonitorEventMedia: switchMonitorEventMedia
+};
+
+})();

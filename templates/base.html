@@ -8,6 +8,22 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <!-- 提前定义 SageSight 全局对象和 registerPage 存根，确保内联脚本（content 块中）可在基础脚本加载前注册页面初始化函数 -->
+    <script>
+        window.SageSight = window.SageSight || {};
+        SageSight.pages = SageSight.pages || {};
+        SageSight._pending = SageSight._pending || [];
+        // 存根：navigation.js 加载后会替换为正式实现，并处理 _pending 队列
+        SageSight.registerPage = SageSight.registerPage || function(path, initFn) {
+            SageSight._pending.push({ path: path, fn: initFn });
+            // 页面已加载完成时立即执行初始化（pjax 场景），否则等 DOMContentLoaded
+            if (document.readyState !== 'loading') {
+                initFn();
+            } else {
+                document.addEventListener('DOMContentLoaded', initFn);
+            }
+        };
+    </script>
     {% block extra_head %}{% endblock %}
 </head>
 <body>
@@ -21,7 +37,7 @@
                 <svg viewBox="0 0 24 24" fill="currentColor" class="logo-icon">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
                 </svg>
-                <h1>SageSight AI</h1>
+                <h1>睿观 SageSight AI</h1>
             </div>
         </div>
 
@@ -52,7 +68,7 @@
             <!-- 项目标题 -->
             <div class="project-title">
                 <div class="title-decoration left"></div>
-                <h2 class="title-text">睿观 SageSight AI 安防分析平台</h2>
+                <h2 class="title-text">众业宏润安防分析平台</h2>
                 <div class="title-decoration right"></div>
             </div>
 
@@ -113,6 +129,16 @@
                 </div>
             </div>
 
+            <!-- 全屏切换 -->
+            <div class="header-fullscreen" id="headerFullscreen" onclick="toggleFullscreen()" title="全屏切换">
+                <svg class="fullscreen-enter-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+                </svg>
+                <svg class="fullscreen-exit-icon" viewBox="0 0 24 24" fill="currentColor" style="display:none;">
+                    <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>
+                </svg>
+            </div>
+
             <!-- 用户登录组件 -->
             <div class="header-user" id="headerUser" onclick="event.stopPropagation(); toggleUserMenu();">
                 <div class="user-avatar">
@@ -162,7 +188,7 @@
     <!-- 页脚 -->
     <footer class="page-footer">
         <div class="footer-content">
-            <span>SageSight AI 智能检测系统 © 2024</span>
+            <span>睿观SageSight AI 安防分析平台 © 众业宏润 2026</span>
             <span class="footer-links">
                 <a href="#">帮助文档</a>
                 <a href="#">技术支持</a>
@@ -171,12 +197,13 @@
     </footer>
 
     <!-- ✅ 新增：定时器管理器（必须最先加载） -->
-    <script src="{{ url_for('static', filename='js/timer_manager.js') }}?v=20260731"></script>
+    <script src="{{ url_for('static', filename='js/timer_manager.js') }}?v=20260802"></script>
     <!-- ✅ 新增：性能诊断工具 -->
     <script src="{{ url_for('static', filename='js/performance_monitor.js') }}?v=20260731"></script>
     <!-- ✅ 新增：实时诊断工具 -->
     <script src="{{ url_for('static', filename='js/diagnostic.js') }}?v=20260731"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}?v=20260731"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}?v=20260802"></script>
+    <script src="{{ url_for('static', filename='js/navigation.js') }}?v=20260804"></script>
     {% block extra_scripts %}{% endblock %}
 </body>
 </html>

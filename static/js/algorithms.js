@@ -1,22 +1,24 @@
-/**
+﻿/**
  * SageSight AI - 算法库页面 JavaScript
  */
+window.Algorithms = (function() {
 
 // ========================================
 // 全局变量
 // ========================================
 
-let algorithms = [];
-let currentView = 'card';
-let deleteAlgorithmId = null;
-let selectedModelFile = null;  // 选择的模型文件
-let selectedLabelsFile = null; // 选择的标签文件
+var algorithms = [];
+var currentView = 'card';
+var deleteAlgorithmId = null;
+var selectedModelFile = null;  // 选择的模型文件
+var selectedLabelsFile = null; // 选择的标签文件
 
 // ========================================
 // 页面初始化
 // ========================================
 
-document.addEventListener('DOMContentLoaded', function() {
+// 注册页面初始化函数（支持 pjax 局部加载）
+SageSight.registerPage('/algorithms', function() {
     loadAlgorithms();
     initWebSocket();
 
@@ -183,8 +185,8 @@ function clearLabelsFile() {
 // 算法图片选择与上传
 // ========================================
 
-let selectedAlgoImage = null;  // 选择的算法图片文件
-let currentAlgoImageUrl = '';  // 已保存的算法图片URL
+var selectedAlgoImage = null;  // 选择的算法图片文件
+var currentAlgoImageUrl = '';  // 已保存的算法图片URL
 
 function handleAlgoImageSelect(input) {
     const file = input.files[0];
@@ -380,11 +382,13 @@ async function updateStats() {
         // 使用服务端统计接口
         const response = await fetch('/api/algorithms/statistics');
         const stats = await response.json();
-        
-        document.getElementById('statTotal').textContent = stats.total || 0;
-        document.getElementById('statActive').textContent = stats.active || 0;
-        document.getElementById('statInactive').textContent = stats.inactive || 0;
-        document.getElementById('statModels').textContent = stats.model_files || 0;
+
+        // pjax 导航后 DOM 可能已被替换，操作前检查元素是否存在
+        const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+        setText('statTotal', stats.total || 0);
+        setText('statActive', stats.active || 0);
+        setText('statInactive', stats.inactive || 0);
+        setText('statModels', stats.model_files || 0);
     } catch (error) {
         console.error('获取统计信息失败:', error);
         // 失败时使用本地计算
@@ -392,11 +396,12 @@ async function updateStats() {
         const active = algorithms.filter(a => a.status === 'active').length;
         const inactive = algorithms.filter(a => a.status === 'inactive').length;
         const models = algorithms.filter(a => a.model_path && a.model_path.trim() !== '').length;
-        
-        document.getElementById('statTotal').textContent = total;
-        document.getElementById('statActive').textContent = active;
-        document.getElementById('statInactive').textContent = inactive;
-        document.getElementById('statModels').textContent = models;
+
+        const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+        setText('statTotal', total);
+        setText('statActive', active);
+        setText('statInactive', inactive);
+        setText('statModels', models);
     }
 }
 
@@ -407,13 +412,16 @@ async function updateStats() {
 function renderAlgorithms() {
     const algorithmsList = document.getElementById('algorithmsList');
     const emptyState = document.getElementById('emptyState');
-    
+
+    // pjax 导航后 DOM 可能已被替换
+    if (!algorithmsList || !emptyState) return;
+
     if (algorithms.length === 0) {
         algorithmsList.style.display = 'none';
         emptyState.style.display = 'block';
         return;
     }
-    
+
     emptyState.style.display = 'none';
     
     // 根据视图类型渲染
@@ -477,7 +485,7 @@ function renderAlgorithmCard(algorithm) {
     }
     
     return `
-        <div class="algorithm-card" onclick="showAlgorithmDetail(${algorithm.id})">
+        <div class="algorithm-card" onclick="Algorithms.showAlgorithmDetail(${algorithm.id})">
             <div class="algorithm-card-header">
                 <div>
                     <div class="algorithm-name">${escapeHtml(algorithm.name)}</div>
@@ -488,13 +496,13 @@ function renderAlgorithmCard(algorithm) {
             ${bodySection}
             <div class="algorithm-card-footer">
                 <div class="algorithm-actions">
-                    <button class="algorithm-action-btn edit" onclick="openEditModal(${algorithm.id}, event)">
+                    <button class="algorithm-action-btn edit" onclick="Algorithms.openEditModal(${algorithm.id}, event)">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
                         </svg>
                         编辑
                     </button>
-                    <button class="algorithm-action-btn delete" onclick="openDeleteModal(${algorithm.id}, '${escapeHtml(algorithm.name)}', event)">
+                    <button class="algorithm-action-btn delete" onclick="Algorithms.openDeleteModal(${algorithm.id}, '${escapeHtml(algorithm.name)}', event)">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
                         </svg>
@@ -529,7 +537,7 @@ function renderAlgorithmListItem(algorithm) {
     }
     
     return `
-        <div class="algorithm-list-item" onclick="showAlgorithmDetail(${algorithm.id})">
+        <div class="algorithm-list-item" onclick="Algorithms.showAlgorithmDetail(${algorithm.id})">
             <div class="algo-list-thumb-cell">${thumbSection}</div>
             <div class="algo-list-name-cell">
                 <div class="algo-list-name">${escapeHtml(algorithm.name)}</div>
@@ -543,12 +551,12 @@ function renderAlgorithmListItem(algorithm) {
             <div class="algo-list-format-cell">${escapeHtml(algorithm.model_format || 'ONNX').toUpperCase()}</div>
             <div class="algo-list-desc-cell" title="${escapeHtml(algorithm.description || '')}">${escapeHtml(algorithm.description || '暂无描述')}</div>
             <div class="algo-list-actions-cell">
-                <button class="algorithm-action-btn edit" onclick="openEditModal(${algorithm.id}, event)" title="编辑">
+                <button class="algorithm-action-btn edit" onclick="Algorithms.openEditModal(${algorithm.id}, event)" title="编辑">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
                     </svg>
                 </button>
-                <button class="algorithm-action-btn delete" onclick="openDeleteModal(${algorithm.id}, '${escapeHtml(algorithm.name)}', event)" title="删除">
+                <button class="algorithm-action-btn delete" onclick="Algorithms.openDeleteModal(${algorithm.id}, '${escapeHtml(algorithm.name)}', event)" title="删除">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
                     </svg>
@@ -918,7 +926,7 @@ function showAlgorithmDetail(algorithmId) {
         <div class="modal-content modal-large">
             <div class="modal-header">
                 <h3>算法详情 - ${escapeHtml(algorithm.name)}</h3>
-                <button class="modal-close" onclick="closeAlgorithmDetailModal()">&times;</button>
+                <button class="modal-close" onclick="Algorithms.closeAlgorithmDetailModal()">&times;</button>
             </div>
             <div class="modal-body">
                 ${algorithm.algorithm_image ? `
@@ -983,8 +991,8 @@ function showAlgorithmDetail(algorithmId) {
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-secondary" onclick="closeAlgorithmDetailModal()">关闭</button>
-                <button class="btn btn-primary" onclick="closeAlgorithmDetailModal(); openEditModal(${algorithm.id});">编辑算法</button>
+                <button class="btn btn-secondary" onclick="Algorithms.closeAlgorithmDetailModal()">关闭</button>
+                <button class="btn btn-primary" onclick="Algorithms.closeAlgorithmDetailModal(); Algorithms.openEditModal(${algorithm.id});">编辑算法</button>
             </div>
         </div>
     `;
@@ -1005,16 +1013,112 @@ document.addEventListener('click', function(event) {
     const algorithmModal = document.getElementById('algorithmModal');
     const deleteModal = document.getElementById('deleteModal');
     const detailModal = document.getElementById('algorithmDetailModal');
-    
+
     if (event.target === algorithmModal) {
         closeModal();
     }
-    
+
     if (event.target === deleteModal) {
         closeDeleteModal();
     }
-    
+
     if (event.target === detailModal) {
         closeAlgorithmDetailModal();
     }
 });
+
+// ========================================
+// 模型上传相关（HTML 中有 onclick 引用，功能待实现）
+// ========================================
+
+function openUploadModal() {
+    const modal = document.getElementById('uploadModal');
+    if (modal) modal.classList.add('show');
+}
+
+function closeUploadModal() {
+    const modal = document.getElementById('uploadModal');
+    if (modal) modal.classList.remove('show');
+}
+
+function closeModelsListModal() {
+    const modal = document.getElementById('modelsListModal');
+    if (modal) modal.classList.remove('show');
+}
+
+function handleFileSelect(input) {
+    // 模型上传文件选择处理
+    const file = input.files[0];
+    if (!file) return;
+    const fileNameEl = document.getElementById('selectedFileName');
+    if (fileNameEl) fileNameEl.textContent = file.name;
+}
+
+function clearSelectedFile() {
+    const input = document.getElementById('modelFileUpload');
+    if (input) input.value = '';
+    const fileNameEl = document.getElementById('selectedFileName');
+    if (fileNameEl) fileNameEl.textContent = '';
+}
+
+async function uploadModel() {
+    const fileInput = document.getElementById('modelFileUpload');
+    if (!fileInput || !fileInput.files[0]) {
+        showNotification('请选择模型文件', 'error');
+        return;
+    }
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    formData.append('algorithm_type', document.getElementById('algorithmType') ? document.getElementById('algorithmType').value : 'detection');
+    const modelName = document.getElementById('uploadModelName');
+    if (modelName && modelName.value) {
+        formData.append('model_name', modelName.value);
+    }
+    try {
+        const response = await fetch('/api/models/upload', { method: 'POST', body: formData });
+        const data = await response.json();
+        if (response.ok) {
+            showNotification('模型上传成功', 'success');
+            closeUploadModal();
+        } else {
+            showNotification(data.error || '上传失败', 'error');
+        }
+    } catch (error) {
+        console.error('模型上传失败:', error);
+        showNotification('模型上传失败', 'error');
+    }
+}
+
+// ========================================
+// 暴露命名空间：供 HTML onclick/onchange 调用
+// ========================================
+return {
+    openCreateModal: openCreateModal,
+    openEditModal: openEditModal,
+    closeModal: closeModal,
+    saveAlgorithm: saveAlgorithm,
+    openDeleteModal: openDeleteModal,
+    closeDeleteModal: closeDeleteModal,
+    confirmDelete: confirmDelete,
+    setView: setView,
+    resetFilters: resetFilters,
+    toggleSection: toggleSection,
+    selectModelFile: selectModelFile,
+    handleModelFileSelect: handleModelFileSelect,
+    clearModelFile: clearModelFile,
+    selectLabelsFile: selectLabelsFile,
+    handleLabelsFileSelect: handleLabelsFileSelect,
+    clearLabelsFile: clearLabelsFile,
+    handleAlgoImageSelect: handleAlgoImageSelect,
+    removeAlgoImage: removeAlgoImage,
+    showAlgorithmDetail: showAlgorithmDetail,
+    closeAlgorithmDetailModal: closeAlgorithmDetailModal,
+    openUploadModal: openUploadModal,
+    closeUploadModal: closeUploadModal,
+    closeModelsListModal: closeModelsListModal,
+    handleFileSelect: handleFileSelect,
+    clearSelectedFile: clearSelectedFile,
+    uploadModel: uploadModel
+};
+
+})();

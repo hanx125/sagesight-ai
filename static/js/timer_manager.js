@@ -68,9 +68,9 @@
         if (timers.essential.systemMonitor) return;
 
         timers.essential.systemMonitor = setInterval(() => {
-            // 系统监控逻辑（在 system.js 中实现）
-            if (typeof loadMonitorData === 'function') {
-                loadMonitorData();
+            // 系统监控逻辑（在 system.js 命名空间内实现）
+            if (window.System && typeof window.System.loadMonitorData === 'function') {
+                window.System.loadMonitorData();
             }
         }, config.systemMonitorInterval);
 
@@ -118,6 +118,15 @@
     function startHeartbeat() {
         if (!config.heartbeatEnabled) return;
         // 心跳检测逻辑
+    }
+
+    // ✅ 停止系统监控（由 system 页面离开 monitor tab 时调用）
+    function stopSystemMonitor() {
+        if (timers.essential.systemMonitor) {
+            clearInterval(timers.essential.systemMonitor);
+            timers.essential.systemMonitor = null;
+            console.log('[定时器管理] 系统监控已停止');
+        }
     }
 
     // ========================================
@@ -169,7 +178,8 @@
     function startEssential() {
         console.log('[定时器管理] 启动核心定时器');
         startStreamStatusCheck();
-        startSystemMonitor();
+        // 系统监控（startSystemMonitor）仅由 system 页面按需启动，
+        // 不在全局核心定时器中启动，避免 pjax 导航到非 system 页面后 loadMonitorData 操作空 DOM
     }
 
     function startAll() {
@@ -219,6 +229,7 @@
         // 停止
         stopAll,
         stopMonitoring,
+        stopSystemMonitor,
 
         // 状态
         getStatus,

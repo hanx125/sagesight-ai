@@ -662,15 +662,52 @@ def update_system_config():
         # 更新实时通信配置（Socket.IO + 原生 WebSocket）
         if 'web_server' in data:
             web_server = data['web_server']
+            ws_config = config.setdefault('web_server', {})
+
+            # 基础服务配置（端口/调试/CORS/静态目录/模板目录）
+            # 端口校验：1-65535
+            if 'port' in web_server:
+                try:
+                    port_val = int(web_server['port'])
+                    if 1 <= port_val <= 65535:
+                        ws_config['port'] = port_val
+                    else:
+                        return jsonify({'error': '端口必须在 1-65535 范围内'}), 400
+                except (ValueError, TypeError):
+                    return jsonify({'error': '端口必须为整数'}), 400
+            if 'debug' in web_server:
+                ws_config['debug'] = bool(web_server['debug'])
+            if 'cors_enabled' in web_server:
+                ws_config['cors_enabled'] = bool(web_server['cors_enabled'])
+            if 'static_dir' in web_server and web_server['static_dir']:
+                ws_config['static_dir'] = str(web_server['static_dir'])
+            if 'template_dir' in web_server and web_server['template_dir']:
+                ws_config['template_dir'] = str(web_server['template_dir'])
+
+            # Socket.IO 子配置
             if 'socketio' in web_server:
-                config.setdefault('web_server', {}).setdefault('socketio', {}).update(web_server['socketio'])
+                socketio_cfg = web_server['socketio']
+                ws_sio = ws_config.setdefault('socketio', {})
+                if 'enabled' in socketio_cfg:
+                    ws_sio['enabled'] = bool(socketio_cfg['enabled'])
+                if 'namespace' in socketio_cfg and socketio_cfg['namespace']:
+                    ws_sio['namespace'] = str(socketio_cfg['namespace'])
+                if 'cors_allowed_origins' in socketio_cfg and socketio_cfg['cors_allowed_origins']:
+                    ws_sio['cors_allowed_origins'] = str(socketio_cfg['cors_allowed_origins'])
+
+            # 原生 WebSocket 子配置
             if 'raw_websocket' in web_server:
-                config.setdefault('web_server', {}).setdefault('raw_websocket', {}).update(web_server['raw_websocket'])
-        
+                raw_ws_cfg = web_server['raw_websocket']
+                ws_raw = ws_config.setdefault('raw_websocket', {})
+                if 'enabled' in raw_ws_cfg:
+                    ws_raw['enabled'] = bool(raw_ws_cfg['enabled'])
+                if 'path' in raw_ws_cfg and raw_ws_cfg['path']:
+                    ws_raw['path'] = str(raw_ws_cfg['path'])
+
         _save_system_config(config)
         logger.info("系统配置已更新")
-        
-        return jsonify({'success': True, 'message': '配置已保存，部分配置需重启任务后生效'})
+
+        return jsonify({'success': True, 'message': '配置已保存，端口/目录变更需重启服务后生效'})
     except Exception as e:
         logger.error(f"更新系统配置失败: {e}")
         return jsonify({'error': str(e)}), 500

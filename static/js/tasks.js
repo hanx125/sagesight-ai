@@ -2,33 +2,36 @@
  * SageSight AI - 任务管理页面 JavaScript
  * 支持多摄像机多任务架构
  */
+window.Tasks = (function() {
 
 // ========================================
 // 全局变量
 // ========================================
 
-let tasks = [];
-let availableCameras = [];  // 可选择的监控设备列表（cameras表）
-let addedChannels = [];  // 已添加的设备通道列表（device_channel_pool表）
-let algorithms = [];  // 算法库列表
-let selectedCameras = [];  // 当前选中的摄像机（用于添加到device_channel_pool）
-let tempSelectedChannels = [];  // 临时选中的通道（未入库，仅前端显示）
-let currentView = 'card';
-let deleteTaskId = null;
-let currentTaskId = null;  // 当前查看详情的任务ID
-let isEditMode = false;  // 是否为编辑模式
+var tasks = [];
+var availableCameras = [];  // 可选择的监控设备列表（cameras表）
+var addedChannels = [];  // 已添加的设备通道列表（device_channel_pool表）
+var algorithms = [];  // 算法库列表
+var selectedCameras = [];  // 当前选中的摄像机（用于添加到device_channel_pool）
+var tempSelectedChannels = [];  // 临时选中的通道（未入库，仅前端显示）
+var selectedChannels = [];  // 已入库且选中的通道ID列表（device_channel_pool.id）
+var currentView = 'card';
+var deleteTaskId = null;
+var currentTaskId = null;  // 当前查看详情的任务ID
+var isEditMode = false;  // 是否为编辑模式
 
 // 分页相关变量
-let currentPage = 1;
-let perPage = 20;
-let totalTasks = 0;
-let totalPages = 1;
+var currentPage = 1;
+var perPage = 20;
+var totalTasks = 0;
+var totalPages = 1;
 
 // ========================================
 // 页面初始化
 // ========================================
 
-document.addEventListener('DOMContentLoaded', function() {
+// 注册页面初始化函数（支持 pjax 局部加载）
+SageSight.registerPage('/tasks', function() {
     // 清空搜索框，防止浏览器自动填充
     const filterSearch = document.getElementById('filterSearch');
     if (filterSearch) {
@@ -123,12 +126,14 @@ async function loadStatistics() {
     try {
         const response = await fetch('/api/statistics');
         const stats = await response.json();
-        
-        document.getElementById('statTotal').textContent = stats.total_tasks || 0;
-        document.getElementById('statRunning').textContent = stats.running_tasks || 0;
-        document.getElementById('statCameras').textContent = stats.total_cameras || 0;
-        document.getElementById('statBindings').textContent = stats.total_bindings || 0;
-        
+
+        // pjax 导航后 DOM 可能已被替换，操作前检查元素是否存在
+        const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+        setText('statTotal', stats.total_tasks || 0);
+        setText('statRunning', stats.running_tasks || 0);
+        setText('statCameras', stats.total_cameras || 0);
+        setText('statBindings', stats.total_bindings || 0);
+
     } catch (error) {
         console.error('加载统计信息失败:', error);
     }
@@ -900,13 +905,13 @@ function renderTaskCard(task) {
                 </div>
                 <div class="task-actions">
                     ${task.status === 'running' ? 
-                        `<button class="task-action-btn icon-only stop" onclick="stopTask(${task.id}, event)" title="停止">
+                        `<button class="task-action-btn icon-only stop" onclick="Tasks.stopTask(${task.id}, event)" title="停止">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M6 6h12v12H6z"/>
                             </svg>
                             <span class="action-text">停止</span>
                         </button>` :
-                        `<button class="task-action-btn icon-only start" onclick="startTask(${task.id}, event)" title="启动">
+                        `<button class="task-action-btn icon-only start" onclick="Tasks.startTask(${task.id}, event)" title="启动">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M8 5v14l11-7z"/>
                             </svg>
@@ -919,13 +924,13 @@ function renderTaskCard(task) {
                         </svg>
                         <span class="action-text">配置</span>
                     </button>
-                    <button class="task-action-btn icon-only edit" onclick="openEditModal(${task.id}, event)" title="编辑">
+                    <button class="task-action-btn icon-only edit" onclick="Tasks.openEditModal(${task.id}, event)" title="编辑">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
                         </svg>
                         <span class="action-text">编辑</span>
                     </button>
-                    <button class="task-action-btn icon-only delete" onclick="openDeleteModal(${task.id}, '${escapeHtml(task.task_name)}', event)" title="删除">
+                    <button class="task-action-btn icon-only delete" onclick="Tasks.openDeleteModal(${task.id}, '${escapeHtml(task.task_name)}', event)" title="删除">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
                         </svg>
@@ -983,11 +988,11 @@ function renderTaskTableRow(task) {
             <div class="task-table-col col-actions">
                 <div class="task-table-actions">
                     ${task.status === 'running' ? 
-                        `<button class="task-action-btn icon-only stop" onclick="stopTask(${task.id}, event)" title="停止">
+                        `<button class="task-action-btn icon-only stop" onclick="Tasks.stopTask(${task.id}, event)" title="停止">
                             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
                             <span class="action-text">停止</span>
                         </button>` :
-                        `<button class="task-action-btn icon-only start" onclick="startTask(${task.id}, event)" title="启动">
+                        `<button class="task-action-btn icon-only start" onclick="Tasks.startTask(${task.id}, event)" title="启动">
                             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                             <span class="action-text">启动</span>
                         </button>`
@@ -996,11 +1001,11 @@ function renderTaskTableRow(task) {
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.11-0.21,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
                         <span class="action-text">配置</span>
                     </button>
-                    <button class="task-action-btn icon-only edit" onclick="openEditModal(${task.id}, event)" title="编辑">
+                    <button class="task-action-btn icon-only edit" onclick="Tasks.openEditModal(${task.id}, event)" title="编辑">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
                         <span class="action-text">编辑</span>
                     </button>
-                    <button class="task-action-btn icon-only delete" onclick="openDeleteModal(${task.id}, '${escapeHtml(task.task_name)}', event)" title="删除">
+                    <button class="task-action-btn icon-only delete" onclick="Tasks.openDeleteModal(${task.id}, '${escapeHtml(task.task_name)}', event)" title="删除">
                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                         <span class="action-text">删除</span>
                     </button>
@@ -1625,9 +1630,9 @@ function renderChannelSelectList() {
     }
 
     listContainer.innerHTML = availableCameras.map(camera => `
-        <div class="camera-select-item ${selectedCameras.includes(camera.id) ? 'selected' : ''}" onclick="toggleCameraSelection('${camera.id}')">
+        <div class="camera-select-item ${selectedCameras.includes(camera.id) ? 'selected' : ''}" onclick="Tasks.toggleCameraSelection('${camera.id}')">
             <div class="camera-select-checkbox">
-                <input type="checkbox" ${selectedCameras.includes(camera.id) ? 'checked' : ''} onclick="event.stopPropagation(); toggleCameraSelection('${camera.id}')">
+                <input type="checkbox" ${selectedCameras.includes(camera.id) ? 'checked' : ''} onclick="event.stopPropagation(); Tasks.toggleCameraSelection('${camera.id}')">
             </div>
             <div class="camera-select-info">
                 <div class="camera-select-name">${escapeHtml(camera.name || '未命名设备')}</div>
@@ -1722,7 +1727,7 @@ function renderChannelPool() {
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
                     </svg>
                 </button>` : ''}
-                <button type="button" onclick="removeChannelFromPool('${channel.id || channel.temp_id}')" title="移除通道">
+                <button type="button" onclick="Tasks.removeChannelFromPool('${channel.id || channel.temp_id}')" title="移除通道">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
                     </svg>
@@ -2204,21 +2209,21 @@ function updateTaskPagination() {
     }
 
     if (startPage > 1) {
-        pageHtml += `<button class="pagination-btn" onclick="taskGoToPage(1)">1</button>`;
+        pageHtml += `<button class="pagination-btn" onclick="Tasks.taskGoToPage(1)">1</button>`;
         if (startPage > 2) {
             pageHtml += `<span class="pagination-ellipsis">...</span>`;
         }
     }
 
     for (let i = startPage; i <= endPage; i++) {
-        pageHtml += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" onclick="taskGoToPage(${i})">${i}</button>`;
+        pageHtml += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" onclick="Tasks.taskGoToPage(${i})">${i}</button>`;
     }
 
     if (endPage < totalPages) {
         if (endPage < totalPages - 1) {
             pageHtml += `<span class="pagination-ellipsis">...</span>`;
         }
-        pageHtml += `<button class="pagination-btn" onclick="taskGoToPage(${totalPages})">${totalPages}</button>`;
+        pageHtml += `<button class="pagination-btn" onclick="Tasks.taskGoToPage(${totalPages})">${totalPages}</button>`;
     }
 
     pageNumbers.innerHTML = pageHtml;
@@ -2264,4 +2269,43 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+// ========================================
+// 暴露命名空间：供 HTML onclick/onchange 调用
+// ========================================
+return {
+    applyTaskFilters: applyTaskFilters,
+    openCreateModal: openCreateModal,
+    openEditModal: openEditModal,
+    openDeleteModal: openDeleteModal,
+    closeModal: closeModal,
+    closeDeleteModal: closeDeleteModal,
+    confirmDelete: confirmDelete,
+    saveTask: saveTask,
+    editCurrentTask: editCurrentTask,
+    closeTaskDetailModal: closeTaskDetailModal,
+    setView: setView,
+    resetFilters: resetFilters,
+    taskPrevPage: taskPrevPage,
+    taskNextPage: taskNextPage,
+    taskChangePageSize: taskChangePageSize,
+    taskGoToPage: taskGoToPage,
+    onAlgorithmConfigChange: onAlgorithmConfigChange,
+    openClassesSelectDialog: openClassesSelectDialog,
+    closeClassesSelectDialog: closeClassesSelectDialog,
+    selectAllClasses: selectAllClasses,
+    deselectAllClasses: deselectAllClasses,
+    confirmClassesSelection: confirmClassesSelection,
+    filterChannelsBySource: filterChannelsBySource,
+    openChannelSelectModal: openChannelSelectModal,
+    filterChannelList: filterChannelList,
+    closeChannelSelectModal: closeChannelSelectModal,
+    confirmChannelSelection: confirmChannelSelection,
+    startTask: startTask,
+    stopTask: stopTask,
+    removeChannelFromPool: removeChannelFromPool,
+    toggleCameraSelection: toggleCameraSelection
+};
+
+})();
 

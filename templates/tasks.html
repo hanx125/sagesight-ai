@@ -57,7 +57,7 @@
         <div class="filter-left">
             <div class="filter-group">
                 <label>状态：</label>
-                <select id="filterStatus" onchange="applyTaskFilters()">
+                <select id="filterStatus" onchange="Tasks.applyTaskFilters()">
                     <option value="">全部</option>
                     <option value="running">运行中</option>
                     <option value="stopped">已停止</option>
@@ -66,7 +66,7 @@
             </div>
             <div class="filter-group">
                 <label>算法：</label>
-                <select id="filterAlgorithm" onchange="applyTaskFilters()">
+                <select id="filterAlgorithm" onchange="Tasks.applyTaskFilters()">
                     <option value="">全部</option>
                     <option value="yolov11">YOLOv11</option>
                     <option value="yolov8">YOLOv8</option>
@@ -77,11 +77,11 @@
                 <input type="text" id="filterSearch" name="task_search" placeholder="搜索任务名称..." autocomplete="off" readonly onfocus="this.removeAttribute('readonly');" oninput="applyTaskFilters()">
             </div>
             <div class="filter-actions">
-                <button class="btn btn-secondary" onclick="resetFilters()">重置</button>
+                <button class="btn btn-secondary" onclick="Tasks.resetFilters()">重置</button>
             </div>
         </div>
         <div class="filter-right">
-            <button class="btn btn-primary" onclick="openCreateModal()">
+            <button class="btn btn-primary" onclick="Tasks.openCreateModal()">
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
                 </svg>
@@ -95,12 +95,12 @@
         <div class="tasks-header">
             <h3>任务列表</h3>
             <div class="view-toggle">
-                <button class="view-btn active" onclick="setView('card')" title="卡片视图">
+                <button class="view-btn active" onclick="Tasks.setView('card')" title="卡片视图">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M4 11h5V5H4v6zm0 7h5v-6H4v6zm6 0h5v-6h-5v6zm6 0h5v-6h-5v6zm-6-7h5V5h-5v6zm6-6v6h5V5h-5z"/>
                     </svg>
                 </button>
-                <button class="view-btn" onclick="setView('list')" title="列表视图">
+                <button class="view-btn" onclick="Tasks.setView('list')" title="列表视图">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
                     </svg>
@@ -115,20 +115,20 @@
         <!-- 分页控件 -->
         <div class="pagination-container" id="taskPagination" style="display: none;">
             <span class="pagination-info" id="taskPaginationInfo">共 0 条任务</span>
-            <button class="pagination-btn prev" onclick="taskPrevPage()" id="taskPrevBtn" disabled>
+            <button class="pagination-btn prev" onclick="Tasks.taskPrevPage()" id="taskPrevBtn" disabled>
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
                 </svg>
                 上一页
             </button>
             <div id="taskPageNumbers"></div>
-            <button class="pagination-btn next" onclick="taskNextPage()" id="taskNextBtn" disabled>
+            <button class="pagination-btn next" onclick="Tasks.taskNextPage()" id="taskNextBtn" disabled>
                 下一页
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
                 </svg>
             </button>
-            <select class="page-size-select" id="taskPageSizeSelect" onchange="taskChangePageSize()">
+            <select class="page-size-select" id="taskPageSizeSelect" onchange="Tasks.taskChangePageSize()">
                 <option value="10">10条/页</option>
                 <option value="20" selected>20条/页</option>
                 <option value="50">50条/页</option>
@@ -143,7 +143,7 @@
     <div class="modal-content modal-xlarge">
         <div class="modal-header">
             <h3 id="modalTitle">创建任务</h3>
-            <button class="modal-close" onclick="closeModal()">&times;</button>
+            <button class="modal-close" onclick="Tasks.closeModal()">&times;</button>
         </div>
         <div class="modal-body task-modal-body">
             <form id="taskForm" style="display: flex; width: 100%;">
@@ -182,7 +182,7 @@
                             </div>
                             <div class="form-group">
                                 <label for="algorithmConfig">算法配置 <span class="required">*</span></label>
-                                <select id="algorithmConfig" name="algorithm_config" onchange="onAlgorithmConfigChange()">
+                                <select id="algorithmConfig" name="algorithm_config" onchange="Tasks.onAlgorithmConfigChange()">
                                     <option value="">-- 请选择算法配置 --</option>
                                 </select>
                                 <input type="hidden" id="algorithm" name="algorithm">
@@ -197,7 +197,7 @@
                                 <label for="targetClassesInput">目标类别 <span class="required">*</span></label>
                                 <div style="display: flex; gap: 8px; align-items: center;">
                                     <input type="text" id="targetClassesInput" name="target_classes_input" readonly placeholder="点击选择按钮选择目标类别" style="flex-grow: 1;">
-                                    <button type="button" id="selectClassesBtn" onclick="openClassesSelectDialog()" style="min-width: 80px; max-width: 80px; width: 80px; white-space: nowrap; text-align: center; padding: 8px 0; display: inline-block; background-color: #007bff; color: white; border: 1px solid #007bff; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 400;">选择</button>
+                                    <button type="button" id="selectClassesBtn" onclick="Tasks.openClassesSelectDialog()" style="min-width: 80px; max-width: 80px; width: 80px; white-space: nowrap; text-align: center; padding: 8px 0; display: inline-block; background-color: #007bff; color: white; border: 1px solid #007bff; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 400;">选择</button>
                                 </div>
                                 <input type="hidden" id="targetClassesHidden" name="target_classes">
                             </div>
@@ -227,12 +227,12 @@
                     <div class="cameras-column-header">
                         <h4>设备通道检测池</h4>
                         <div style="display: flex; gap: 8px; align-items: center;">
-                            <select id="filterChannelSource" onchange="filterChannelsBySource()" style="padding: 4px 8px; font-size: 13px;">
+                            <select id="filterChannelSource" onchange="Tasks.filterChannelsBySource()" style="padding: 4px 8px; font-size: 13px;">
                                 <option value="">全部来源</option>
                                 <option value="local_platform">本地平台</option>
                                 <option value="edge_platform">边缘平台</option>
                             </select>
-                            <button type="button" class="btn btn-sm btn-secondary" onclick="openChannelSelectModal()">
+                            <button type="button" class="btn btn-sm btn-secondary" onclick="Tasks.openChannelSelectModal()">
                                 <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;margin-right:4px;">
                                     <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
                                 </svg>
@@ -260,8 +260,8 @@
             </form>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button>
-            <button type="button" class="btn btn-primary" onclick="saveTask()">保存</button>
+            <button type="button" class="btn btn-secondary" onclick="Tasks.closeModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="Tasks.saveTask()">保存</button>
         </div>
     </div>
 </div>
@@ -271,7 +271,7 @@
     <div class="modal-content modal-large">
         <div class="modal-header">
             <h3>选择设备通道</h3>
-            <button class="modal-close" onclick="closeChannelSelectModal()">&times;</button>
+            <button class="modal-close" onclick="Tasks.closeChannelSelectModal()">&times;</button>
         </div>
         <div class="modal-body">
             <!-- 设备通道列表 -->
@@ -282,8 +282,8 @@
             </div>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeChannelSelectModal()">取消</button>
-            <button type="button" class="btn btn-primary" onclick="confirmChannelSelection()">确认选择</button>
+            <button type="button" class="btn btn-secondary" onclick="Tasks.closeChannelSelectModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="Tasks.confirmChannelSelection()">确认选择</button>
         </div>
     </div>
 </div>
@@ -293,15 +293,15 @@
     <div class="modal-content">
         <div class="modal-header">
             <h3>确认删除</h3>
-            <button class="modal-close" onclick="closeDeleteModal()">&times;</button>
+            <button class="modal-close" onclick="Tasks.closeDeleteModal()">&times;</button>
         </div>
         <div class="modal-body">
             <p>确定要删除任务 "<span id="deleteTaskName"></span>" 吗？</p>
             <p class="warning-text">此操作将同时解除该任务与所有摄像机的绑定，不可恢复。</p>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">取消</button>
-            <button type="button" class="btn btn-danger" onclick="confirmDelete()">删除</button>
+            <button type="button" class="btn btn-secondary" onclick="Tasks.closeDeleteModal()">取消</button>
+            <button type="button" class="btn btn-danger" onclick="Tasks.confirmDelete()">删除</button>
         </div>
     </div>
 </div>
@@ -989,18 +989,18 @@
     <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); max-width: 500px; min-width: 400px; background-color: white; border-radius: 8px; box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3); z-index: 2201;">
         <div style="padding: 15px 20px; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center;">
             <h3 style="margin: 0; font-size: 18px; font-weight: 600;">选择目标类别</h3>
-            <button type="button" onclick="closeClassesSelectDialog()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666; padding: 0;">×</button>
+            <button type="button" onclick="Tasks.closeClassesSelectDialog()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666; padding: 0;">×</button>
         </div>
         <div style="padding: 20px;">
             <div id="classesSelectContainer" style="max-height: 300px; overflow-y: auto;"></div>
             <div style="margin-top: 10px; display: flex; gap: 8px;">
-                <button type="button" onclick="selectAllClasses()" style="min-width: 70px; padding: 6px 12px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">全选</button>
-                <button type="button" onclick="deselectAllClasses()" style="min-width: 70px; padding: 6px 12px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">取消全选</button>
+                <button type="button" onclick="Tasks.selectAllClasses()" style="min-width: 70px; padding: 6px 12px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">全选</button>
+                <button type="button" onclick="Tasks.deselectAllClasses()" style="min-width: 70px; padding: 6px 12px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">取消全选</button>
             </div>
         </div>
         <div style="padding: 15px 20px; border-top: 1px solid #e0e0e0; display: flex; justify-content: flex-end; gap: 10px;">
-            <button type="button" onclick="closeClassesSelectDialog()" style="min-width: 70px; padding: 6px 12px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">取消</button>
-            <button type="button" onclick="confirmClassesSelection()" style="min-width: 70px; padding: 6px 12px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">确定</button>
+            <button type="button" onclick="Tasks.closeClassesSelectDialog()" style="min-width: 70px; padding: 6px 12px; background-color: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">取消</button>
+            <button type="button" onclick="Tasks.confirmClassesSelection()" style="min-width: 70px; padding: 6px 12px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">确定</button>
         </div>
     </div>
 </div>
@@ -1010,7 +1010,7 @@
     <div class="modal-content modal-large">
         <div class="modal-header">
             <h3 id="taskDetailTitle">任务详情</h3>
-            <button class="modal-close" onclick="closeTaskDetailModal()">&times;</button>
+            <button class="modal-close" onclick="Tasks.closeTaskDetailModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div id="taskDetailContent">
@@ -1018,8 +1018,8 @@
             </div>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="closeTaskDetailModal()">关闭</button>
-            <button type="button" class="btn btn-primary" onclick="editCurrentTask()">编辑</button>
+            <button type="button" class="btn btn-secondary" onclick="Tasks.closeTaskDetailModal()">关闭</button>
+            <button type="button" class="btn btn-primary" onclick="Tasks.editCurrentTask()">编辑</button>
         </div>
     </div>
 </div>
@@ -1039,8 +1039,8 @@
                         <div class="zone-panel-header">
                             <h4>区域列表</h4>
                             <div class="zone-panel-actions">
-                                <button type="button" class="btn btn-sm btn-primary" onclick="addZone()" title="新增一个区域并进入绘制">+ 添加区域</button>
-                                <button type="button" class="btn btn-sm btn-danger" onclick="clearAllZones()" title="清除所有区域">全部清除</button>
+                                <button type="button" class="btn btn-sm btn-primary" onclick="addZone()" title="新增一个区域并进入绘制">＋</button>
+                                <button type="button" class="btn btn-sm btn-danger" onclick="clearAllZones()" title="清除所有区域">✕</button>
                             </div>
                         </div>
                         <div id="zoneList" class="zone-list">
@@ -1130,6 +1130,12 @@
     .zone-canvas-hint {
         font-size: 12px;
         color: var(--text-secondary);
+        flex: 1;
+        min-width: 0;
+    }
+    .zone-canvas-toolbar .btn-sm {
+        flex-shrink: 0;
+        white-space: nowrap;
     }
     .zone-canvas-section canvas {
         flex: 1;
@@ -1294,7 +1300,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{{ url_for('static', filename='js/tasks.js') }}"></script>
+<script src="{{ url_for('static', filename='js/tasks.js') }}?v=20260802"></script>
 <script src="{{ url_for('static', filename='js/config_modal.js') }}"></script>
 <script src="{{ url_for('static', filename='js/zone_canvas_editor.js') }}?v=20260801a"></script>
 <script src="{{ url_for('static', filename='js/channel_zone_config.js') }}?v=20260801a"></script>

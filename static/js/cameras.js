@@ -1,28 +1,30 @@
-/**
+﻿/**
  * SageSight AI - 摄像机管理页面 JavaScript
  * 支持ONVIF协议发现和注册摄像机
  */
+window.Cameras = (function() {
 
 // ========================================
-// 全局变量
+// 全局变量（使用 var 以支持 pjax 多页面脚本共存，避免 let 重复声明冲突）
 // ========================================
 
-let cameras = [];
-let deleteCameraId = null;
-let currentCameraId = null;
-let viewMode = 'card';
+var cameras = [];
+var deleteCameraId = null;
+var currentCameraId = null;
+var viewMode = 'card';
 
 // 分页相关变量
-let currentPage = 1;
-let pageSize = 20;
-let totalPages = 1;
-let totalItems = 0;
+var currentPage = 1;
+var pageSize = 20;
+var totalPages = 1;
+var totalItems = 0;
 
 // ========================================
 // 页面初始化
 // ========================================
 
-document.addEventListener('DOMContentLoaded', function() {
+// 注册页面初始化函数（支持 pjax 局部加载）
+SageSight.registerPage('/cameras', function() {
     loadCameras();
     loadStatistics();
     initWebSocket();
@@ -114,12 +116,14 @@ async function loadStatistics() {
     try {
         const response = await fetch('/api/cameras/statistics');
         const stats = await response.json();
-        
-        document.getElementById('statTotal').textContent = stats.total || 0;
-        document.getElementById('statOnline').textContent = stats.online || 0;
-        document.getElementById('statOffline').textContent = stats.offline || 0;
-        document.getElementById('statEnabled').textContent = stats.enabled || 0;
-        
+
+        // pjax 导航后 DOM 可能已被替换，操作前检查元素是否存在
+        const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+        setText('statTotal', stats.total || 0);
+        setText('statOnline', stats.online || 0);
+        setText('statOffline', stats.offline || 0);
+        setText('statEnabled', stats.enabled || 0);
+
     } catch (error) {
         console.error('加载统计信息失败:', error);
     }
@@ -132,7 +136,10 @@ async function loadStatistics() {
 function renderCameras() {
     const camerasList = document.getElementById('camerasList');
     const paginationContainer = document.getElementById('paginationContainer');
-    
+
+    // pjax 导航后 DOM 可能已被替换
+    if (!camerasList || !paginationContainer) return;
+
     // 后端分页：cameras已经是当前页的数据，不需要前端切片
     if (cameras.length === 0) {
         camerasList.innerHTML = '';  // 显示空白列表
@@ -192,7 +199,7 @@ function renderCameraCard(camera) {
     const audioTalkTitle = camera.support_audio_talk ? '支持音频对讲' : '不支持音频';
     
     return `
-        <div class="camera-card" onclick="showCameraDetail('${camera.id}')">
+        <div class="camera-card" onclick="Cameras.showCameraDetail('${camera.id}')">
             <div class="camera-card-header">
                 <div class="camera-icon">
                     <svg viewBox="0 0 24 24" fill="currentColor">
@@ -240,7 +247,7 @@ function renderCameraCard(camera) {
             <div class="camera-card-footer">
                 <div class="camera-actions">
                     <button class="camera-action-btn stream ${camera.status === 'online' ? 'stop' : 'start'}" 
-                            onclick="toggleStream('${camera.id}', '${camera.status}', event)" 
+                            onclick="Cameras.toggleStream('${camera.id}', '${camera.status}', event)" 
                             title="${camera.status === 'online' ? '停止流' : '启动流'}">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             ${camera.status === 'online' ? 
@@ -250,13 +257,13 @@ function renderCameraCard(camera) {
                         </svg>
                         ${camera.status === 'online' ? '停止' : '启动'}
                     </button>
-                    <button class="camera-action-btn edit" onclick="openEditModal('${camera.id}', event)">
+                    <button class="camera-action-btn edit" onclick="Cameras.openEditModal('${camera.id}', event)">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
                         </svg>
                         编辑
                     </button>
-                    <button class="camera-action-btn delete" onclick="openDeleteModal('${camera.id}', '${escapeHtml(camera.name)}', event)">
+                    <button class="camera-action-btn delete" onclick="Cameras.openDeleteModal('${camera.id}', '${escapeHtml(camera.name)}', event)">
                         <svg viewBox="0 0 24 24" fill="currentColor">
                             <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
                         </svg>
@@ -287,7 +294,7 @@ function renderCameraListItem(camera) {
     const audioTalkClass = camera.support_audio_talk ? 'audio-enabled' : 'audio-disabled';
     
     return `
-        <div class="camera-list-item" onclick="showCameraDetail('${camera.id}')">
+        <div class="camera-list-item" onclick="Cameras.showCameraDetail('${camera.id}')">
             <div class="camera-list-icon">
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
@@ -318,7 +325,7 @@ function renderCameraListItem(camera) {
             </div>
             <div class="camera-list-actions">
                 <button class="camera-action-btn stream ${camera.status === 'online' ? 'stop' : 'start'}" 
-                        onclick="toggleStream('${camera.id}', '${camera.status}', event)" 
+                        onclick="Cameras.toggleStream('${camera.id}', '${camera.status}', event)" 
                         title="${camera.status === 'online' ? '停止流' : '启动流'}">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         ${camera.status === 'online' ? 
@@ -327,12 +334,12 @@ function renderCameraListItem(camera) {
                         }
                     </svg>
                 </button>
-                <button class="camera-action-btn edit" onclick="openEditModal('${camera.id}', event)">
+                <button class="camera-action-btn edit" onclick="Cameras.openEditModal('${camera.id}', event)">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
                     </svg>
                 </button>
-                <button class="camera-action-btn delete" onclick="openDeleteModal('${camera.id}', '${escapeHtml(camera.name)}', event)">
+                <button class="camera-action-btn delete" onclick="Cameras.openDeleteModal('${camera.id}', '${escapeHtml(camera.name)}', event)">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
                     </svg>
@@ -475,7 +482,7 @@ async function startDiscover() {
                                     </div>
                                 </td>
                                 <td class="discover-actions-cell">
-                                    <button class="btn btn-primary btn-sm" onclick="registerDiscoveredDevice('${escapeHtml(device.ip)}', ${device.port || 80})">
+                                    <button class="btn btn-primary btn-sm" onclick="Cameras.registerDiscoveredDevice('${escapeHtml(device.ip)}', ${device.port || 80})">
                                         注册
                                     </button>
                                 </td>
@@ -614,7 +621,7 @@ async function startNetworkScan() {
                                     }
                                 </td>
                                 <td class="discover-actions-cell">
-                                    <button class="algorithm-action-btn edit" onclick="registerNetworkDevice('${escapeHtml(device.ip)}', ${device.port})">
+                                    <button class="algorithm-action-btn edit" onclick="Cameras.registerNetworkDevice('${escapeHtml(device.ip)}', ${device.port})">
                                         <svg viewBox="0 0 24 24" fill="currentColor">
                                             <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
                                         </svg>
@@ -1023,6 +1030,9 @@ function updatePagination() {
     const pageNumbers = document.getElementById('pageNumbers');
     const prevBtn = document.getElementById('prevPageBtn');
     const nextBtn = document.getElementById('nextPageBtn');
+
+    // pjax 导航后 DOM 可能已被替换
+    if (!paginationInfo || !pageNumbers || !prevBtn || !nextBtn) return;
     
     // 更新信息
     const startItem = (currentPage - 1) * pageSize + 1;
@@ -1044,21 +1054,21 @@ function updatePagination() {
     }
     
     if (startPage > 1) {
-        pageHtml += `<button class="pagination-btn" onclick="goToPage(1)">1</button>`;
+        pageHtml += `<button class="pagination-btn" onclick="Cameras.goToPage(1)">1</button>`;
         if (startPage > 2) {
             pageHtml += `<span class="pagination-ellipsis">...</span>`;
         }
     }
     
     for (let i = startPage; i <= endPage; i++) {
-        pageHtml += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</button>`;
+        pageHtml += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" onclick="Cameras.goToPage(${i})">${i}</button>`;
     }
     
     if (endPage < totalPages) {
         if (endPage < totalPages - 1) {
             pageHtml += `<span class="pagination-ellipsis">...</span>`;
         }
-        pageHtml += `<button class="pagination-btn" onclick="goToPage(${totalPages})">${totalPages}</button>`;
+        pageHtml += `<button class="pagination-btn" onclick="Cameras.goToPage(${totalPages})">${totalPages}</button>`;
     }
     
     pageNumbers.innerHTML = pageHtml;
@@ -1093,11 +1103,11 @@ function changePageSize() {
 // 目录管理功能
 // ========================================
 
-let directories = [];
-let currentDirectoryId = null;
-let editingDirectoryId = null;
-let directoryCameras = [];
-let selectedCameraIds = [];
+var directories = [];
+var currentDirectoryId = null;
+var editingDirectoryId = null;
+var directoryCameras = [];
+var selectedCameraIds = [];
 
 async function loadDirectories() {
     try {
@@ -1478,23 +1488,62 @@ async function deleteDirectory(directoryId, directoryName) {
     if (!confirm(`确定要删除目录 "${directoryName}" 吗？\n该目录下的摄像机将移动到默认目录。`)) {
         return;
     }
-    
+
     try {
         const response = await fetch(`/api/directories/${directoryId}`, {
             method: 'DELETE'
         });
-        
+
         const result = await response.json();
-        
+
         if (result.success) {
             showNotification('目录删除成功', 'success');
             loadDirectoryList();
         } else {
             showNotification(result.error || '删除失败', 'error');
         }
-        
+
     } catch (error) {
         console.error('删除目录失败:', error);
         showNotification('删除目录失败', 'error');
     }
 }
+
+// ========================================
+// 暴露命名空间：供 HTML onclick/onchange 调用
+// ========================================
+return {
+    applyFilters: applyFilters,
+    resetFilters: resetFilters,
+    setViewMode: setViewMode,
+    goToPage: goToPage,
+    goToPrevPage: goToPrevPage,
+    goToNextPage: goToNextPage,
+    changePageSize: changePageSize,
+    openDirectoryModal: openDirectoryModal,
+    openDiscoverModal: openDiscoverModal,
+    openAddDirectoryModal: openAddDirectoryModal,
+    moveSelectedCameras: moveSelectedCameras,
+    closeDirectoryModal: closeDirectoryModal,
+    closeDirectoryEditModal: closeDirectoryEditModal,
+    saveDirectory: saveDirectory,
+    closeDiscoverModal: closeDiscoverModal,
+    switchDiscoverTab: switchDiscoverTab,
+    startDiscover: startDiscover,
+    startNetworkScan: startNetworkScan,
+    registerOnvifCamera: registerOnvifCamera,
+    closeOnvifRegisterModal: closeOnvifRegisterModal,
+    openEditModal: openEditModal,
+    openManualAddModal: openManualAddModal,
+    openDeleteModal: openDeleteModal,
+    closeModal: closeModal,
+    closeDeleteModal: closeDeleteModal,
+    confirmDelete: confirmDelete,
+    saveCamera: saveCamera,
+    editCurrentCamera: editCurrentCamera,
+    showCameraDetail: showCameraDetail,
+    closeCameraDetailModal: closeCameraDetailModal,
+    toggleStream: toggleStream
+};
+
+})();

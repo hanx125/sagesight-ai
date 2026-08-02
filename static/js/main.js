@@ -19,6 +19,24 @@ function getSocket() {
     return socket;
 }
 
+/**
+ * 重置 WebSocket 连接（pjax 导航时调用）
+ * 断开旧连接（清除所有页面特定的监听器），重新建立连接并注册核心监听器
+ */
+function resetSocket() {
+    if (socket) {
+        try {
+            socket.removeAllListeners();
+            socket.disconnect();
+        } catch (e) {
+            console.error('重置 WebSocket 失败:', e);
+        }
+        socket = null;
+    }
+    // 重新初始化（注册 main.js 的核心监听器）
+    initSocketIO();
+}
+
 function initSocketIO() {
     if (socket) return socket;
 
@@ -425,12 +443,47 @@ function initTheme() {
 }
 
 // ========================================
+// 全屏切换（标题栏全局按钮：整个系统页面浏览器全屏）
+// ========================================
+
+/**
+ * 切换整个系统页面的浏览器全屏
+ * 供标题栏全局全屏按钮调用；电视墙单独全屏见 monitor.js 的 toggleMonitorWallFullscreen
+ */
+function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(function(err) {
+            console.error('进入全屏失败:', err);
+        });
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+/**
+ * 初始化全屏状态监听
+ * 根据浏览器全屏状态切换标题栏全屏按钮的进入/退出图标
+ */
+function initFullscreenListener() {
+    document.addEventListener('fullscreenchange', function() {
+        const isFullscreen = !!document.fullscreenElement;
+        const enterIcon = document.querySelector('.fullscreen-enter-icon');
+        const exitIcon = document.querySelector('.fullscreen-exit-icon');
+        if (enterIcon) enterIcon.style.display = isFullscreen ? 'none' : '';
+        if (exitIcon) exitIcon.style.display = isFullscreen ? '' : 'none';
+    });
+}
+
+// ========================================
 // 页面初始化
 // ========================================
 
 document.addEventListener('DOMContentLoaded', function() {
     // 初始化主题
     initTheme();
+
+    // 初始化全屏监听
+    initFullscreenListener();
 
     // 检查登录状态并加载用户信息
     checkSessionAndLoadUser();
@@ -549,11 +602,14 @@ window.fetch = function(...args) {
 // 导出全局函数
 // ========================================
 
-window.SageSight = {
+// 合并到已有的 SageSight 对象（不覆盖 head 存根中定义的 pages/registerPage/_pending）
+window.SageSight = window.SageSight || {};
+Object.assign(window.SageSight, {
     socket: () => socket,
     showNotification,
     toggleNotifyPanel,
     clearAllNotifications,
+    resetSocket,
     deepClone,
     debounce,
     throttle,
@@ -568,4 +624,4 @@ window.SageSight = {
     updateUserInfo,
     toggleUserMenu,
     logout
-};
+});

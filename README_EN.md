@@ -445,7 +445,7 @@ sagesight-AI/
 
 ## Changelog
 
-### v1.0.0 (current version)
+### v2.0.0 (current version)
 - ✅ Full multi-platform inference support (NVIDIA GPU, CPU, RK3588 NPU)
 - ✅ Refined event GIF generation and three-channel storage (local, MinIO, FTP)
 - ✅ Video wall and event management support image/GIF toggle display
