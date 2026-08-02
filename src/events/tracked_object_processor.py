@@ -450,11 +450,24 @@ class TrackedObjectProcessor(mp.Process):
         }
 
         return event_output.emit(
-            event_type="tracking",
+            event_type=self._derive_event_type(obj_dict),
             data=event_data,
             image=image,
             frame_id=obj_dict.get("frame_time", 0),
         )
+
+    def _derive_event_type(self, obj_dict: dict) -> str:
+        """从跟踪元数据派生事件类型（优先级：徘徊 > 区域 > 跟踪）
+
+        - loitered_zones 非空 → "loitering"（徘徊检测）
+        - entered_zones 非空 → "zone"（区域检测）
+        - 否则              → "tracking"（目标跟踪）
+        """
+        if obj_dict.get("loitered_zones"):
+            return "loitering"
+        if obj_dict.get("entered_zones"):
+            return "zone"
+        return "tracking"
 
     def _on_object_start(self, camera_id: str, obj_dict: dict, frame_time: float):
         """新目标出现回调 - 创建跟踪事件（type=tracking, status=tracking_start）
@@ -667,12 +680,14 @@ class TrackedObjectProcessor(mp.Process):
 
         # ✅ 更新事件：保存置信度最高的图片 + 推送 event_update（status=tracking_end）
         # required_zones 未通过时 image=None，仅更新状态（zone 轨迹仍在 update_data 中落库）
+        # 事件类型按完整 metadata 最终确定（目标可能在跟踪过程中才进入区域或徘徊）
         event_output.update_event(
             event_id,
             status="tracking_end",
             data=update_data,
             image=final_image,
             push_websocket=True,
+            event_type=self._derive_event_type(obj_dict),
         )
 
         # 异步生成 GIF（从 FrameCache 按时间窗口回取帧，GIF生成后自动回填到事件）

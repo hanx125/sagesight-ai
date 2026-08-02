@@ -65,9 +65,9 @@
                 <label>类型：</label>
                 <select id="filterType" onchange="applyEventFilters()">
                     <option value="">全部类型</option>
-                    <option value="track_start">跟踪开始</option>
-                    <option value="track_end">跟踪结束</option>
-                    <option value="track_update">跟踪更新</option>
+                    <option value="tracking">目标跟踪</option>
+                    <option value="zone">区域检测</option>
+                    <option value="loitering">徘徊检测</option>
                 </select>
             </div>
             <div class="filter-group">
@@ -447,6 +447,8 @@
 .event-type-track_end { background: #fff3e0; color: #f57c00; }
 .event-type-track_update { background: #f3e5f5; color: #7b1fa2; }
 .event-type-tracking { background: #e8f5e9; color: #2e7d32; }
+.event-type-zone { background: #e3f2fd; color: #1565c0; }
+.event-type-loitering { background: #fff3e0; color: #e65100; }
 
     .event-class-badge {
         font-weight: 600;
@@ -725,7 +727,7 @@
         
         const params = new URLSearchParams({ page: currentPage, per_page: perPage });
         if (taskId) params.append('task_id', taskId);
-        if (type) params.append('type', type);
+        if (type) params.append('event_type', type);
         if (className) params.append('class_name', className);
         
         try {
@@ -890,6 +892,8 @@
     function getTypeText(type) {
         const typeMap = {
             'tracking': '目标跟踪',
+            'zone': '区域检测',
+            'loitering': '徘徊检测',
             'track_start': '跟踪开始',
             'track_end': '跟踪结束',
             'track_update': '跟踪更新',

@@ -1397,24 +1397,25 @@ class TaskManager:
             return cursor.rowcount > 0
 
     def get_events(
-        self, 
-        task_id: int = None, 
+        self,
+        task_id: int = None,
         camera_id: str = None,
         algorithm: str = None,
-        limit: int = 100, 
+        event_type: str = None,
+        limit: int = 100,
         offset: int = 0
     ) -> List[EventRecord]:
         """获取事件列表"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
+
             # 明确指定列名查询，避免ALTER TABLE导致的列顺序问题
             query = '''SELECT id, event_id, task_id, camera_id, algorithm, type, class_name,
                        confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
                        local_gif_url, minio_gif_url, ftp_gif_url,
                        metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones, created_at FROM events WHERE 1=1'''
             params = []
-            
+
             if task_id:
                 query += ' AND task_id = ?'
                 params.append(task_id)
@@ -1424,28 +1425,32 @@ class TaskManager:
             if algorithm:
                 query += ' AND algorithm = ?'
                 params.append(algorithm)
-            
+            if event_type:
+                query += ' AND type = ?'
+                params.append(event_type)
+
             query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
             params.extend([limit, offset])
-            
+
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            
+
             return [self._row_to_event(row) for row in rows]
-    
+
     def get_event_count(
-        self, 
-        task_id: int = None, 
+        self,
+        task_id: int = None,
         camera_id: str = None,
-        algorithm: str = None
+        algorithm: str = None,
+        event_type: str = None
     ) -> int:
         """获取事件数量"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
+
             query = 'SELECT COUNT(*) FROM events WHERE 1=1'
             params = []
-            
+
             if task_id:
                 query += ' AND task_id = ?'
                 params.append(task_id)
@@ -1455,7 +1460,10 @@ class TaskManager:
             if algorithm:
                 query += ' AND algorithm = ?'
                 params.append(algorithm)
-            
+            if event_type:
+                query += ' AND type = ?'
+                params.append(event_type)
+
             cursor.execute(query, params)
             return cursor.fetchone()[0]
     

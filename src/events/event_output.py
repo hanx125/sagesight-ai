@@ -801,7 +801,8 @@ class EventOutput:
 
     def update_event(self, event_id: str, status: str = None,
                      data: Dict = None, image=None,
-                     push_websocket: bool = False) -> bool:
+                     push_websocket: bool = False,
+                     event_type: str = None) -> bool:
         """更新事件记录
 
         供 TrackedObjectProcessor 在跟踪过程中更新事件状态和数据。
@@ -879,10 +880,10 @@ class EventOutput:
                     else:
                         metadata = extra_meta
 
-            # 更新数据库（event_type=None 表示不更新 type 字段，保持创建时的 'tracking'）
+            # 更新数据库（event_type 非 None 时更新 type 列，按完整 metadata 最终确定事件类型）
             success = task_manager.update_event(
                 event_id=event_id,
-                event_type=None,
+                event_type=event_type,
                 metadata=metadata,
                 image_urls=image_urls if image_urls else None,
                 gif_urls=gif_urls if gif_urls else None,
