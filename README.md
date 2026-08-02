@@ -276,6 +276,23 @@ MediaServer.exe
 ./MediaServer
 ```
 
+### 语音对讲使用说明（非 localhost 访问）
+
+语音对讲使用浏览器 `getUserMedia` API（麦克风访问），该 API 要求**安全上下文（Secure Context）**。浏览器规则：
+
+- ✅ `https://` 任意地址 → 安全
+- ✅ `http://localhost` → 浏览器特殊豁免（视为安全）
+- ❌ `http://192.168.x.x` → 非安全，浏览器拒绝调用 `getUserMedia`
+
+因此 `http://localhost:5555` 能用、`http://网络IP:5555` 不能用——这是**浏览器安全策略**，非后端代码限制。
+
+**解决方法**：让浏览器把你的 HTTP 地址"视为安全来源"：
+
+1. 浏览器地址栏打开 `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
+2. 在输入框填入平台地址，如 `http://192.168.5.15:5555`（你的平台 IP 地址）
+3. 右侧下拉选 **Enabled** → 点 **Relaunch** 重启浏览器
+4. 重新访问 `http://192.168.5.15:5555` → `isSecureContext` 变为 `true` → 麦克风可用
+
 ## 应用场景
 
 ### 安防监控

@@ -8,9 +8,9 @@ opencv-python>=4.8.0
 
 # ========== 推理引擎 ==========
 # GPU 推理（NVIDIA 平台）
-onnxruntime-gpu>=1.17.0
+# onnxruntime-gpu>=1.17.0
 # CPU 推理（无 GPU 环境时替代 onnxruntime-gpu）
-onnxruntime>=1.17.0
+# onnxruntime>=1.17.0
 # RK3588 NPU 推理（仅 RK3588 平台，需手动安装）
 # rknn-toolkit2>=2.0.0
 
