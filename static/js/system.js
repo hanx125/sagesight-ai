@@ -777,29 +777,38 @@ function renderMonitorData(data) {
     };
     
     let gpuHtml = '';
-    if (data.gpu && data.gpu.length > 0) {
-        gpuHtml = data.gpu.map(gpu => `
+    const accelerators = data.accelerators || data.gpu || [];
+    if (accelerators && accelerators.length > 0) {
+        gpuHtml = accelerators.map(acc => {
+            // 依据 device_type 动态显示标签（GPU/NPU），不绑定具体厂商
+            const isNpu = acc.device_type === 'npu';
+            const typeLabel = isNpu ? 'NPU' : 'GPU';
+            const utilLabel = isNpu ? 'NPU利用率' : 'GPU利用率';
+            // NPU 共享系统内存、无独立显存，仅 GPU 显示显存使用行
+            const memHtml = acc.has_memory === false ? '' : `
+                <div class="monitor-stat">
+                    <span class="monitor-stat-label">显存使用</span>
+                    <span class="monitor-stat-value">${acc.memory_used_mb}MB / ${acc.memory_total_mb}MB (${acc.memory_percent}%)</span>
+                </div>
+                <div class="monitor-progress-bar">
+                    <div class="monitor-progress-fill ${getBarClass(acc.memory_percent)}" style="width: ${acc.memory_percent}%"></div>
+                </div>`;
+            return `
             <div class="monitor-card gpu-card">
                 <div class="monitor-card-header">
                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-9 3h2v2h-2V7zm0 4h2v2h-2v-2zm-4-4h2v2H7V7zm0 4h2v2H7v-2zm-3 4h12v2H4v-2zm3-8h2v2H7V7zm0 4h2v2H7v-2zm5 0h2v2h-2v-2zm0-4h2v2h-2V7z"/></svg>
-                    <h4>${escapeHtml(gpu.name)} (GPU ${gpu.index})</h4>
+                    <h4>${escapeHtml(acc.name)} (${typeLabel} ${acc.index})</h4>
                 </div>
                 <div class="monitor-stat">
-                    <span class="monitor-stat-label">GPU利用率</span>
-                    <span class="monitor-stat-value">${gpu.gpu_utilization}%</span>
+                    <span class="monitor-stat-label">${utilLabel}</span>
+                    <span class="monitor-stat-value">${acc.gpu_utilization}%</span>
                 </div>
                 <div class="monitor-progress-bar">
-                    <div class="monitor-progress-fill ${getBarClass(gpu.gpu_utilization)}" style="width: ${gpu.gpu_utilization}%"></div>
-                </div>
-                <div class="monitor-stat">
-                    <span class="monitor-stat-label">显存使用</span>
-                    <span class="monitor-stat-value">${gpu.memory_used_mb}MB / ${gpu.memory_total_mb}MB (${gpu.memory_percent}%)</span>
-                </div>
-                <div class="monitor-progress-bar">
-                    <div class="monitor-progress-fill ${getBarClass(gpu.memory_percent)}" style="width: ${gpu.memory_percent}%"></div>
-                </div>
+                    <div class="monitor-progress-fill ${getBarClass(acc.gpu_utilization)}" style="width: ${acc.gpu_utilization}%"></div>
+                </div>${memHtml}
             </div>
-        `).join('');
+        `;
+        }).join('');
     }
     
     container.innerHTML = `

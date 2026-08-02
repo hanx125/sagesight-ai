@@ -349,15 +349,11 @@ def download_log_file():
     return send_file(str(log_path), as_attachment=True, download_name=filename)
 
 
-def _collect_gpu_info():
-    """
-    收集 GPU/NPU 信息。
-    
-    优先级：
-    1. pynvml（如果 nvml.dll 可用）
-    2. nvidia-smi 命令解析（驱动可用但 nvml.dll 找不到时的回退方案）
-    
-    返回字段统一为：index, name, gpu_utilization, memory_total_mb, memory_used_mb, memory_percent
+def _collect_nvidia_gpu():
+    """收集 NVIDIA GPU 信息（pynvml 优先，nvidia-smi 回退）
+
+    Returns:
+        list: GPU 设备列表，每个含 device_type='gpu'、has_memory=True
     """
     # 方案1：pynvml
     try:
@@ -375,12 +371,14 @@ def _collect_gpu_info():
             result.append({
                 'index': i,
                 'name': name,
+                'device_type': 'gpu',
                 'gpu_utilization': util.gpu,
                 'memory_total': mem_info.total,
                 'memory_used': mem_info.used,
                 'memory_total_mb': round(mem_info.total / 1024 / 1024, 0),
                 'memory_used_mb': round(mem_info.used / 1024 / 1024, 0),
-                'memory_percent': round(mem_info.used / mem_info.total * 100, 1) if mem_info.total > 0 else 0
+                'memory_percent': round(mem_info.used / mem_info.total * 100, 1) if mem_info.total > 0 else 0,
+                'has_memory': True,
             })
         pynvml.nvmlShutdown()
         if result:
@@ -413,12 +411,14 @@ def _collect_gpu_info():
                 result.append({
                     'index': idx,
                     'name': name,
+                    'device_type': 'gpu',
                     'gpu_utilization': util,
                     'memory_total': int(mem_total * 1024 * 1024),
                     'memory_used': int(mem_used * 1024 * 1024),
                     'memory_total_mb': mem_total,
                     'memory_used_mb': mem_used,
                     'memory_percent': round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0,
+                    'has_memory': True,
                 })
             if result:
                 return result
@@ -426,6 +426,61 @@ def _collect_gpu_info():
         pass
 
     return []
+
+
+def _collect_rk3588_npu():
+    """收集 RK3588 NPU 使用率
+
+    读取 /sys/kernel/debug/rknpu/load 获取 3 个 NPU 核心的使用率，取平均值。
+    NPU 共享系统内存、无独立显存，因此 has_memory=False（前端不显示显存行）。
+
+    Returns:
+        list: NPU 设备列表，每个含 device_type='npu'、has_memory=False
+    """
+    try:
+        from src.utils.platform_utils import is_rk3588
+        if not is_rk3588():
+            return []
+    except Exception:
+        return []
+
+    import re
+    # /sys/kernel/debug/rknpu/load 需 root（算法盒子默认 root 运行）
+    try:
+        with open('/sys/kernel/debug/rknpu/load', 'r') as f:
+            content = f.read()
+        cores = re.findall(r'Core\d+:\s*(\d+)%', content)
+        if cores:
+            util = sum(int(c) for c in cores) / len(cores)
+            return [{
+                'index': 0,
+                'name': 'RK3588 NPU',
+                'device_type': 'npu',
+                'gpu_utilization': round(util, 1),
+                'memory_total_mb': 0,
+                'memory_used_mb': 0,
+                'memory_percent': 0,
+                'has_memory': False,
+            }]
+    except Exception:
+        pass
+
+    return []
+
+
+def _collect_accelerators():
+    """收集所有 AI 加速器（GPU/NPU 等）
+
+    通用架构：每种加速器独立收集，通过 device_type 区分类型，前端依据 device_type
+    显示对应标签（GPU/NPU），不绑定具体厂商。新增加速器支持只需追加一个收集函数。
+
+    Returns:
+        list: 加速器设备列表，每个含 device_type 字段（'gpu'/'npu'）
+    """
+    devices = []
+    devices.extend(_collect_nvidia_gpu())
+    devices.extend(_collect_rk3588_npu())
+    return devices
 
 
 # ========================================
@@ -460,8 +515,8 @@ def get_system_monitor():
     # 进程信息
     process_count = len(psutil.pids())
     
-    # GPU信息（优先 pynvml，失败则回退 nvidia-smi 命令解析）
-    gpu_info = _collect_gpu_info()
+    # AI 加速器信息（GPU/NPU，通过 device_type 区分类型）
+    accelerators = _collect_accelerators()
 
     return jsonify({
         'cpu': {
@@ -500,7 +555,8 @@ def get_system_monitor():
             'process_count': process_count,
             'boot_time': boot_time
         },
-        'gpu': gpu_info,
+        'gpu': accelerators,        # 兼容历史字段名，内含 device_type 区分 GPU/NPU
+        'accelerators': accelerators,  # AI 加速器列表（GPU/NPU，含 device_type）
         'timestamp': time.time()
     })
 
