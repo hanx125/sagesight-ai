@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SageSight AI - 摄像机管理页面 JavaScript
  * 支持ONVIF协议发现和注册摄像机
  */
@@ -1531,6 +1531,7 @@ return {
     switchDiscoverTab: switchDiscoverTab,
     startDiscover: startDiscover,
     startNetworkScan: startNetworkScan,
+    registerDiscoveredDevice: registerDiscoveredDevice,
     registerOnvifCamera: registerOnvifCamera,
     closeOnvifRegisterModal: closeOnvifRegisterModal,
     openEditModal: openEditModal,
