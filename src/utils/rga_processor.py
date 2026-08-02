@@ -142,6 +142,7 @@ class RGAProcessor:
         self._lib = None
         self._available = False
         self._has_imconfig = False
+        self._has_wrapbuffer_va = False
         self._init_librga()
         # 加载成功后立即指定调度核心，避免 RK3588 no core match
         if self.is_available() and self._has_imconfig:
@@ -198,6 +199,19 @@ class RGAProcessor:
             ctypes.c_int, ctypes.c_int, ctypes.c_int,
         ]
         lib.wrapbuffer_handle_t.restype = rga_buffer_t
+
+        # wrapbuffer_virtualaddr(void* va, w, h, format) -> rga_buffer_t
+        # 官方推荐的一步式 API：直接包装虚拟地址，内部填充 rga_buffer_t 全字段
+        # （含 vir_addr），避免两步法 wrapbuffer_handle_t 不回填 vir_addr 的问题。
+        # 可选符号：极旧版 librga 可能未导出，缺失时退回两步法。
+        if hasattr(lib, 'wrapbuffer_virtualaddr'):
+            lib.wrapbuffer_virtualaddr.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ]
+            lib.wrapbuffer_virtualaddr.restype = rga_buffer_t
+            self._has_wrapbuffer_va = True
+        else:
+            self._has_wrapbuffer_va = False
 
         # improcess(src, dst, pat, srect, drect, prect, usage) -> int  （按值传结构体）
         lib.improcess.argtypes = [
@@ -281,41 +295,49 @@ class RGAProcessor:
         if not dst_buf_np.flags['C_CONTIGUOUS']:
             dst_buf_np = np.ascontiguousarray(dst_buf_np)
 
-        # ---- 注册源缓冲 ----
+        # ---- 包装缓冲为 rga_buffer_t ----
+        # 优先使用官方推荐的 wrapbuffer_virtualaddr 一步式 API：
+        #   内部完整填充 rga_buffer_t 全字段（含 vir_addr），避免两步法
+        #   wrapbuffer_handle_t 不回填 vir_addr 导致 RGA 报 Invalid argument。
+        # 缺失该符号时退回 importbuffer_virtualaddr + wrapbuffer_handle_t 两步法。
         src_va = std_i420.ctypes.data_as(ctypes.c_void_p)
-        src_param = im_handle_param_t(
-            width=ctypes.c_uint32(W),
-            height=ctypes.c_uint32(H),
-            format=ctypes.c_uint32(RK_FORMAT_YCbCr_420_P),
-        )
-        src_handle = self._lib.importbuffer_virtualaddr(src_va, ctypes.byref(src_param))
-        if src_handle == 0:
-            raise RuntimeError("importbuffer_virtualaddr(src) 失败")
-
-        # ---- 注册目的缓冲 ----
         dst_va = dst_buf_np.ctypes.data_as(ctypes.c_void_p)
-        dst_param = im_handle_param_t(
-            width=ctypes.c_uint32(dst_w),
-            height=ctypes.c_uint32(dst_h),
-            format=ctypes.c_uint32(RK_FORMAT_RGB_888),
-        )
-        dst_handle = self._lib.importbuffer_virtualaddr(dst_va, ctypes.byref(dst_param))
-        if dst_handle == 0:
-            self._lib.releasebuffer_handle(src_handle)
-            raise RuntimeError("importbuffer_virtualaddr(dst) 失败")
 
+        src_handle = 0
+        dst_handle = 0
         try:
-            # ---- 包装为 rga_buffer_t ----
-            src_buf = self._lib.wrapbuffer_handle_t(
-                src_handle, W, H, W, H, RK_FORMAT_YCbCr_420_P)
-            dst_buf = self._lib.wrapbuffer_handle_t(
-                dst_handle, dst_w, dst_h, dst_w, dst_h, RK_FORMAT_RGB_888)
+            if self._has_wrapbuffer_va:
+                # 一步式：va + 宽 + 高 + 格式
+                src_buf = self._lib.wrapbuffer_virtualaddr(
+                    src_va, W, H, RK_FORMAT_YCbCr_420_P)
+                dst_buf = self._lib.wrapbuffer_virtualaddr(
+                    dst_va, dst_w, dst_h, RK_FORMAT_RGB_888)
+            else:
+                # 两步法回退：importbuffer + wrapbuffer_handle_t + 手动回填 vir_addr
+                src_param = im_handle_param_t(
+                    width=ctypes.c_uint32(W),
+                    height=ctypes.c_uint32(H),
+                    format=ctypes.c_uint32(RK_FORMAT_YCbCr_420_P),
+                )
+                src_handle = self._lib.importbuffer_virtualaddr(src_va, ctypes.byref(src_param))
+                if src_handle == 0:
+                    raise RuntimeError("importbuffer_virtualaddr(src) 失败")
 
-            # 某些 librga 版本 wrapbuffer_handle_t 不回填 vir_addr 字段，
-            # 导致 RGA 驱动拿不到缓冲区地址（dump 显示 va=(nil)），报 Invalid argument。
-            # 此处手动回填，确保地址可用。
-            src_buf.vir_addr = src_va
-            dst_buf.vir_addr = dst_va
+                dst_param = im_handle_param_t(
+                    width=ctypes.c_uint32(dst_w),
+                    height=ctypes.c_uint32(dst_h),
+                    format=ctypes.c_uint32(RK_FORMAT_RGB_888),
+                )
+                dst_handle = self._lib.importbuffer_virtualaddr(dst_va, ctypes.byref(dst_param))
+                if dst_handle == 0:
+                    raise RuntimeError("importbuffer_virtualaddr(dst) 失败")
+
+                src_buf = self._lib.wrapbuffer_handle_t(
+                    src_handle, W, H, W, H, RK_FORMAT_YCbCr_420_P)
+                dst_buf = self._lib.wrapbuffer_handle_t(
+                    dst_handle, dst_w, dst_h, dst_w, dst_h, RK_FORMAT_RGB_888)
+                src_buf.vir_addr = src_va
+                dst_buf.vir_addr = dst_va
 
             # ---- 构造矩形 ----
             srect = im_rect(x1, y1, x2 - x1, y2 - y1)
@@ -333,9 +355,11 @@ class RGAProcessor:
             return dst_buf_np
 
         finally:
-            # 释放 handle（避免驱动资源泄漏）
-            self._lib.releasebuffer_handle(src_handle)
-            self._lib.releasebuffer_handle(dst_handle)
+            # 仅两步法需要手动释放 handle；wrapbuffer_virtualaddr 内部自管理
+            if src_handle != 0:
+                self._lib.releasebuffer_handle(src_handle)
+            if dst_handle != 0:
+                self._lib.releasebuffer_handle(dst_handle)
 
 
 # ========================================
