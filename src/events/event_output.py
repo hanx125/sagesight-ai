@@ -1027,6 +1027,10 @@ class EventOutput:
             # ✅ 新增：推送 gif_ready 到前端（驾驶舱 + 事件管理页面）
             self._push_gif_ready_to_websocket(event_id, gif_urls)
 
+            # ✅ 补推完整事件数据到 MQTT（含 GIF URL、最终类型、最终状态、zone 轨迹）
+            # 首次 MQTT 推送在事件创建时发出（GIF 未生成、type 为初始值），此处补全
+            self._io_executor.submit(self._push_complete_to_mqtt, event_id)
+
             return local_path if local_path else None
 
         except Exception as e:
@@ -1059,6 +1063,63 @@ class EventOutput:
             )
         except Exception as e:
             logger.debug(f"[EventOutput] 推送 gif_ready 失败: {e}")
+
+    def _push_complete_to_mqtt(self, event_id: str):
+        """GIF 就绪后补推完整事件数据到 MQTT
+
+        首次 MQTT 推送在事件创建时（track_start）发出，此时 GIF 尚未生成、type/status
+        为初始值。本方法在 GIF 就绪后从数据库查回完整记录，补推一次包含 GIF URL、最终
+        事件类型、最终状态、最终 zone 轨迹的完整消息，供第三方更新首次收到的数据。
+
+        payload 通过 event_id 与首次消息关联，update_type='gif_ready' 标记本消息为补推更新。
+        """
+        if not self.mqtt_outputter:
+            return
+        try:
+            from src.tasks.task_manager import TaskManager
+            task_manager = TaskManager()
+            record = task_manager.get_event_by_id(event_id)
+            if record is None:
+                logger.debug(f"[EventOutput] MQTT 补推失败：未找到事件 {event_id[:8]}")
+                return
+
+            d = record.to_dict()
+            payload = {
+                'event_id': d['event_id'],
+                'update_type': 'gif_ready',          # 标记：本消息为首次推送的完整更新
+                'type': d['type'],                    # 最终事件类型（tracking/zone/loitering）
+                'status': d['status'],                # 最终状态（gif_ready）
+                'camera_id': d['camera_id'],
+                'task_id': d['task_id'],
+                'algorithm': d['algorithm'],
+                'class_name': d['class_name'],
+                'confidence': d['confidence'],
+                'bbox': d['bbox'],
+                'image_urls': {                       # 图片存储地址
+                    'local': d['local_image_url'],
+                    'minio': d['minio_image_url'],
+                    'ftp': d['ftp_image_url'],
+                },
+                'gif_urls': {                         # GIF 存储地址（首次推送时缺失，此处补全）
+                    'local': d['local_gif_url'],
+                    'minio': d['minio_gif_url'],
+                    'ftp': d['ftp_gif_url'],
+                },
+                'entered_zones': d['entered_zones'],
+                'zone_name': d['zone_name'],
+                'loitered_zones': d['loitered_zones'],
+                'start_time': d['start_time'],
+                'end_time': d['end_time'],
+                'metadata': d['metadata'] or {},
+            }
+            self.mqtt_outputter.send(payload)
+            logger.info(
+                f"[EventOutput] MQTT 补推完整事件: event_id={event_id[:8]}, "
+                f"type={d['type']}, status={d['status']}, "
+                f"gif_urls={[k for k, v in payload['gif_urls'].items() if v]}"
+            )
+        except Exception as e:
+            logger.debug(f"[EventOutput] MQTT 补推完整事件失败: {e}")
 
     def close(self):
         """关闭所有输出器"""

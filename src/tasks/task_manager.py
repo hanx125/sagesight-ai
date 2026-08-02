@@ -1466,7 +1466,34 @@ class TaskManager:
 
             cursor.execute(query, params)
             return cursor.fetchone()[0]
-    
+
+    def get_event_by_id(self, event_id: str) -> Optional[EventRecord]:
+        """按 event_id 查询单条完整事件记录
+
+        用于 GIF 就绪后获取完整数据（含 GIF URL、最终类型、最终状态、zone 轨迹）
+        补推 MQTT，更新事件创建时推送的不完整数据。
+
+        Args:
+            event_id: 事件 UUID
+
+        Returns:
+            EventRecord 或 None（未找到）
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                '''SELECT id, event_id, task_id, camera_id, algorithm, type, class_name,
+                          confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
+                          local_gif_url, minio_gif_url, ftp_gif_url,
+                          metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones, created_at
+                   FROM events WHERE event_id = ?''',
+                (event_id,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_event(row)
+
     def clear_old_events(self, days: int = 7) -> int:
         """清理旧事件"""
         with sqlite3.connect(self.db_path) as conn:
