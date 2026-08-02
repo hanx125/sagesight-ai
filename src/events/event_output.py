@@ -773,6 +773,14 @@ class EventOutput:
             metadata=extra_metadata
         )
 
+    def has_required_zones(self) -> bool:
+        """是否配置了必需区域（目标必须进入必需区域才产生事件）
+
+        required_zones 由 TrackedObjectProcessor 从 zones_config 的 required 标志派生注入
+        （单一真相源）。为空表示未配置必需区域，所有目标正常产生事件。
+        """
+        return bool(self.required_zones)
+
     def passes_required_zones(self, entered_zones: List[str]) -> bool:
         """判断目标是否满足 required_zones 过滤条件
 

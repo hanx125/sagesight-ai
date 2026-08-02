@@ -266,6 +266,14 @@ class TrackedObjectProcessor(mp.Process):
             event_config.setdefault("enabled", True)
             event_config.setdefault("save_to_db", True)
 
+            # 必需区域：从 zones_config 的 required 标志派生（单一真相源）
+            # 任一区域 required=true 时，目标必须进入必需区域才产生事件（延迟创建）
+            # event_output.yaml 不再配置 capture.required_zones，避免两个来源冲突
+            zones_config = config.get("zones_config", [])
+            required_zone_names = [z.get("name") for z in zones_config if z.get("required")]
+            if required_zone_names:
+                event_config.setdefault("capture", {})["required_zones"] = required_zone_names
+
             self.event_outputs[cam_id] = EventOutput(event_config)
 
             # 创建 FrameCache（仅 GIF 启用时才缓存帧）
@@ -398,37 +406,34 @@ class TrackedObjectProcessor(mp.Process):
         # 清理当前帧引用
         self._current_frame = None
 
-    def _on_object_start(self, camera_id: str, obj_dict: dict, frame_time: float):
-        """新目标出现回调 - 创建跟踪事件（type=tracking, status=tracking_start）"""
+    def _emit_tracking_start(self, camera_id: str, obj_dict: dict, wall_time: float) -> Optional[str]:
+        """创建跟踪事件（type=tracking, status=tracking_start）并返回 event_id
+
+        由 _on_object_start（立即创建）和 _on_object_update（延迟创建）共用。
+        wall_time 为事件开始时间（系统 Unix 时间戳），由调用方提供以保证事件记录的
+        start_time 与内存 active_events 的 start_wall_time 一致。
+        未通过 should_send 过滤时返回 None。
+        """
         event_output = self.event_outputs.get(camera_id)
         if event_output is None:
-            return
+            return None
 
-        # 检查是否应该发送
         class_name = obj_dict.get("label", "unknown")
         confidence = obj_dict.get("score", 0.0)
         if not event_output.should_send(class_name, confidence):
-            return
+            return None
 
-        # 根据 capture.save_full_on_start 配置决定是否生成快照（复用主循环已读帧）
-        # required_zones 过滤：start 阶段 entered_zones 必为空（目标刚出现，尚未确认进入任何区域），
-        # 若配置了 required_zones 则跳过 start 图片（end 阶段再按 entered_zones 判定是否保存）
+        # 采集开始快照（复用主循环已读帧），绘制检测框（与 AI 视频流保持一致）
         image = None
         if event_output.capture_save_full_on_start:
-            entered_zones_at_start = obj_dict.get("entered_zones", []) or []
-            if event_output.passes_required_zones(entered_zones_at_start):
-                image = self._current_frame
-                if image is None:
-                    image = self._read_frame_from_shm(camera_id)
-                # 绘制检测框（与 AI 视频流保持一致，事件图片也需要展示检测框）
+            image = self._current_frame
+            if image is None:
+                image = self._read_frame_from_shm(camera_id)
+            if image is not None:
                 image = self._prepare_event_image(camera_id, image)
 
-        # 构建事件数据
         track_id = obj_dict.get("id", "")
         bbox = obj_dict.get("box", [0, 0, 0, 0])
-
-        # ✅ 修复：事件时间使用系统 Unix 时间戳（frame_time 是视频相对时间，不是时间戳）
-        wall_time = time.time()
 
         event_data = {
             "track_id": track_id,
@@ -444,15 +449,50 @@ class TrackedObjectProcessor(mp.Process):
             "loitered_zones": obj_dict.get("loitered_zones", []),
         }
 
-        # 创建跟踪事件（type=tracking）
-        event_id = event_output.emit(
+        return event_output.emit(
             event_type="tracking",
             data=event_data,
             image=image,
             frame_id=obj_dict.get("frame_time", 0),
         )
 
-        # 记录活跃事件
+    def _on_object_start(self, camera_id: str, obj_dict: dict, frame_time: float):
+        """新目标出现回调 - 创建跟踪事件（type=tracking, status=tracking_start）
+
+        配置了必需区域时延迟创建：start 阶段仅标记 pending，等 _on_object_update 确认
+        目标进入必需区域后再创建事件。目标从未进入必需区域则不产生任何事件。
+        无必需区域时立即创建（行为不变）。
+        """
+        event_output = self.event_outputs.get(camera_id)
+        if event_output is None:
+            return
+
+        track_id = obj_dict.get("id", "")
+        class_name = obj_dict.get("label", "unknown")
+        confidence = obj_dict.get("score", 0.0)
+        bbox = obj_dict.get("box", [0, 0, 0, 0])
+
+        # 必需区域过滤：延迟事件创建到目标首次进入必需区域
+        # start 阶段 entered_zones 必为空（目标刚出现，尚未确认进入任何区域），无法判定
+        if event_output.has_required_zones():
+            self.active_events[camera_id][track_id] = {
+                "event_id": None,                # None = pending（尚未进入必需区域）
+                "pending_required_zones": True,
+                "start_time": frame_time,        # 视频相对时间（用于持续时间和 GIF 回取）
+                "start_wall_time": time.time(),  # 系统 Unix 时间戳（用于事件数据库）
+                "class_name": class_name,
+                "bbox": bbox,
+            }
+            logger.debug(
+                f"[{camera_id}] 目标 {track_id} 待定（必需区域过滤），等待进入必需区域: "
+                f"label={class_name}, score={confidence:.3f}"
+            )
+            return
+
+        # 无必需区域：立即创建事件
+        wall_time = time.time()
+        event_id = self._emit_tracking_start(camera_id, obj_dict, wall_time)
+
         if event_id:
             self.active_events[camera_id][track_id] = {
                 "event_id": event_id,
@@ -483,6 +523,29 @@ class TrackedObjectProcessor(mp.Process):
         active_event = self.active_events.get(camera_id, {}).get(track_id)
         if active_event is None:
             return
+
+        # 必需区域延迟创建：pending 事件在目标首次进入必需区域时才创建
+        # start 阶段 entered_zones 为空无法判定，需在 update 阶段确认
+        if active_event.get("pending_required_zones") and active_event.get("event_id") is None:
+            entered_zones = obj_dict.get("entered_zones", []) or []
+            if not event_output.passes_required_zones(entered_zones):
+                # 仍未进入必需区域，继续等待（不更新缩略图，无 event_id）
+                return
+            # 首次进入必需区域 → 现在创建事件（延迟创建）
+            # start_time 沿用目标出现时刻（active_event.start_wall_time），保证事件记录的时间语义正确
+            wall_time = active_event.get("start_wall_time", time.time())
+            event_id = self._emit_tracking_start(camera_id, obj_dict, wall_time)
+            if event_id is None:
+                # 创建失败（如 should_send 未通过），放弃 pending 并清理
+                del self.active_events[camera_id][track_id]
+                return
+            active_event["event_id"] = event_id
+            active_event["pending_required_zones"] = False
+            logger.info(
+                f"[{camera_id}] 目标 {track_id} 进入必需区域，创建延迟事件: "
+                f"event_id={event_id}, entered_zones={entered_zones}"
+            )
+            return  # 本次 update 仅完成创建，下次 update 再更新缩略图
 
         event_id = active_event.get("event_id", "")
 
@@ -545,6 +608,18 @@ class TrackedObjectProcessor(mp.Process):
         # 检查是否有活跃事件
         active_event = self.active_events.get(camera_id, {}).get(track_id)
         if active_event is None:
+            return
+
+        # 必需区域过滤：pending 事件（目标从未进入必需区域）直接丢弃，不产生任何事件
+        # 不 emit、不保存图片/GIF、不推送前端、不写数据库
+        if active_event.get("pending_required_zones") and active_event.get("event_id") is None:
+            del self.active_events[camera_id][track_id]
+            logger.debug(
+                f"[{camera_id}] 目标 {track_id} 未进入必需区域，丢弃事件"
+            )
+            # 如果消失的是当前 PTZ 跟踪目标，清除 PTZ 跟踪状态
+            if self.ptz_tracked_object.get(camera_id) == track_id:
+                self._clear_ptz_tracking(camera_id, frame_time)
             return
 
         event_id = active_event.get("event_id", "")
