@@ -1001,6 +1001,13 @@ async function loadSystemConfig() {
             const rawWs = webServer.raw_websocket || {};
             document.getElementById('rawWebsocketEnabled').checked = rawWs.enabled !== false;
             document.getElementById('rawWebsocketPath').value = rawWs.path || '/ws/raw';
+            // 动态生成第三方接入地址（用当前访问的 host:port，避免硬编码端口）
+            const wsProto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+            const wsPath = rawWs.path || '/ws/raw';
+            const wsUrlEl = document.getElementById('rawWebsocketUrl');
+            if (wsUrlEl) {
+                wsUrlEl.textContent = `${wsProto}://${window.location.host}${wsPath}`;
+            }
         }
     } catch (error) {
         showNotification('加载配置失败', 'error');
