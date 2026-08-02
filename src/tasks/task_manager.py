@@ -745,34 +745,42 @@ class TaskManager:
 
             # 数据迁移：把任务-通道绑定表中的 zones_config 迁移到通道表（按 channel_id 取非空值）
             # 迁移后清空绑定表的 zones_config，使通道表成为唯一数据源
+            # 注意：新版建表已不在 task_device_channel_bindings 中创建 zones_config 列，
+            #       仅旧库可能残留该列，需先检查列存在性再迁移，避免 "no such column" 报错。
             try:
-                # 取绑定表中每个 channel 的非空 zones_config（优先最后一个非空值）
-                cursor.execute('''
-                    SELECT channel_id, zones_config
-                    FROM task_device_channel_bindings
-                    WHERE zones_config IS NOT NULL AND zones_config != ''
-                ''')
-                migrated_rows = cursor.fetchall()
-                if migrated_rows:
-                    # 按 channel_id 聚合，保留最后一个非空值
-                    channel_zones_map = {}
-                    for ch_id, zc in migrated_rows:
-                        if zc:
-                            channel_zones_map[ch_id] = zc
-                    for ch_id, zc in channel_zones_map.items():
+                cursor.execute("PRAGMA table_info(task_device_channel_bindings)")
+                binding_cols = [row[1] for row in cursor.fetchall()]
+                if 'zones_config' not in binding_cols:
+                    # 绑定表无 zones_config 列（新库或已迁移完成），跳过迁移
+                    pass
+                else:
+                    # 取绑定表中每个 channel 的非空 zones_config（优先最后一个非空值）
+                    cursor.execute('''
+                        SELECT channel_id, zones_config
+                        FROM task_device_channel_bindings
+                        WHERE zones_config IS NOT NULL AND zones_config != ''
+                    ''')
+                    migrated_rows = cursor.fetchall()
+                    if migrated_rows:
+                        # 按 channel_id 聚合，保留最后一个非空值
+                        channel_zones_map = {}
+                        for ch_id, zc in migrated_rows:
+                            if zc:
+                                channel_zones_map[ch_id] = zc
+                        for ch_id, zc in channel_zones_map.items():
+                            cursor.execute(
+                                "UPDATE device_channel_pool SET zones_config = ? WHERE id = ?",
+                                (zc, ch_id)
+                            )
+                        # 清空绑定表的 zones_config（通道表已成为唯一数据源）
                         cursor.execute(
-                            "UPDATE device_channel_pool SET zones_config = ? WHERE id = ?",
-                            (zc, ch_id)
+                            "UPDATE task_device_channel_bindings SET zones_config = NULL "
+                            "WHERE zones_config IS NOT NULL"
                         )
-                    # 清空绑定表的 zones_config（通道表已成为唯一数据源）
-                    cursor.execute(
-                        "UPDATE task_device_channel_bindings SET zones_config = NULL "
-                        "WHERE zones_config IS NOT NULL"
-                    )
-                    logger.info(
-                        f"[TaskManager] 已将 {len(channel_zones_map)} 个通道的 Zone 配置"
-                        f"从 task_device_channel_bindings 迁移到 device_channel_pool"
-                    )
+                        logger.info(
+                            f"[TaskManager] 已将 {len(channel_zones_map)} 个通道的 Zone 配置"
+                            f"从 task_device_channel_bindings 迁移到 device_channel_pool"
+                        )
             except Exception as e:
                 logger.warning(f"[TaskManager] Zone 配置迁移失败，跳过: {e}")
             
