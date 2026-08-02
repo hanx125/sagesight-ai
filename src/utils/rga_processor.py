@@ -280,6 +280,12 @@ class RGAProcessor:
             dst_buf = self._lib.wrapbuffer_handle_t(
                 dst_handle, dst_w, dst_h, dst_w, dst_h, RK_FORMAT_RGB_888)
 
+            # 某些 librga 版本 wrapbuffer_handle_t 不回填 vir_addr 字段，
+            # 导致 RGA 驱动拿不到缓冲区地址（dump 显示 va=(nil)），报 Invalid argument。
+            # 此处手动回填，确保地址可用。
+            src_buf.vir_addr = src_va
+            dst_buf.vir_addr = dst_va
+
             # ---- 构造矩形 ----
             srect = im_rect(x1, y1, x2 - x1, y2 - y1)
             drect = im_rect(0, 0, dst_w, dst_h)
