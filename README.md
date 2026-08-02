@@ -207,7 +207,7 @@ python run.py
 ```
 
 **访问平台**：
-- 打开浏览器访问：`http://localhost:5555`
+- 打开浏览器访问：`http://localhost:5556`
 - 默认用户名：`admin`
 - 默认密码：`admin123`
 
@@ -284,14 +284,14 @@ MediaServer.exe
 - ✅ `http://localhost` → 浏览器特殊豁免（视为安全）
 - ❌ `http://192.168.x.x` → 非安全，浏览器拒绝调用 `getUserMedia`
 
-因此 `http://localhost:5555` 能用、`http://网络IP:5555` 不能用——这是**浏览器安全策略**，非后端代码限制。
+因此 `http://localhost:5556` 能用、`http://网络IP:5556` 不能用——这是**浏览器安全策略**，非后端代码限制。
 
 **解决方法**：让浏览器把你的 HTTP 地址"视为安全来源"：
 
 1. 浏览器地址栏打开 `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
-2. 在输入框填入平台地址，如 `http://192.168.5.15:5555`（你的平台 IP 地址）
+2. 在输入框填入平台地址，如 `http://192.168.5.15:5556`（你的平台 IP 地址）
 3. 右侧下拉选 **Enabled** → 点 **Relaunch** 重启浏览器
-4. 重新访问 `http://192.168.5.15:5555` → `isSecureContext` 变为 `true` → 麦克风可用
+4. 重新访问 `http://192.168.5.15:5556` → `isSecureContext` 变为 `true` → 麦克风可用
 
 ## 应用场景
 

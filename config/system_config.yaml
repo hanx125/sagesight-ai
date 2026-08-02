@@ -18,7 +18,7 @@ database:
   pool_enabled: false
   pool_size: 5
 web_server:
-  port: 5555
+  port: 5556
   debug: false
   cors_enabled: true
   static_dir: static

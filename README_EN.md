@@ -207,7 +207,7 @@ python run.py
 ```
 
 **Access the platform**:
-- Open a browser and visit: `http://localhost:5555`
+- Open a browser and visit: `http://localhost:5556`
 - Default username: `admin`
 - Default password: `admin123`
 
@@ -284,14 +284,14 @@ Voice intercom uses the browser `getUserMedia` API (microphone access), which re
 - ✅ `http://localhost` → special browser exemption (treated as secure)
 - ❌ `http://192.168.x.x` → insecure, browser rejects `getUserMedia`
 
-Therefore `http://localhost:5555` works, but `http://<network-IP>:5555` does not — this is a **browser security policy**, not a backend code restriction.
+Therefore `http://localhost:5556` works, but `http://<network-IP>:5556` does not — this is a **browser security policy**, not a backend code restriction.
 
 **Solution**: Make the browser treat your HTTP address as a "secure origin":
 
 1. Open `chrome://flags/#unsafely-treat-insecure-origin-as-secure` in the browser address bar
-2. Enter the platform address, e.g. `http://192.168.5.15:5555` (your platform IP address)
+2. Enter the platform address, e.g. `http://192.168.5.15:5556` (your platform IP address)
 3. Select **Enabled** from the dropdown → click **Relaunch** to restart the browser
-4. Revisit `http://192.168.5.15:5555` → `isSecureContext` becomes `true` → microphone available
+4. Revisit `http://192.168.5.15:5556` → `isSecureContext` becomes `true` → microphone available
 
 ## Application Scenarios
 

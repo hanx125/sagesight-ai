@@ -72,7 +72,7 @@ class EventOutput:
         system_cfg = config.get('system_config', {})
         web_server_cfg = system_cfg.get('web_server', {})
         self.server_host = web_server_cfg.get('host', 'localhost')
-        self.server_port = web_server_cfg.get('port', 5555)
+        self.server_port = web_server_cfg.get('port', 5556)
 
         # 上次清理时间
         self.last_cleanup_time = 0

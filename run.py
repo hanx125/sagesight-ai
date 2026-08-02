@@ -406,7 +406,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 # 原生 WebSocket 端点（/ws/raw，供第三方系统标准 WebSocket 接入）
 # ========================================
 # 双通道方案：保留 Socket.IO（前端用）+ 新增原生 WebSocket（第三方用）
-# 第三方连接 ws://<host>:5555/ws/raw，接收 JSON 格式消息：{"event": "...", "data": {...}}
+# 第三方连接 ws://<host>:5556/ws/raw，接收 JSON 格式消息：{"event": "...", "data": {...}}
 
 class WebSocketManager:
     """原生 WebSocket 连接管理器（给第三方接入用）"""
@@ -741,7 +741,7 @@ def get_stream_status(task_id):
 # ========================================
 # WebSocket 架构说明
 # ========================================
-# 系统使用 Flask-SocketIO 作为唯一的 WebSocket 通信方案（端口 5555，namespace: '/ws'）
+# 系统使用 Flask-SocketIO 作为唯一的 WebSocket 通信方案（端口 5556，namespace: '/ws'）
 #
 # AI 视频流推送模式（后端画框，统一架构）：
 #    - TrackedObjectProcessor → HTTP POST /api/ai-stream/push（仅当 {flag_dir}/{camera_id}.flag 存在时推送）
@@ -1267,7 +1267,7 @@ if __name__ == '__main__':
     from src.system.system_config_loader import load_system_config
     sys_cfg = load_system_config()
     web_cfg = sys_cfg.get('web_server', {})
-    port = web_cfg.get('port', 5555)
+    port = web_cfg.get('port', 5556)
 
     # 显示访问地址
     logger.info(f"\n[Main] Web管理平台访问地址: http://localhost:{port}")

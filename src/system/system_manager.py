@@ -121,10 +121,10 @@ def _get_web_base_url() -> str:
             cfg = yaml.safe_load(f) or {}
         web = cfg.get('web_server', {})
         host = web.get('host', '127.0.0.1')
-        port = web.get('port', 5555)
+        port = web.get('port', 5556)
         return f'http://{host}:{port}'
     except Exception:
-        return 'http://127.0.0.1:5555'
+        return 'http://127.0.0.1:5556'
 
 
 # ========================================

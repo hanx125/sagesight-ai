@@ -836,7 +836,7 @@ class MultiCameraTaskExecutor:
 
             web_server_cfg = system_cfg.get('web_server', {})
             host = web_server_cfg.get('host', '127.0.0.1')
-            port = web_server_cfg.get('port', 5555)
+            port = web_server_cfg.get('port', 5556)
 
             # 显示配置（框颜色、线宽等）
             display_config = self.task_config.get('display_config', {})
@@ -864,9 +864,9 @@ class MultiCameraTaskExecutor:
                     _cfg = yaml.safe_load(f) or {}
                 _web = _cfg.get('web_server', {})
                 _host = _web.get('host', '127.0.0.1')
-                _port = _web.get('port', 5555)
+                _port = _web.get('port', 5556)
             except Exception:
-                _host, _port = '127.0.0.1', 5555
+                _host, _port = '127.0.0.1', 5556
             return {
                 'interval': 2,
                 'api_url': f'http://{_host}:{_port}/api/ai-stream/push',
