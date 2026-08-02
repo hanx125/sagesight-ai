@@ -37,6 +37,17 @@ RK_FORMAT_YCbCr_420_P = 0xb << 8  # 标准 I420（3 平面 YUV420p）
 # 使用标志（来自 im2d_type.h IM_USAGE）
 IM_SYNC = 1 << 19  # 同步等待完成
 
+# imconfig 配置项（来自 im2d_type.h IM_CONFIG）
+IM_CONFIG_SCHEDULER_CORE = 1 << 0  # 调度核心选择
+
+# RGA 调度核心位掩码（来自 im2d_type.h IM_SCHEDULER_CORE）
+# RK3588 有 RGA3 core0/core1 与 RGA2 core，未显式指定时驱动可能 no core match
+IM_SCHEDULER_RGA3_CORE0 = 1 << 0
+IM_SCHEDULER_RGA3_CORE1 = 1 << 1
+IM_SCHEDULER_RGA2_CORE  = 1 << 2
+# 默认使用全部 RGA3 核（core0 + core1），覆盖大多数 YUV→RGB 场景
+IM_SCHEDULER_RGA3_DEFAULT = IM_SCHEDULER_RGA3_CORE0 | IM_SCHEDULER_RGA3_CORE1
+
 # 状态码（来自 im2d_type.h IM_STATUS）
 IM_STATUS_SUCCESS = 1
 IM_STATUS_NOERROR = 2
@@ -130,7 +141,18 @@ class RGAProcessor:
     def __init__(self):
         self._lib = None
         self._available = False
+        self._has_imconfig = False
         self._init_librga()
+        # 加载成功后立即指定调度核心，避免 RK3588 no core match
+        if self.is_available() and self._has_imconfig:
+            try:
+                ret = self._lib.imconfig(IM_CONFIG_SCHEDULER_CORE, IM_SCHEDULER_RGA3_DEFAULT)
+                if ret != IM_STATUS_SUCCESS and ret != IM_STATUS_NOERROR:
+                    logger.warning(f"[RGAProcessor] imconfig 设置调度核心返回：{ret}")
+                else:
+                    logger.info("[RGAProcessor] 调度核心已设为 RGA3 core0|core1")
+            except Exception as e:
+                logger.warning(f"[RGAProcessor] imconfig 设置调度核心失败：{e}")
 
     def _init_librga(self):
         """加载 librga.so 并绑定 C 函数符号"""
@@ -183,6 +205,15 @@ class RGAProcessor:
             im_rect, im_rect, im_rect, ctypes.c_int,
         ]
         lib.improcess.restype = ctypes.c_int
+
+        # imconfig(int name, int value) -> int  设置全局配置（如调度核心）
+        # imconfig 可选符号：旧版 librga 可能未导出，缺失时忽略（退回驱动默认调度）
+        if hasattr(lib, 'imconfig'):
+            lib.imconfig.argtypes = [ctypes.c_int, ctypes.c_int]
+            lib.imconfig.restype = ctypes.c_int
+            self._has_imconfig = True
+        else:
+            self._has_imconfig = False
 
         self._available = True
 
