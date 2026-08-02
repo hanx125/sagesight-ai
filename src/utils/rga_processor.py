@@ -200,15 +200,17 @@ class RGAProcessor:
         ]
         lib.wrapbuffer_handle_t.restype = rga_buffer_t
 
-        # wrapbuffer_virtualaddr(void* va, w, h, format) -> rga_buffer_t
-        # 官方推荐的一步式 API：直接包装虚拟地址，内部填充 rga_buffer_t 全字段
-        # （含 vir_addr），避免两步法 wrapbuffer_handle_t 不回填 vir_addr 的问题。
-        # 可选符号：极旧版 librga 可能未导出，缺失时退回两步法。
-        if hasattr(lib, 'wrapbuffer_virtualaddr'):
-            lib.wrapbuffer_virtualaddr.argtypes = [
-                ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        # wrapbuffer_virtualaddr_t(va, w, h, wstride, hstride, format) -> rga_buffer_t
+        # 官方一步式 API（注意：wrapbuffer_virtualaddr 无 _t 后缀是 C 宏，ctypes 无法调用，
+        # 必须直接调用 _t 版本的 6 参数函数）。内部完整填充 rga_buffer_t 全字段（含 vir_addr
+        # 和 wstride/hstride），避免两步法 wrapbuffer_handle_t 不回填 vir_addr 的问题。
+        # 关键：wstride/hstride 必须显式传入，否则默认为 0，RGA 按 0 步长读取 → 雪花。
+        if hasattr(lib, 'wrapbuffer_virtualaddr_t'):
+            lib.wrapbuffer_virtualaddr_t.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int,
             ]
-            lib.wrapbuffer_virtualaddr.restype = rga_buffer_t
+            lib.wrapbuffer_virtualaddr_t.restype = rga_buffer_t
             self._has_wrapbuffer_va = True
         else:
             self._has_wrapbuffer_va = False
@@ -307,11 +309,12 @@ class RGAProcessor:
         dst_handle = 0
         try:
             if self._has_wrapbuffer_va:
-                # 一步式：va + 宽 + 高 + 格式
-                src_buf = self._lib.wrapbuffer_virtualaddr(
-                    src_va, W, H, RK_FORMAT_YCbCr_420_P)
-                dst_buf = self._lib.wrapbuffer_virtualaddr(
-                    dst_va, dst_w, dst_h, RK_FORMAT_RGB_888)
+                # 一步式 6 参数：va, w, h, wstride, hstride, format
+                # wstride/hstride 必须显式传入（默认 0 会导致 RGA 按 0 步长读取 → 雪花）
+                src_buf = self._lib.wrapbuffer_virtualaddr_t(
+                    src_va, W, H, W, H, RK_FORMAT_YCbCr_420_P)
+                dst_buf = self._lib.wrapbuffer_virtualaddr_t(
+                    dst_va, dst_w, dst_h, dst_w, dst_h, RK_FORMAT_RGB_888)
             else:
                 # 两步法回退：importbuffer + wrapbuffer_handle_t + 手动回填 vir_addr
                 src_param = im_handle_param_t(
