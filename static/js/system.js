@@ -1264,6 +1264,7 @@ async function loadWebServerConfig() {
         const webServer = data.web_server || {};
 
         // 基础服务配置
+        document.getElementById('wsHost').value = webServer.host || '0.0.0.0';
         document.getElementById('wsPort').value = webServer.port || 5556;
         document.getElementById('wsCorsEnabled').value = String(webServer.cors_enabled !== false);
         document.getElementById('wsDebug').value = String(webServer.debug === true);
@@ -1308,6 +1309,7 @@ async function saveWebServerConfig() {
 
     const configData = {
         web_server: {
+            host: document.getElementById('wsHost').value.trim() || '0.0.0.0',
             port: port,
             cors_enabled: document.getElementById('wsCorsEnabled').value === 'true',
             debug: document.getElementById('wsDebug').value === 'true',

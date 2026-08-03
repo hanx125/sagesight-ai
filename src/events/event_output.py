@@ -68,9 +68,10 @@ class EventOutput:
         self.auto_cleanup = image_cfg.get('auto_cleanup', True)  # 是否自动清理
         self.cleanup_interval_hours = image_cfg.get('cleanup_interval_hours', 24)  # 清理间隔
 
-        # ✅ 新增：读取服务器配置（统一通过 system_config_loader 获取，单一真相源）
+        # 读取服务器配置（统一通过 system_config_loader 获取，单一真相源）
+        # host 用于生成事件图片/GIF 的可访问 URL，必须填盒子实际 IP（非 0.0.0.0/localhost）
         from src.system.system_config_loader import get_web_server_host, get_web_server_port
-        self.server_host = get_web_server_host('localhost')
+        self.server_host = get_web_server_host('0.0.0.0')
         self.server_port = get_web_server_port()
 
         # 上次清理时间

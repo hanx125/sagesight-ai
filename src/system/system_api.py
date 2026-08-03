@@ -664,7 +664,10 @@ def update_system_config():
             web_server = data['web_server']
             ws_config = config.setdefault('web_server', {})
 
-            # 基础服务配置（端口/调试/CORS/静态目录/模板目录）
+            # 基础服务配置（host/端口/调试/CORS/静态目录/模板目录）
+            # host：盒子部署时填实际 IP，用于生成事件图片/GIF 的可访问 URL
+            if 'host' in web_server and web_server['host']:
+                ws_config['host'] = str(web_server['host']).strip()
             # 端口校验：1-65535
             if 'port' in web_server:
                 try:
