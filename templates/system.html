@@ -43,6 +43,12 @@
                 </svg>
                 全局配置
             </button>
+            <button class="tab-btn" data-tab="node" onclick="System.switchTab('node')">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
+                </svg>
+                节点管理
+            </button>
             <button class="tab-btn" data-tab="database" onclick="System.switchTab('database')">
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 4c3.31 0 6 .9 6 2s-2.69 2-6 2-6-.9-6-2 2.69-2 6-2zm6 12H6v-2h12v2zm0-4H6v-2h12v2zm0-4H6V8h12v2z"/>
@@ -396,6 +402,99 @@
                 </div>
 
                 <!-- 实时通信配置已迁移至「Web服务配置」标签页，此处不再重复 -->
+            </div>
+
+            <!-- 节点管理标签页 -->
+            <div class="tab-panel" id="nodeTab">
+                <div class="tab-header">
+                    <h3>节点管理</h3>
+                    <button class="btn btn-primary btn-sm" onclick="System.saveNodeManagementConfig()">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
+                        保存配置
+                    </button>
+                </div>
+
+                <!-- 节点身份与控制面配置 -->
+                <div class="config-section">
+                    <h4 class="config-section-title">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+                        节点身份与控制面（向边缘平台注册）
+                    </h4>
+                    <p class="config-section-desc">在边缘平台前端节点详情中获取节点 ID 与 Agent 令牌；控制面地址为边缘平台后端地址。所有字段与边缘平台约定保持一致，不可改名。</p>
+                    <div class="config-subsection">
+                        <div class="config-subsection-header">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="nmEnabled">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <h5>启用节点管理</h5>
+                        </div>
+                        <div class="config-form-grid" id="nmIdentityForm">
+                            <div class="form-group">
+                                <label>节点 ID（nodeId）</label>
+                                <input type="text" id="nmNodeId" placeholder="node-ad03966e">
+                            </div>
+                            <div class="form-group">
+                                <label>Agent 令牌（agentToken）</label>
+                                <input type="password" id="nmAgentToken" placeholder="部署令牌">
+                            </div>
+                            <div class="form-group">
+                                <label>控制面地址</label>
+                                <input type="text" id="nmControlPlaneUrl" placeholder="http://127.0.0.1:5000/admin-api/node/agent">
+                            </div>
+                            <div class="form-group">
+                                <label>心跳间隔（秒）</label>
+                                <input type="number" id="nmHeartbeatInterval" placeholder="10" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label>Agent 版本号</label>
+                                <input type="text" id="nmAgentVersion" placeholder="1.0.0">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Agent HTTP 服务监听 -->
+                <div class="config-section">
+                    <h4 class="config-section-title">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M2.5 19h19v2h-19v-2zm7.18-5.73l4.35 1.16 5.31 1.42c.8.21 1.62-.26 1.84-1.06.21-.8-.26-1.62-1.06-1.84l-5.31-1.42-2.76-9.49-1.97-.53-.86 5.69-2.76 9.64-1.97-.53-.53 1.97 5.69 1.51c.8.21 1.62-.26 1.84-1.06l1.42-5.31z"/></svg>
+                        Agent HTTP 服务（接收部署/停止指令）
+                    </h4>
+                    <p class="config-section-desc">控制面通过此端口下发工作负载/媒体栈部署与停止指令，端口需与边缘平台约定一致，修改后需重启服务生效。</p>
+                    <div class="config-form-grid">
+                        <div class="form-group">
+                            <label>监听地址</label>
+                            <input type="text" id="nmAgentListenHost" placeholder="0.0.0.0">
+                        </div>
+                        <div class="form-group">
+                            <label>监听端口</label>
+                            <input type="number" id="nmAgentListenPort" placeholder="9100" min="1" max="65535">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 远程部署路径配置 -->
+                <div class="config-section">
+                    <h4 class="config-section-title">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+                        远程部署根目录
+                    </h4>
+                    <p class="config-section-desc">控制面下发工作负载/媒体栈部署指令时使用的本地根目录，仅在远程部署场景生效，本地 AI 平台运行无需修改。</p>
+                    <div class="config-form-grid">
+                        <div class="form-group">
+                            <label>AI 代码根目录</label>
+                            <input type="text" id="nmAiRoot" placeholder="/opt/AI">
+                        </div>
+                        <div class="form-group">
+                            <label>VIDEO 代码根目录</label>
+                            <input type="text" id="nmVideoRoot" placeholder="/opt/VIDEO">
+                        </div>
+                        <div class="form-group">
+                            <label>媒体集群脚本目录</label>
+                            <input type="text" id="nmMediaClusterRoot" placeholder="/opt/media-cluster">
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- 数据库管理标签页 -->

@@ -1184,6 +1184,13 @@ if __name__ == '__main__':
 
         pm.running = False
 
+        # 停止节点管理服务（心跳线程 + HTTP 服务）
+        try:
+            from src.node_agent import get_node_agent_service
+            get_node_agent_service().stop()
+        except Exception as e:
+            logger.error(f"[Cleanup] 停止节点管理服务失败: {e}")
+
         # 停止所有任务进程
         try:
             pm.stop_all_tasks()
@@ -1263,6 +1270,15 @@ if __name__ == '__main__':
     from src.events.event_cleanup_service import start_event_cleanup_scheduler
     start_event_cleanup_scheduler()
 
+    # 启动节点管理客户端（向边缘平台注册节点、上报心跳与指标，接收部署/停止指令）
+    # enabled=false 时不启动（仍可在前端系统管理页面启用后重启服务生效）
+    from src.node_agent import get_node_agent_service
+    node_agent = get_node_agent_service()
+    if node_agent.start():
+        logger.info("[Main] 节点管理服务已启动（注册 + 心跳 + HTTP 服务）")
+    else:
+        logger.info("[Main] 节点管理服务未启动（未启用或配置不完整）")
+
     # 读取端口配置（统一通过集中访问器，单一真相源）
     from src.system.system_config_loader import get_web_server_port
     port = get_web_server_port()
@@ -1275,6 +1291,17 @@ if __name__ == '__main__':
     logger.info(f"  - 可视化监控: http://localhost:{port}/monitor")
     logger.info(f"  - 算法库: http://localhost:{port}/algorithms")
     logger.info(f"  - 系统管理: http://localhost:{port}/system")
+
+    # 节点管理状态与监听地址（若启用）
+    try:
+        from src.system.system_config_loader import get_node_management_config
+        _nm_cfg = get_node_management_config()
+        if _nm_cfg.get('enabled'):
+            logger.info(f"[Main] 节点管理已启用: 控制面={_nm_cfg.get('control_plane_url')}, "
+                        f"HTTP 监听={_nm_cfg.get('agent_listen_host')}:{_nm_cfg.get('agent_listen_port')}, "
+                        f"心跳间隔={_nm_cfg.get('heartbeat_interval')}s")
+    except Exception:
+        pass
     logger.info("="*60)
 
     # 运行Flask应用（前台）

@@ -72,3 +72,28 @@ events_cleanup:
   enabled: true
   retention_days: 7
   cleanup_interval_hours: 24
+# 节点管理：启动 AI 平台时同步启动节点管理客户端，向边缘平台注册节点、
+# 上报心跳与系统指标，并接收控制面下发的部署/停止指令。
+# 上报字段名（nodeId/agentToken/cpuPercent/...）与边缘平台约定保持一致。
+node_management:
+  # 总开关：false 时不启动节点管理服务
+  enabled: false
+  # 节点 ID（在前端节点详情中获取，字符串类型如 node-ad03966e）
+  node_id: ''
+  # Agent 令牌（在前端节点详情的 Agent 部署 Tab 中获取）
+  agent_token: ''
+  # 控制面地址（边缘平台后端地址）
+  control_plane_url: http://127.0.0.1:5000/admin-api/node/agent
+  # 心跳间隔（秒）
+  heartbeat_interval: 10
+  # Agent HTTP 服务监听（接收部署/停止指令，需与边缘平台约定一致）
+  agent_listen_host: 0.0.0.0
+  agent_listen_port: 9100
+  # Agent 版本号（注册时上报）
+  agent_version: 1.0.0
+  # AI 代码根目录（远程部署模型服务时使用）
+  ai_root: /opt/AI
+  # VIDEO 代码根目录（远程部署算法任务时使用）
+  video_root: /opt/VIDEO
+  # 媒体集群脚本目录（远程部署 SRS/ZLM 时使用）
+  media_cluster_root: /opt/media-cluster

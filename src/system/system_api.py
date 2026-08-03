@@ -614,14 +614,17 @@ def _save_system_config(config):
 
 @system_bp.route('/config', methods=['GET'])
 def get_system_config():
-    """获取存储/MQTT/实时通信配置"""
+    """获取存储/MQTT/实时通信/节点管理配置"""
     try:
         config = _load_system_config()
+        # 节点管理配置统一通过 loader 归一化字段类型，避免前端处理字符串/整数混用
+        from src.system.system_config_loader import get_node_management_config
         return jsonify({
             'storage': config.get('storage', {}),
             'mqtt': config.get('mqtt', {}),
             'web_server': config.get('web_server', {}),
             'database': config.get('database', {}),
+            'node_management': get_node_management_config(),
             'video_file_upload': config.get('video_file_upload', {
                 'max_file_size_mb': 100,
                 'allowed_formats': ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv'],
@@ -707,12 +710,96 @@ def update_system_config():
                 if 'path' in raw_ws_cfg and raw_ws_cfg['path']:
                     ws_raw['path'] = str(raw_ws_cfg['path'])
 
+        # 更新节点管理配置（向边缘平台注册/上报心跳的客户端配置）
+        # 字段名与边缘平台约定保持一致，端口/心跳间隔需校验类型
+        if 'node_management' in data:
+            nm = data['node_management'] or {}
+            nm_cfg = config.setdefault('node_management', {})
+
+            if 'enabled' in nm:
+                nm_cfg['enabled'] = bool(nm['enabled'])
+            if 'node_id' in nm:
+                nm_cfg['node_id'] = str(nm['node_id']).strip()
+            if 'agent_token' in nm:
+                nm_cfg['agent_token'] = str(nm['agent_token']).strip()
+            if 'control_plane_url' in nm and nm['control_plane_url']:
+                nm_cfg['control_plane_url'] = str(nm['control_plane_url']).strip()
+            if 'heartbeat_interval' in nm:
+                try:
+                    interval = int(nm['heartbeat_interval'])
+                    if interval < 1:
+                        return jsonify({'error': '心跳间隔必须大于 0 秒'}), 400
+                    nm_cfg['heartbeat_interval'] = interval
+                except (ValueError, TypeError):
+                    return jsonify({'error': '心跳间隔必须为整数'}), 400
+            if 'agent_listen_host' in nm and nm['agent_listen_host']:
+                nm_cfg['agent_listen_host'] = str(nm['agent_listen_host']).strip()
+            if 'agent_listen_port' in nm:
+                try:
+                    agent_port = int(nm['agent_listen_port'])
+                    if not (1 <= agent_port <= 65535):
+                        return jsonify({'error': 'Agent 监听端口必须在 1-65535 范围内'}), 400
+                    nm_cfg['agent_listen_port'] = agent_port
+                except (ValueError, TypeError):
+                    return jsonify({'error': 'Agent 监听端口必须为整数'}), 400
+            if 'agent_version' in nm and nm['agent_version']:
+                nm_cfg['agent_version'] = str(nm['agent_version']).strip()
+            if 'ai_root' in nm and nm['ai_root']:
+                nm_cfg['ai_root'] = str(nm['ai_root']).strip()
+            if 'video_root' in nm and nm['video_root']:
+                nm_cfg['video_root'] = str(nm['video_root']).strip()
+            if 'media_cluster_root' in nm and nm['media_cluster_root']:
+                nm_cfg['media_cluster_root'] = str(nm['media_cluster_root']).strip()
+
         _save_system_config(config)
+        # 强制重新加载配置缓存，使后续请求（包括节点管理服务自身）能立即读到最新配置
+        try:
+            from src.system.system_config_loader import load_system_config
+            load_system_config(force_reload=True)
+        except Exception:
+            pass
         logger.info("系统配置已更新")
 
-        return jsonify({'success': True, 'message': '配置已保存，端口/目录变更需重启服务后生效'})
+        return jsonify({'success': True, 'message': '配置已保存，端口/目录/节点管理变更需重启服务后生效'})
     except Exception as e:
         logger.error(f"更新系统配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ========================================
+# 节点管理 API（运行状态查询）
+# ========================================
+
+@system_bp.route('/node-management/status', methods=['GET'])
+def get_node_management_status():
+    """获取节点管理服务运行状态与最近一次心跳指标"""
+    try:
+        from src.node_agent import get_node_agent_service
+        from src.system.system_config_loader import get_node_management_config
+
+        cfg = get_node_management_config()
+        service = get_node_agent_service()
+
+        status = {
+            'enabled': cfg.get('enabled', False),
+            'running': service._started,
+            'node_id': cfg.get('node_id', ''),
+            'control_plane_url': cfg.get('control_plane_url', ''),
+            'agent_listen_host': cfg.get('agent_listen_host', '0.0.0.0'),
+            'agent_listen_port': cfg.get('agent_listen_port', 9100),
+            'heartbeat_interval': cfg.get('heartbeat_interval', 10),
+        }
+
+        # 附加最近一次心跳指标（复用同一套采集逻辑，便于前端展示与边缘平台一致的数据）
+        try:
+            status['metrics'] = service.collect_metrics()
+        except Exception as e:
+            logger.debug(f"采集节点管理指标失败: {e}")
+            status['metrics'] = None
+
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"获取节点管理状态失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 

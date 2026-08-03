@@ -1140,6 +1140,10 @@ switchTab = function(tabId) {
     if (tabId === 'config') {
         loadSystemConfig();
     }
+    // 切换到节点管理页时加载配置
+    if (tabId === 'node') {
+        loadNodeManagementConfig();
+    }
     // 切换到数据库管理页时加载数据库信息
     if (tabId === 'database') {
         loadDatabaseInfo();
@@ -1240,6 +1244,82 @@ async function saveSystemConfig() {
     } catch (error) {
         showNotification('保存配置失败', 'error');
         console.error('保存系统配置失败:', error);
+    }
+}
+
+// ========================================
+// 节点管理配置（向边缘平台注册/上报心跳的客户端配置）
+// ========================================
+
+/**
+ * 加载节点管理配置到表单
+ * 复用 /api/system/config 接口（返回完整 node_management 段）
+ */
+async function loadNodeManagementConfig() {
+    try {
+        const response = await fetch('/api/system/config');
+        const data = await response.json();
+
+        if (!response.ok) {
+            showNotification('加载节点管理配置失败', 'error');
+            return;
+        }
+
+        const nm = data.node_management || {};
+        document.getElementById('nmEnabled').checked = nm.enabled === true;
+        document.getElementById('nmNodeId').value = nm.node_id || '';
+        document.getElementById('nmAgentToken').value = nm.agent_token || '';
+        document.getElementById('nmControlPlaneUrl').value = nm.control_plane_url || 'http://127.0.0.1:5000/admin-api/node/agent';
+        document.getElementById('nmHeartbeatInterval').value = nm.heartbeat_interval || 10;
+        document.getElementById('nmAgentVersion').value = nm.agent_version || '1.0.0';
+        document.getElementById('nmAgentListenHost').value = nm.agent_listen_host || '0.0.0.0';
+        document.getElementById('nmAgentListenPort').value = nm.agent_listen_port || 9100;
+        document.getElementById('nmAiRoot').value = nm.ai_root || '/opt/AI';
+        document.getElementById('nmVideoRoot').value = nm.video_root || '/opt/VIDEO';
+        document.getElementById('nmMediaClusterRoot').value = nm.media_cluster_root || '/opt/media-cluster';
+    } catch (error) {
+        showNotification('加载节点管理配置失败', 'error');
+        console.error('加载节点管理配置失败:', error);
+    }
+}
+
+/**
+ * 保存节点管理配置
+ */
+async function saveNodeManagementConfig() {
+    const configData = {
+        node_management: {
+            enabled: document.getElementById('nmEnabled').checked,
+            node_id: document.getElementById('nmNodeId').value.trim(),
+            agent_token: document.getElementById('nmAgentToken').value.trim(),
+            control_plane_url: document.getElementById('nmControlPlaneUrl').value.trim(),
+            heartbeat_interval: parseInt(document.getElementById('nmHeartbeatInterval').value) || 10,
+            agent_version: document.getElementById('nmAgentVersion').value.trim(),
+            agent_listen_host: document.getElementById('nmAgentListenHost').value.trim(),
+            agent_listen_port: parseInt(document.getElementById('nmAgentListenPort').value) || 9100,
+            ai_root: document.getElementById('nmAiRoot').value.trim(),
+            video_root: document.getElementById('nmVideoRoot').value.trim(),
+            media_cluster_root: document.getElementById('nmMediaClusterRoot').value.trim()
+        }
+    };
+
+    try {
+        const response = await fetch('/api/system/config', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(configData)
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            showNotification(result.message || '节点管理配置保存成功', 'success');
+        } else {
+            showNotification(result.error || '保存失败', 'error');
+        }
+    } catch (error) {
+        showNotification('保存节点管理配置失败', 'error');
+        console.error('保存节点管理配置失败:', error);
     }
 }
 
@@ -1530,6 +1610,7 @@ return {
     loadMonitorData: loadMonitorData,
     saveWebServerConfig: saveWebServerConfig,
     saveSystemConfig: saveSystemConfig,
+    saveNodeManagementConfig: saveNodeManagementConfig,
     loadDatabaseInfo: loadDatabaseInfo,
     backupDatabase: backupDatabase,
     restoreDatabase: restoreDatabase,

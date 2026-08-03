@@ -170,3 +170,29 @@ def get_events_cleanup_config() -> Dict[str, Any]:
         'retention_days': cleanup_cfg.get('retention_days', 7),
         'cleanup_interval_hours': cleanup_cfg.get('cleanup_interval_hours', 24),
     }
+
+
+def get_node_management_config() -> Dict[str, Any]:
+    """获取节点管理配置（向边缘平台注册/上报心跳的客户端配置）
+
+    配置来源为 system_config.yaml 的 node_management 段（单一真相源）。
+    归一化关键字段类型，缺失时回退默认值。
+
+    Returns:
+        节点管理配置字典，包含 enabled/node_id/agent_token/control_plane_url 等
+    """
+    config = load_system_config()
+    raw = config.get('node_management', {}) or {}
+    return {
+        'enabled': bool(raw.get('enabled', False)),
+        'node_id': str(raw.get('node_id', '') or ''),
+        'agent_token': str(raw.get('agent_token', '') or ''),
+        'control_plane_url': str(raw.get('control_plane_url', 'http://localhost:48080/admin-api/node/agent') or ''),
+        'heartbeat_interval': int(raw.get('heartbeat_interval', 10) or 10),
+        'agent_listen_host': str(raw.get('agent_listen_host', '0.0.0.0') or '0.0.0.0'),
+        'agent_listen_port': int(raw.get('agent_listen_port', 9100) or 9100),
+        'agent_version': str(raw.get('agent_version', '1.0.0') or '1.0.0'),
+        'ai_root': str(raw.get('ai_root', '/opt/AI') or '/opt/AI'),
+        'video_root': str(raw.get('video_root', '/opt/VIDEO') or '/opt/VIDEO'),
+        'media_cluster_root': str(raw.get('media_cluster_root', '/opt/media-cluster') or '/opt/media-cluster'),
+    }
