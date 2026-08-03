@@ -335,7 +335,12 @@ class RGAProcessor:
         if x2 <= x1 or y2 <= y1:
             raise RuntimeError(f"region 越界或为空：{region}，帧尺寸({W}x{H})")
 
-        # RGA 对 YUV420p 源格式的 srect 宽高要求为偶数（U/V 按 2x2 下采样）
+        # RGA 对 YUV420p 源格式的 srect 起始坐标与宽高均要求为偶数（U/V 按 2x2 下采样）。
+        # 起始坐标（x1/y1）为奇数会导致 U/V 平面相对 Y 平面偏移半行，画面顶部出现紫色雪花。
+        if x1 % 2 != 0:
+            x1 += 1
+        if y1 % 2 != 0:
+            y1 += 1
         if (x2 - x1) % 2 != 0:
             x2 -= 1
         if (y2 - y1) % 2 != 0:
