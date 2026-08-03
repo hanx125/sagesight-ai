@@ -361,7 +361,13 @@ def create_tensor_input_hw(yuv_frame, region, model_size=(640, 640), use_rga=Fal
     """
     # RGA 路径（RK3588）：单次硬件完成裁剪+缩放+YUV→RGB
     # 设置环境变量 SAGESIGHT_DISABLE_RGA=1 可临时禁用 RGA 回退 cv2，用于对比验证
-    if use_rga and not os.environ.get('SAGESIGHT_DISABLE_RGA'):
+    # 连续失败 5 次自动禁用 RGA（避免内存碎片/驱动异常导致持续报错拖慢管道）
+    if not hasattr(create_tensor_input_hw, '_rga_fail_count'):
+        create_tensor_input_hw._rga_fail_count = 0
+        create_tensor_input_hw._rga_disabled = False
+
+    if (use_rga and not os.environ.get('SAGESIGHT_DISABLE_RGA')
+            and not create_tensor_input_hw._rga_disabled):
         try:
             from src.utils.rga_processor import get_rga_processor
 
@@ -370,19 +376,23 @@ def create_tensor_input_hw(yuv_frame, region, model_size=(640, 640), use_rga=Fal
                 rgb = processor.crop_resize_yuv420p_to_rgb(
                     yuv_frame, region, model_size[1], model_size[0]
                 )
-                # 调试：前 3 次调用打印 RGB 输出统计，确认数据有效
-                if not hasattr(create_tensor_input_hw, '_dbg_cnt'):
-                    create_tensor_input_hw._dbg_cnt = 0
-                if create_tensor_input_hw._dbg_cnt < 3:
-                    create_tensor_input_hw._dbg_cnt += 1
-                    logger.info(
-                        f"[RGA调试] rgb shape={rgb.shape}, "
-                        f"min={rgb.min()}, max={rgb.max()}, mean={rgb.mean():.1f}"
-                    )
+                # 成功：重置失败计数
+                create_tensor_input_hw._rga_fail_count = 0
                 # (model_h, model_w, 3) → (1, model_h, model_w, 3)
                 return np.expand_dims(rgb, axis=0)
         except Exception as e:
-            logger.warning(f"[RGA] 预处理失败，回退 cv2: {e}")
+            create_tensor_input_hw._rga_fail_count += 1
+            if create_tensor_input_hw._rga_fail_count >= 5:
+                create_tensor_input_hw._rga_disabled = True
+                logger.warning(
+                    f"[RGA] 连续失败 {create_tensor_input_hw._rga_fail_count} 次，"
+                    f"自动禁用 RGA，后续使用 cv2 预处理: {e}"
+                )
+            else:
+                logger.warning(
+                    f"[RGA] 预处理失败({create_tensor_input_hw._rga_fail_count}/5)，"
+                    f"回退 cv2: {e}"
+                )
 
     # OpenCV CUDA 路径（Linux + NVIDIA GPU）：裁剪+YUV→RGB 在 CPU，resize 在 GPU
     if use_cuda:

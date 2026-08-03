@@ -767,7 +767,7 @@ class MultiCameraTaskExecutor:
             # ========================================
             # 步骤6：创建 detected_objects_queue 和 stop_event
             # ========================================
-            self.detected_objects_queue = multiprocessing.Queue(maxsize=1000)
+            self.detected_objects_queue = multiprocessing.Queue(maxsize=2000)
             self.stop_event = multiprocessing.Event()
 
             # ========================================

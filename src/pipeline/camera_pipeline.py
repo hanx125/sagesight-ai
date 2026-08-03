@@ -303,7 +303,7 @@ def run_pipeline(
                         shm_name_prefix,
                         detection_results,
                     ),
-                    timeout=0.5,
+                    timeout=0.05,
                 )
             except Exception:
                 proc_logger.warning("事件队列满,丢弃本帧检测数据")
