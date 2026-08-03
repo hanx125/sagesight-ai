@@ -415,6 +415,10 @@ class GIFGenerator:
         
         # 保存到本地（开关启用，或远程上传失败时作为备份）
         if self.local_enabled or not urls:
+            # 磁盘空间保护：写入前确保有足够空间，不足时滚动删除旧 GIF
+            from src.utils.disk_guard import ensure_disk_space
+            ensure_disk_space(self.output_dir, len(gif_bytes))
+
             local_path = os.path.join(self.output_dir, filename)
             with open(local_path, 'wb') as f:
                 f.write(gif_bytes)

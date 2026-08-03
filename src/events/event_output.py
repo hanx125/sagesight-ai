@@ -421,28 +421,32 @@ class EventOutput:
     
     def _save_image_local(self, event_id: str, image_bytes: bytes) -> Optional[str]:
         """
-        保存图片到本地
-        
+        保存图片到本地（磁盘空间不足时滚动删除旧文件）
+
         Args:
             event_id: 事件 ID
             image_bytes: 图片字节数据
-        
+
         Returns:
             本地文件路径，失败返回 None
         """
         if not os.path.exists(self.local_output_dir):
             os.makedirs(self.local_output_dir, exist_ok=True)
-        
+
+        # 磁盘空间保护：写入前确保有足够空间，不足时滚动删除旧图片
+        from src.utils.disk_guard import ensure_disk_space
+        ensure_disk_space(self.local_output_dir, len(image_bytes))
+
         filename = f"{event_id}.jpg"
         filepath = os.path.join(self.local_output_dir, filename)
-        
+
         try:
             with open(filepath, 'wb') as f:
                 f.write(image_bytes)
-            
+
             logger.debug(f"[EventOutput] 图片已保存到本地: {filepath}")
             return filepath
-            
+
         except Exception as e:
             logger.debug(f"[EventOutput] 本地保存失败: {e}")
             return None
