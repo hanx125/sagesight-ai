@@ -8,7 +8,7 @@
 - 零拷贝传递(减少内存拷贝)
 - 跨进程共享(multiprocessing.shared_memory)
 - I420格式支持(Y+U+V分离,优化预处理性能)
-- 跨进程锁保护(Windows命名互斥锁)
+- 跨进程锁保护(Windows命名互斥锁 / Linux fcntl文件锁)
 
 使用场景:
 解码进程 -> SharedMemoryRingBuffer -> 检测进程池
@@ -16,6 +16,8 @@
 """
 
 import logging
+import os
+import time as _time
 import numpy as np
 import struct
 from typing import Tuple, Optional, Dict, Any
@@ -24,6 +26,80 @@ import multiprocessing as mp
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+class _ShmLock:
+    """跨进程共享内存锁
+
+    Windows 用 win32event 命名互斥锁，Linux 用 fcntl.flock 文件锁。
+    超时后不阻塞，直接放行（与原逻辑一致，仍有竞争风险但避免死锁）。
+    """
+
+    def __init__(self, name: str, timeout_ms: int = 1000):
+        self.name = name
+        self.timeout_ms = timeout_ms
+        self._mutex = None
+        self._lock_file = None
+        self._acquired = False
+
+    def __enter__(self):
+        if os.name == 'nt':
+            try:
+                import win32event
+                self._mutex = win32event.CreateMutex(
+                    None, False, f"Global\\{self.name}_mutex")
+                wait_result = win32event.WaitForSingleObject(
+                    self._mutex, self.timeout_ms)
+                if wait_result == win32event.WAIT_OBJECT_0:
+                    self._acquired = True
+            except ImportError:
+                pass
+        else:
+            try:
+                import fcntl
+                safe_name = self.name.replace('/', '_').replace('\\', '_')
+                lock_path = f"/tmp/sagesight_shm_lock_{safe_name}"
+                self._lock_file = open(lock_path, 'w')
+                deadline = _time.monotonic() + self.timeout_ms / 1000.0
+                while True:
+                    try:
+                        fcntl.flock(
+                            self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        self._acquired = True
+                        break
+                    except (BlockingIOError, OSError):
+                        if _time.monotonic() >= deadline:
+                            break
+                        _time.sleep(0.001)
+            except Exception as e:
+                logger.debug(f"[_ShmLock] fcntl 锁不可用: {e}")
+        return self
+
+    def __exit__(self, *args):
+        if self._acquired:
+            if os.name == 'nt' and self._mutex:
+                try:
+                    import win32event
+                    win32event.ReleaseMutex(self._mutex)
+                except Exception:
+                    pass
+            elif self._lock_file:
+                try:
+                    import fcntl
+                    fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+                except Exception:
+                    pass
+        if self._mutex:
+            try:
+                import win32api
+                win32api.CloseHandle(self._mutex)
+            except Exception:
+                pass
+        if self._lock_file:
+            try:
+                self._lock_file.close()
+            except Exception:
+                pass
 
 
 # 共享内存块头信息(参考Frigate)
@@ -146,62 +222,11 @@ class SharedMemoryBlock:
         full_data = header + y.tobytes() + u.tobytes() + v.tobytes()
         
         # 尝试使用跨进程锁保护(如果pywin32可用)
-        use_mutex = False
-        mutex = None
-        try:
-            import win32event
-            import win32con
-            import pywintypes
-            
-            # 创建或打开命名互斥锁(与读取端使用相同的名称)
-            mutex_name = f"Global\\{self.name}_mutex"
-            try:
-                # 使用 win32event.CreateMutex 创建命名互斥锁
-                mutex = win32event.CreateMutex(None, False, mutex_name)
-                use_mutex = True
-            except Exception as e:
-                logger.debug(f"[SharedMemoryBlock-{self.block_id}] 无法创建命名互斥锁: {e}")
-                use_mutex = False
-        except ImportError as e:
-            logger.debug(f"[SharedMemoryBlock-{self.block_id}] pywin32未安装,跳过跨进程锁")
-            use_mutex = False
+        # 跨进程锁保护写入（Windows 命名互斥锁 / Linux fcntl 文件锁）
+        with _ShmLock(self.name, timeout_ms=1000):
+            arr = np.ndarray((self.shm.size,), dtype=np.uint8, buffer=self.shm.buf)
+            arr[:len(full_data)] = np.frombuffer(full_data, dtype=np.uint8)
 
-        try:
-            # 如果有互斥锁,在锁保护下写入
-            if use_mutex and mutex:
-                try:
-                    # 等待互斥锁(最多等待1000ms)
-                    wait_result = win32event.WaitForSingleObject(mutex, 1000)
-                    
-                    if wait_result == win32event.WAIT_OBJECT_0:
-                        # 获取锁成功,在锁保护下写入
-                        # 创建指向整个共享内存的numpy数组
-                        arr = np.ndarray((self.shm.size,), dtype=np.uint8, buffer=self.shm.buf)
-                        # 只赋值需要的部分
-                        arr[:len(full_data)] = np.frombuffer(full_data, dtype=np.uint8)
-                    else:
-                        # 获取锁超时,直接写入(仍有竞争风险)
-                        logger.warning(f"[SharedMemoryBlock-{self.block_id}] ⚠️  获取互斥锁超时,直接写入")
-                        arr = np.ndarray((self.shm.size,), dtype=np.uint8, buffer=self.shm.buf)
-                        arr[:len(full_data)] = np.frombuffer(full_data, dtype=np.uint8)
-                finally:
-                    # 释放互斥锁
-                    try:
-                        win32event.ReleaseMutex(mutex)
-                    except:
-                        pass
-            else:
-                # 没有互斥锁,直接写入
-                arr = np.ndarray((self.shm.size,), dtype=np.uint8, buffer=self.shm.buf)
-                arr[:len(full_data)] = np.frombuffer(full_data, dtype=np.uint8)
-        finally:
-            if mutex:
-                try:
-                    import win32api
-                    win32api.CloseHandle(mutex)
-                except:
-                    pass
-        
         return True
     
     def close(self):
@@ -333,47 +358,12 @@ class SharedMemoryRingBuffer:
         v_size = u_size
         total_size = HEADER_SIZE + y_size + u_size + v_size
 
-        # 尝试使用跨进程锁保护读取
-        use_mutex = False
-        mutex = None
-        try:
-            import win32event
-            import win32con
-            import pywintypes
-
-            # 创建或打开命名互斥锁
-            shm_name = block.name if hasattr(block, 'name') else f"sagesight_{self.camera_id}_block_{block_id}"
-            mutex_name = f"Global\\{shm_name}_mutex"
-            try:
-                mutex = win32event.CreateMutex(None, False, mutex_name)
-                use_mutex = True
-            except Exception as e:
-                logger.debug(f"[read_frame_i420] 无法创建命名互斥锁: {e}")
-                use_mutex = False
-        except ImportError as e:
-            logger.debug(f"[read_frame_i420] pywin32未安装,跳过跨进程锁")
-            use_mutex = False
+        # 跨进程锁保护读取（Windows 命名互斥锁 / Linux fcntl 文件锁）
+        shm_name = block.name if hasattr(block, 'name') else f"sagesight_{self.camera_id}_block_{block_id}"
 
         try:
-            # 在锁保护下读取
-            if use_mutex and mutex:
-                try:
-                    wait_result = win32event.WaitForSingleObject(mutex, 100)
-
-                    if wait_result == win32event.WAIT_OBJECT_0:
-                        # ✅ 原子读取: 一次性读取整个帧
-                        full_data = bytes(shm.buf[:total_size])
-                    else:
-                        logger.warning(f"[read_frame_i420] ⚠️  获取互斥锁超时,直接读取")
-                        full_data = bytes(shm.buf[:total_size])
-
-                finally:
-                    try:
-                        win32event.ReleaseMutex(mutex)
-                    except:
-                        pass
-            else:
-                # 原子读取
+            with _ShmLock(shm_name, timeout_ms=100):
+                # ✅ 原子读取: 一次性读取整个帧
                 full_data = bytes(shm.buf[:total_size])
 
             # 解析头部
@@ -422,13 +412,6 @@ class SharedMemoryRingBuffer:
         except Exception as e:
             logger.error(f"[read_frame_i420] 读取失败: {e}", exc_info=True)
             return None, None, None, None
-        finally:
-            if mutex:
-                try:
-                    import win32api
-                    win32api.CloseHandle(mutex)
-                except:
-                    pass
 
     def get_block_name(self, block_id: int) -> str:
         """获取块名称"""
@@ -482,56 +465,12 @@ def read_frame_from_shared_memory(
     try:
         shm = shared_memory.SharedMemory(name=block_name, create=False)
         
-        # 读取帧数据(NV12 格式) - 使用跨进程锁保护
-        # 尝试使用pywin32的命名互斥锁(如果可用)
-        use_mutex = False
-        mutex = None
+        # 读取帧数据 - 跨进程锁保护（Windows 命名互斥锁 / Linux fcntl 文件锁）
         try:
-            import win32event
-            import win32con
-            import pywintypes
-            
-            # 创建或打开命名互斥锁
-            mutex_name = f"Global\\{block_name}_mutex"
-            try:
-                # 使用 win32event.CreateMutex 创建命名互斥锁
-                mutex = win32event.CreateMutex(None, False, mutex_name)
-                use_mutex = True
-            except Exception as e:
-                logger.debug(f"[read_frame_from_shared_memory] 无法创建命名互斥锁: {e}")
-                use_mutex = False
-        except ImportError as e:
-            logger.debug(f"[read_frame_from_shared_memory] pywin32未安装,跳过跨进程锁")
-            use_mutex = False
-        
-        try:
-            # 如果成功创建互斥锁,则在锁保护下读取
-            if use_mutex and mutex:
-                try:
-                    # 等待互斥锁(最多等待100ms)
-                    wait_result = win32event.WaitForSingleObject(mutex, 100)
-                    
-                    if wait_result == win32event.WAIT_OBJECT_0:
-                        # 获取锁成功,在锁保护下读取数据
-                        # 原子读取(参考Frigate): 一次性读取整个帧
-                        full_data = bytes(shm.buf[HEADER_SIZE:total_size])
-                    else:
-                        # 获取锁超时,直接读取(仍有竞争风险)
-                        logger.warning(f"[read_frame_from_shared_memory] ⚠️  获取互斥锁超时,直接读取")
-                        # 原子读取(参考Frigate): 一次性读取整个帧
-                        full_data = bytes(shm.buf[HEADER_SIZE:total_size])
-                    
-                finally:
-                    # 释放互斥锁
-                    try:
-                        win32event.ReleaseMutex(mutex)
-                    except:
-                        pass
-            else:
-                # 没有互斥锁,直接读取(仍有竞争风险)
-                # 原子读取(参考Frigate): 一次性读取整个帧
+            with _ShmLock(block_name, timeout_ms=100):
+                # ✅ 原子读取: 一次性读取整个帧
                 full_data = bytes(shm.buf[HEADER_SIZE:total_size])
-            
+
             # ✅ 解析帧数据(I420 -> RGB)
             # I420格式：Y平面 + U平面 + V平面（分离存储）
             # 从读取的数据中解析Y、U、V平面
