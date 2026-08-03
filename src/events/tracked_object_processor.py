@@ -194,6 +194,14 @@ class TrackedObjectProcessor(mp.Process):
         # 主循环
         processed_count = 0
         last_stats_time = time.time()
+        # 诊断计数器：统计跟踪对象与事件生命周期
+        # tracked_sum：累计接收到的 tracked_objects 数量（跨所有帧所有相机）
+        # start_triggered / end_triggered：start/end 回调触发次数
+        # event_durations：每次事件的持续秒数（用于判断事件是否被过早结束）
+        tracked_sum = 0
+        self._start_triggered_count = 0
+        self._end_triggered_count = 0
+        self._event_durations = []
 
         while not self.stop_event.is_set():
             try:
@@ -204,15 +212,26 @@ class TrackedObjectProcessor(mp.Process):
                 continue
 
             try:
+                # 记录本帧跟踪对象数量（_process_detection_data 内会更新 self._last_tracked_count）
+                self._last_tracked_count = 0
                 self._process_detection_data(data)
+                tracked_sum += self._last_tracked_count
                 processed_count += 1
 
                 # 定期统计日志（每 60 秒）
                 now = time.time()
                 if now - last_stats_time > 60:
+                    avg_dur = (
+                        sum(self._event_durations) / len(self._event_durations)
+                        if self._event_durations else 0
+                    )
                     proc_logger.info(
                         f"已处理 {processed_count} 帧检测数据, "
-                        f"活跃事件: {sum(len(v) for v in self.active_events.values())}"
+                        f"活跃事件: {sum(len(v) for v in self.active_events.values())}, "
+                        f"累计跟踪对象: {tracked_sum}, "
+                        f"start触发: {self._start_triggered_count}, "
+                        f"end触发: {self._end_triggered_count}, "
+                        f"平均事件持续: {avg_dur:.2f}s"
                     )
                     last_stats_time = now
 
@@ -362,6 +381,9 @@ class TrackedObjectProcessor(mp.Process):
             logger.warning(f"未知的 camera_id: {camera_id}")
             return
 
+        # 诊断：记录本帧跟踪对象数量（供主循环统计累计值）
+        self._last_tracked_count = len(tracked_objects_dict or {})
+
         # 保存当前帧的共享内存信息（用于事件回调时回读帧）
         self._current_shm_info = {
             "shm_block_id": shm_block_id,
@@ -476,6 +498,9 @@ class TrackedObjectProcessor(mp.Process):
         目标进入必需区域后再创建事件。目标从未进入必需区域则不产生任何事件。
         无必需区域时立即创建（行为不变）。
         """
+        # 诊断：统计 start 回调触发次数（无论后续是否被过滤）
+        self._start_triggered_count = getattr(self, "_start_triggered_count", 0) + 1
+
         event_output = self.event_outputs.get(camera_id)
         if event_output is None:
             return
@@ -612,6 +637,9 @@ class TrackedObjectProcessor(mp.Process):
         单一事件模型：end 阶段保存 best_thumbnail（置信度最高）到存储，
         并推送 event_update（status=ended）让前端更新卡片状态。
         """
+        # 诊断：统计 end 回调触发次数
+        self._end_triggered_count = getattr(self, "_end_triggered_count", 0) + 1
+
         event_output = self.event_outputs.get(camera_id)
         if event_output is None:
             return
@@ -622,6 +650,14 @@ class TrackedObjectProcessor(mp.Process):
         active_event = self.active_events.get(camera_id, {}).get(track_id)
         if active_event is None:
             return
+
+        # 诊断：记录事件持续时间（视频相对时间差）
+        start_frame_time = active_event.get("start_time", frame_time)
+        self._event_durations = getattr(self, "_event_durations", [])
+        self._event_durations.append(frame_time - start_frame_time)
+        # 只保留最近 100 个，避免内存增长
+        if len(self._event_durations) > 100:
+            self._event_durations = self._event_durations[-100:]
 
         # 必需区域过滤：pending 事件（目标从未进入必需区域）直接丢弃，不产生任何事件
         # 不 emit、不保存图片/GIF、不推送前端、不写数据库

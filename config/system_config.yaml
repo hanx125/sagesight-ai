@@ -23,10 +23,6 @@ web_server:
   cors_enabled: true
   static_dir: static
   template_dir: templates
-  # 实时通信（双通道）：
-  # 1. Socket.IO（复用 web_server 端口，namespace: /ws）— 供本项目前端使用
-  # 2. 原生 WebSocket（/ws/raw 路径）— 供第三方系统标准 WebSocket 接入
-  # 推送事件：ai_stream_frame（AI视频帧）、new_event（新事件）、event_update（事件更新）、gif_ready（GIF就绪）
   socketio:
     enabled: true
     namespace: /ws
@@ -45,7 +41,7 @@ storage:
     presigned_expires: 3600
   ftp:
     enabled: true
-    host: 192.168.5.2
+    host: 192.168.5.3
     port: 21
     username: admin
     password: admin123
@@ -68,27 +64,7 @@ video_file_upload:
   - flv
   upload_dir: uploads/video_files
   max_batch_count: 20
-
-# ========================================
-# 事件清理配置（自动清理过期事件及其存储文件）
-# ========================================
-# 清理范围：数据库事件记录 + 对应的存储文件
-#   - 本地：output/images/*.jpg、output/gifs/*.gif
-#   - MinIO：图片/GIF 对象
-#   - FTP：远程图片/GIF 文件
-# 触发方式：
-#   1. 自动：后台线程按 cleanup_interval_hours 定期执行（受 enabled 开关管控）
-#   2. 手动：POST /api/events/clear?days=N（API 调用，不受 enabled 影响）
 events_cleanup:
-  # 是否启用自动清理（独立开关）
-  # - true: 启动后台线程按间隔自动清理
-  # - false: 不启动后台线程（仍可通过 API 手动清理）
   enabled: true
-
-  # 事件保留天数
-  # 说明：超过此天数的事件（含存储文件）将被清理
   retention_days: 7
-
-  # 自动清理间隔（小时）
-  # 说明：后台线程每间隔此小时数执行一次清理
   cleanup_interval_hours: 24

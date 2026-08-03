@@ -78,7 +78,8 @@ class EventOutput:
 
         # 异步 I/O 线程池（远程上传、MQTT发送、数据库保存、WebSocket推送）
         # 避免 I/O 阻塞事件处理主循环导致队列积压
-        self._io_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='event_io')
+        # emit() 的上传和 update_event() 的上传+DB 都提交到此池，需要足够 worker 让两者并行
+        self._io_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix='event_io')
 
         # 创建本地保存目录（强制创建，无论配置如何）
         os.makedirs(self.local_output_dir, exist_ok=True)
@@ -807,46 +808,79 @@ class EventOutput:
         供 TrackedObjectProcessor 在跟踪过程中更新事件状态和数据。
         如果提供图片，会保存图片并更新图片 URL。
 
+        远程上传（MinIO/FTP）、数据库更新、WebSocket 推送均异步执行，
+        不阻塞事件消费主循环，避免存储服务不可达时导致事件队列积压。
+
         Args:
             event_id: 事件 UUID
             status: 事件状态（tracking_start / tracking_update / tracking_end / gif_ready），写入独立 status 列
             data: 更新数据字典（可能包含 start_time, end_time, bbox 等）
             image: 可选的图片数据（OpenCV BGR 格式）
             push_websocket: 是否推送 event_update 到前端（end 时为 True）
+            event_type: 事件类型（非 None 时更新 type 列）
 
         Returns:
-            是否更新成功
+            bool: True 表示任务已提交异步执行（不代表远程 I/O 已完成）
+        """
+        try:
+            image_urls = {}
+            compressed_image = None
+
+            # 图片压缩 + 本地保存（CPU/磁盘，毫秒级，同步执行）
+            # 远程上传交给异步线程，避免 MinIO/FTP 不可达时阻塞主循环
+            if image is not None:
+                try:
+                    compressed_image = self._compress_image(image)
+
+                    # 本地保存（同步，毫秒级）
+                    if getattr(self, 'local_enabled', False):
+                        local_path = self._save_image_local(event_id, compressed_image)
+                        if local_path:
+                            image_urls['local'] = f"http://{self.server_host}:{self.server_port}/{local_path}"
+                except Exception as e:
+                    logger.debug(f"[EventOutput] 更新事件图片处理失败: {e}")
+                    compressed_image = None
+
+            # 异步执行远程上传 + 数据库更新 + WebSocket 推送
+            self._io_executor.submit(
+                self._async_update_task,
+                event_id, status, data, compressed_image, image_urls,
+                push_websocket, event_type,
+            )
+
+            return True
+
+        except Exception as e:
+            logger.debug(f"[EventOutput] 更新事件异常: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _async_update_task(self, event_id: str, status: str, data: Dict,
+                           compressed_image, image_urls: Dict,
+                           push_websocket: bool, event_type: str):
+        """异步执行更新事件的 I/O 密集型操作（在线程池中运行，不阻塞主循环）
+
+        - 远程上传图片到 MinIO/FTP
+        - 更新数据库记录
+        - 推送 WebSocket 事件更新到前端
         """
         try:
             from src.tasks.task_manager import TaskManager
             task_manager = TaskManager()
 
-            image_urls = {}
             gif_urls = {}
 
-            # 处理图片（如果提供）
-            if image is not None:
-                try:
-                    compressed_image = self._compress_image(image)
+            # 1. 远程上传图片（MinIO/FTP）
+            if compressed_image is not None and self.image_outputters:
+                for outputter in self.image_outputters:
+                    try:
+                        url = outputter.upload(event_id, compressed_image, content_type='image/jpeg')
+                        image_urls[outputter.__class__.__name__] = url
+                    except Exception as e:
+                        logger.debug(f"[EventOutput] 更新事件图片上传失败 ({outputter.__class__.__name__}): {e}")
 
-                    # 本地保存
-                    if getattr(self, 'local_enabled', False):
-                        local_path = self._save_image_local(event_id, compressed_image)
-                        if local_path:
-                            image_urls['local'] = f"http://{self.server_host}:{self.server_port}/{local_path}"
-
-                    # 远程上传
-                    if self.image_outputters:
-                        for outputter in self.image_outputters:
-                            try:
-                                url = outputter.upload(event_id, compressed_image, content_type='image/jpeg')
-                                image_urls[outputter.__class__.__name__] = url
-                            except Exception as e:
-                                logger.debug(f"[EventOutput] 更新事件图片上传失败 ({outputter.__class__.__name__}): {e}")
-                except Exception as e:
-                    logger.debug(f"[EventOutput] 更新事件图片处理失败: {e}")
-
-            # 提取 data 中的字段
+            # 2. 提取 data 中的字段
             metadata = data.get('metadata') if data else None
             start_time = self._parse_datetime(data.get('start_time')) if data else None
             end_time = self._parse_datetime(data.get('end_time')) if data else None
@@ -864,7 +898,7 @@ class EventOutput:
             if data and 'gif_urls' in data:
                 gif_urls = data['gif_urls']
 
-            # ✅ status 写入独立 status 列（不再塞入 metadata）
+            # status 写入独立 status 列（不再塞入 metadata）
             # 将 data 中不属于独立列的额外字段放入 metadata
             if data:
                 known_keys = ('metadata', 'start_time', 'end_time', 'bbox',
@@ -879,7 +913,7 @@ class EventOutput:
                     else:
                         metadata = extra_meta
 
-            # 更新数据库（event_type 非 None 时更新 type 列，按完整 metadata 最终确定事件类型）
+            # 3. 更新数据库
             success = task_manager.update_event(
                 event_id=event_id,
                 event_type=event_type,
@@ -902,17 +936,12 @@ class EventOutput:
             else:
                 logger.debug(f"[EventOutput] 事件更新失败（未找到记录）: event_id={event_id[:8]}")
 
-            # ✅ 新增：end 时推送 event_update 到前端
+            # 4. WebSocket 推送（end 时）
             if push_websocket and success:
                 self._push_event_update_to_websocket(event_id, status, data, image_urls)
 
-            return success
-
         except Exception as e:
-            logger.debug(f"[EventOutput] 更新事件异常: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+            logger.error(f"[EventOutput] 异步更新事件任务失败: {e}")
 
     def _push_event_update_to_websocket(self, event_id: str, status: str,
                                         data: Dict, image_urls: Dict):

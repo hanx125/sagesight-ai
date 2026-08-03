@@ -4,10 +4,14 @@ RGA 硬件 2D 加速处理器（ctypes 封装）
 通过 ctypes 调用 Rockchip librga.so，实现 region 裁剪 + 缩放 + YUV→RGB 的硬件加速。
 仅在 RK3588 平台可用；加载失败或调用异常时由上层自动回退到 cv2 路径。
 
-核心 RGA 调用链：
-  1. importbuffer_virtualaddr(va, param)  → 注册外部缓冲，返回 handle
-  2. wrapbuffer_handle_t(handle, w,h, wstride,hstride, format) → 包装成 rga_buffer_t
-  3. improcess(src, dst, pat, srect, drect, prect, usage) → 单次完成裁剪+缩放+格式转换
+核心 RGA 调用链（缓冲区池化复用，handle 永久持有）：
+  1. 首次按尺寸 importbuffer_virtualaddr(va, param) → 注册外部缓冲，返回 handle（仅一次）
+  2. wrapbuffer_handle_t(handle, w,h, wstride,hstride, format) → 包装成 rga_buffer_t（仅一次）
+  3. 每帧 improcess(src, dst, pat, srect, drect, prect, usage) → 裁剪+缩放+格式转换
+  4. 进程退出时 releasebuffer_handle(handle) → 释放（仅一次）
+
+为何池化：importbuffer/releasebuffer 每次都向内核 dma-buf 注册/注销 sg 表，
+高频调用（每秒数十次）会耗尽内核资源导致 RGA_BLIT fail: Invalid argument。
 
 格式说明：
   - 源：RK_FORMAT_YCbCr_420_P（标准 I420：Y(H×W) + Cb(H/2×W/2) + Cr(H/2×W/2) 连续）
@@ -20,7 +24,8 @@ RGA 硬件 2D 加速处理器（ctypes 封装）
 import ctypes
 import logging
 import os
-from typing import Optional
+import threading
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
@@ -41,12 +46,13 @@ IM_SYNC = 1 << 19  # 同步等待完成
 IM_CONFIG_SCHEDULER_CORE = 1 << 0  # 调度核心选择
 
 # RGA 调度核心位掩码（来自 im2d_type.h IM_SCHEDULER_CORE）
-# RK3588 有 RGA3 core0/core1 与 RGA2 core，未显式指定时驱动可能 no core match
+# RK3588 有 RGA3 core0/core1 与 RGA2 core
 IM_SCHEDULER_RGA3_CORE0 = 1 << 0
 IM_SCHEDULER_RGA3_CORE1 = 1 << 1
 IM_SCHEDULER_RGA2_CORE  = 1 << 2
-# 默认使用全部 RGA3 核（core0 + core1），覆盖大多数 YUV→RGB 场景
-IM_SCHEDULER_RGA3_DEFAULT = IM_SCHEDULER_RGA3_CORE0 | IM_SCHEDULER_RGA3_CORE1
+# I420（YCbCr_420_P 全平面分离格式）仅 RGA2 核支持，RGA3 核不支持该格式。
+# 强制 RGA3 会导致 RGA_BLIT fail: Invalid argument，故 I420→RGB 走 RGA2 核。
+IM_SCHEDULER_FOR_I420 = IM_SCHEDULER_RGA2_CORE
 
 # 状态码（来自 im2d_type.h IM_STATUS）
 IM_STATUS_SUCCESS = 1
@@ -122,6 +128,58 @@ class im_handle_param_t(ctypes.Structure):
 
 
 # ========================================
+# 池化缓冲区：复用 handle，避免高频 import/release 耗尽内核 dma-buf 资源
+# ========================================
+class _PooledBuffer:
+    """固定 VA 的 RGA 缓冲区：importbuffer 仅调用一次，handle 永久持有。
+
+    每次 RGA 调用只更新 srect 和拷入新数据，不再 import/release，
+    从根本上消除"每帧向内核驱动注册/注销外部缓冲"导致的资源耗尽。
+    """
+
+    __slots__ = ("width", "height", "format", "array", "va", "handle", "rga_buf")
+
+    def __init__(self, lib, width: int, height: int, rga_format: int):
+        self.width = width
+        self.height = height
+        self.format = rga_format
+        # 按格式计算一维连续缓冲大小
+        if rga_format == RK_FORMAT_YCbCr_420_P:
+            buf_size = width * height * 3 // 2
+        elif rga_format == RK_FORMAT_RGB_888:
+            buf_size = width * height * 3
+        else:
+            buf_size = width * height * 4
+        # np.zeros 保证内存连续且零初始化，VA 在对象生命周期内稳定不变
+        self.array = np.zeros(buf_size, dtype=np.uint8)
+        self.va = self.array.ctypes.data_as(ctypes.c_void_p)
+        # import 一次，永久持有 handle
+        param = im_handle_param_t(
+            width=ctypes.c_uint32(width),
+            height=ctypes.c_uint32(height),
+            format=ctypes.c_uint32(rga_format),
+        )
+        self.handle = lib.importbuffer_virtualaddr(self.va, ctypes.byref(param))
+        if self.handle == 0:
+            raise RuntimeError(
+                f"importbuffer_virtualaddr 失败 (w={width},h={height},fmt={rga_format})"
+            )
+        # wrap 一次，永久持有 rga_buffer_t
+        self.rga_buf = lib.wrapbuffer_handle_t(
+            self.handle, width, height, width, height, rga_format)
+        self.rga_buf.vir_addr = self.va
+
+    def release(self, lib):
+        """释放 handle（仅在处理器关闭/尺寸变更时调用）"""
+        if self.handle:
+            try:
+                lib.releasebuffer_handle(self.handle)
+            except Exception:
+                pass
+            self.handle = 0
+
+
+# ========================================
 # RGAProcessor 单例
 # ========================================
 class RGAProcessor:
@@ -143,15 +201,20 @@ class RGAProcessor:
         self._available = False
         self._has_imconfig = False
         self._has_wrapbuffer_va = False
+        # 按尺寸池化缓冲：key=(w,h) → _PooledBuffer，handle 永久复用
+        self._src_pool: Dict[Tuple[int, int], _PooledBuffer] = {}
+        self._dst_pool: Dict[Tuple[int, int], _PooledBuffer] = {}
+        # RGA 是单一硬件设备，improcess 调用需串行化
+        self._lock = threading.Lock()
         self._init_librga()
-        # 加载成功后立即指定调度核心，避免 RK3588 no core match
+        # 加载成功后指定调度核心为 RGA2（I420 仅 RGA2 核支持）
         if self.is_available() and self._has_imconfig:
             try:
-                ret = self._lib.imconfig(IM_CONFIG_SCHEDULER_CORE, IM_SCHEDULER_RGA3_DEFAULT)
+                ret = self._lib.imconfig(IM_CONFIG_SCHEDULER_CORE, IM_SCHEDULER_FOR_I420)
                 if ret != IM_STATUS_SUCCESS and ret != IM_STATUS_NOERROR:
                     logger.warning(f"[RGAProcessor] imconfig 设置调度核心返回：{ret}")
                 else:
-                    logger.info("[RGAProcessor] 调度核心已设为 RGA3 core0|core1")
+                    logger.info("[RGAProcessor] 调度核心已设为 RGA2（I420 兼容）")
             except Exception as e:
                 logger.warning(f"[RGAProcessor] imconfig 设置调度核心失败：{e}")
 
@@ -244,6 +307,7 @@ class RGAProcessor:
         从 I420 帧裁剪 region 并缩放为 (dst_h, dst_w, 3) RGB uint8
 
         单次 RGA 硬件调用完成：裁剪（srect）+ 缩放（src→dst 尺寸）+ 格式转换（I420→RGB）。
+        缓冲区 handle 按尺寸池化复用，不再每帧 import/release，避免内核 dma-buf 资源耗尽。
 
         Args:
             yuv_frame: (H*3//2, W) 合并 I420 帧（merge_yuv_planes 输出，非标准布局）
@@ -252,7 +316,7 @@ class RGAProcessor:
             dst_h: 目标高度（模型输入高）
 
         Returns:
-            (dst_h, dst_w, 3) uint8 RGB
+            (dst_h, dst_w, 3) uint8 RGB（独立副本，池化缓冲不会被后续调用覆盖）
 
         Raises:
             RuntimeError: RGA 调用失败（上层应捕获并回退 cv2）
@@ -272,7 +336,6 @@ class RGAProcessor:
             raise RuntimeError(f"region 越界或为空：{region}，帧尺寸({W}x{H})")
 
         # RGA 对 YUV420p 源格式的 srect 宽高要求为偶数（U/V 按 2x2 下采样）
-        # 奇数宽高会触发 RgaBlit fail: Invalid argument，此处向下对齐到偶数
         if (x2 - x1) % 2 != 0:
             x2 -= 1
         if (y2 - y1) % 2 != 0:
@@ -280,81 +343,59 @@ class RGAProcessor:
         if x2 <= x1 or y2 <= y1:
             raise RuntimeError(f"region 对齐后为空：{region}，帧尺寸({W}x{H})")
 
-        # ---- 重建标准 I420 布局（RGA 要求 Y/Cb/Cr 平面连续）----
-        # merge_yuv_planes 把 U/V reshape 为 (H//4, W)，需还原为 (H//2, W//2)
-        y_plane = yuv_frame[:H, :W]
-        u_plane = yuv_frame[H:H + H // 4, :W].reshape(H // 2, W // 2)
-        v_plane = yuv_frame[H + H // 4:H + H // 2, :W].reshape(H // 2, W // 2)
-        std_i420 = np.concatenate(
-            [y_plane.ravel(), u_plane.ravel(), v_plane.ravel()]
-        ).astype(np.uint8)
-        # std_i420 必须连续，供 RGA 直接读取
-        if not std_i420.flags['C_CONTIGUOUS']:
-            std_i420 = np.ascontiguousarray(std_i420)
+        with self._lock:
+            # ---- 获取/创建池化缓冲（handle 永久复用，不每帧 import）----
+            src_key = (W, H)
+            src_pooled = self._src_pool.get(src_key)
+            if src_pooled is None:
+                src_pooled = _PooledBuffer(self._lib, W, H, RK_FORMAT_YCbCr_420_P)
+                self._src_pool[src_key] = src_pooled
+                logger.info(f"[RGA] 源缓冲池化: {W}x{H} I420, handle={src_pooled.handle}")
 
-        # ---- 目的 RGB 缓冲 ----
-        dst_buf_np = np.zeros((dst_h, dst_w, 3), dtype=np.uint8)
-        if not dst_buf_np.flags['C_CONTIGUOUS']:
-            dst_buf_np = np.ascontiguousarray(dst_buf_np)
+            dst_key = (dst_w, dst_h)
+            dst_pooled = self._dst_pool.get(dst_key)
+            if dst_pooled is None:
+                dst_pooled = _PooledBuffer(self._lib, dst_w, dst_h, RK_FORMAT_RGB_888)
+                self._dst_pool[dst_key] = dst_pooled
+                logger.info(f"[RGA] 目的缓冲池化: {dst_w}x{dst_h} RGB, handle={dst_pooled.handle}")
 
-        # ---- 包装缓冲为 rga_buffer_t ----
-        # 两步法：importbuffer_virtualaddr 生成 handle，wrapbuffer_handle_t 包装为 rga_buffer_t。
-        # 注意：某些 librga 版本 wrapbuffer_handle_t 不回填 vir_addr，需手动设置。
-        # （曾尝试 wrapbuffer_virtualaddr_t 一步式 API，但在 librga 1.10.1 上返回 handle=0，
-        #  内部未正确注册缓冲区，故回滚到两步法。）
-        src_va = std_i420.ctypes.data_as(ctypes.c_void_p)
-        dst_va = dst_buf_np.ctypes.data_as(ctypes.c_void_p)
+            # ---- 重建标准 I420 布局并拷入池化缓冲（VA 不变，handle 有效）----
+            # merge_yuv_planes 把 U/V reshape 为 (H//4, W)，需还原为 (H//2, W//2)
+            y_plane = yuv_frame[:H, :W]
+            u_plane = yuv_frame[H:H + H // 4, :W].reshape(H // 2, W // 2)
+            v_plane = yuv_frame[H + H // 4:H + H // 2, :W].reshape(H // 2, W // 2)
 
-        src_handle = 0
-        dst_handle = 0
-        try:
-            # 两步法：importbuffer + wrapbuffer_handle_t + 手动回填 vir_addr
-            src_param = im_handle_param_t(
-                width=ctypes.c_uint32(W),
-                height=ctypes.c_uint32(H),
-                format=ctypes.c_uint32(RK_FORMAT_YCbCr_420_P),
-            )
-            src_handle = self._lib.importbuffer_virtualaddr(src_va, ctypes.byref(src_param))
-            if src_handle == 0:
-                raise RuntimeError("importbuffer_virtualaddr(src) 失败")
-
-            dst_param = im_handle_param_t(
-                width=ctypes.c_uint32(dst_w),
-                height=ctypes.c_uint32(dst_h),
-                format=ctypes.c_uint32(RK_FORMAT_RGB_888),
-            )
-            dst_handle = self._lib.importbuffer_virtualaddr(dst_va, ctypes.byref(dst_param))
-            if dst_handle == 0:
-                raise RuntimeError("importbuffer_virtualaddr(dst) 失败")
-
-            src_buf = self._lib.wrapbuffer_handle_t(
-                src_handle, W, H, W, H, RK_FORMAT_YCbCr_420_P)
-            dst_buf = self._lib.wrapbuffer_handle_t(
-                dst_handle, dst_w, dst_h, dst_w, dst_h, RK_FORMAT_RGB_888)
-            src_buf.vir_addr = src_va
-            dst_buf.vir_addr = dst_va
+            y_size = H * W
+            c_size = (H // 2) * (W // 2)
+            # 直接写入池化一维数组，避免 np.concatenate 每帧分配新内存
+            src_pooled.array[:y_size] = y_plane.ravel()
+            src_pooled.array[y_size:y_size + c_size] = u_plane.ravel()
+            src_pooled.array[y_size + c_size:y_size + 2 * c_size] = v_plane.ravel()
 
             # ---- 构造矩形 ----
             srect = im_rect(x1, y1, x2 - x1, y2 - y1)
             drect = im_rect(0, 0, dst_w, dst_h)
             prect = im_rect(0, 0, 0, 0)
 
-            # ---- 单次硬件处理：裁剪 + 缩放 + YUV→RGB ----
+            # ---- 单次硬件处理：裁剪 + 缩放 + YUV→RGB（复用 handle/rga_buf）----
             ret = self._lib.improcess(
-                src_buf, dst_buf, rga_buffer_t(),
+                src_pooled.rga_buf, dst_pooled.rga_buf, rga_buffer_t(),
                 srect, drect, prect, IM_SYNC,
             )
             if ret != IM_STATUS_SUCCESS and ret != IM_STATUS_NOERROR:
                 raise RuntimeError(f"improcess 失败，错误码：{ret}")
 
-            return dst_buf_np
+            # 必须复制：池化目的缓冲会被下一帧覆盖，返回独立副本
+            return dst_pooled.array[:dst_h * dst_w * 3].reshape(dst_h, dst_w, 3).copy()
 
-        finally:
-            # 仅两步法需要手动释放 handle；wrapbuffer_virtualaddr 内部自管理
-            if src_handle != 0:
-                self._lib.releasebuffer_handle(src_handle)
-            if dst_handle != 0:
-                self._lib.releasebuffer_handle(dst_handle)
+    def release(self):
+        """释放所有池化缓冲的 handle（处理器关闭时调用）"""
+        for buf in self._src_pool.values():
+            buf.release(self._lib)
+        for buf in self._dst_pool.values():
+            buf.release(self._lib)
+        self._src_pool.clear()
+        self._dst_pool.clear()
 
 
 # ========================================
@@ -373,3 +414,11 @@ def get_rga_processor() -> Optional[RGAProcessor]:
             logger.warning(f"[RGAProcessor] 初始化失败：{e}")
             _processor_instance = None
     return _processor_instance
+
+
+def release_rga_processor():
+    """释放单例处理器及其池化缓冲 handle（进程退出时调用）"""
+    global _processor_instance
+    if _processor_instance is not None:
+        _processor_instance.release()
+        _processor_instance = None

@@ -18,7 +18,7 @@ class FTPOutputter:
     def __init__(self, config: Dict):
         """
         初始化 FTP 输出器
-        
+
         Args:
             config: FTP 配置字典
         """
@@ -28,8 +28,12 @@ class FTPOutputter:
         self.password = config.get('password', 'ftppassword')
         self.remote_dir = config.get('remote_dir', '/sagesight/images')
         self.passive_mode = config.get('passive_mode', True)
-        
-        logger.debug(f"[FTPOutputter] 配置完成 - 服务器: {self.host}:{self.port}")
+        # 连接/读写超时（秒）：ftplib 默认无超时，服务器不可达时会阻塞调用线程
+        # （事件消费主循环）数十秒至数分钟，导致事件队列积压、检测帧被丢弃。
+        # 显式设短超时，失败即抛异常跳过，保障主循环持续运转。
+        self.timeout = config.get('timeout', 10)
+
+        logger.debug(f"[FTPOutputter] 配置完成 - 服务器: {self.host}:{self.port}, 超时: {self.timeout}s")
     
     def _ensure_directory(self, ftp: ftplib.FTP):
         """
@@ -69,9 +73,9 @@ class FTPOutputter:
             filename = event_id
         
         with ftplib.FTP() as ftp:
-            # 连接到服务器
-            ftp.connect(self.host, self.port)
-            
+            # 连接到服务器（带超时，避免不可达时长时间阻塞调用线程）
+            ftp.connect(self.host, self.port, timeout=self.timeout)
+
             # 登录
             ftp.login(self.username, self.password)
             
