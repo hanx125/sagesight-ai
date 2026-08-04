@@ -671,27 +671,39 @@ def system_page():
 
 @app.route('/api/events/stats', methods=['GET'])
 def get_event_stats():
-    """获取事件统计"""
+    """获取事件统计
+
+    返回字段说明：
+    - by_type:   按 type 列分组（tracking/zone/loitering，事件检测维度）
+    - by_status: 按 status 列分组（tracking_start/tracking_end 等，事件生命周期维度）
+    - by_class:  按 class_name 列分组（检测目标类别）
+    - daily:     最近 7 天每日事件数
+    """
     tm = get_task_manager()
-    
+
     total = tm.get_event_count()
-    
-    # 按类型统计
+
     import sqlite3
     with sqlite3.connect(tm.db_path) as conn:
         cursor = conn.cursor()
+        # 按事件类型统计（tracking/zone/loitering）
         cursor.execute('SELECT type, COUNT(*) FROM events GROUP BY type')
         type_stats = dict(cursor.fetchall())
-        
+
+        # 按事件状态统计（tracking_start/tracking_update/tracking_end/gif_ready）
+        cursor.execute('SELECT status, COUNT(*) FROM events GROUP BY status')
+        status_stats = dict(cursor.fetchall())
+
         cursor.execute('SELECT class_name, COUNT(*) FROM events GROUP BY class_name ORDER BY COUNT(*) DESC LIMIT 10')
         class_stats = dict(cursor.fetchall())
-        
+
         cursor.execute('SELECT DATE(created_at) as date, COUNT(*) FROM events GROUP BY DATE(created_at) ORDER BY date DESC LIMIT 7')
         daily_stats = [{'date': row[0], 'count': row[1]} for row in cursor.fetchall()]
-    
+
     return jsonify({
         'total': total,
         'by_type': type_stats,
+        'by_status': status_stats,
         'by_class': class_stats,
         'daily': daily_stats
     })

@@ -1,4 +1,4 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 
 {% block title %}事件列表{% endblock %}
 
@@ -679,8 +679,8 @@ window.Events = (function() {
             const data = await response.json();
             
             document.getElementById('statTotal').textContent = data.total || 0;
-            document.getElementById('statTrackStart').textContent = data.by_type?.track_start || 0;
-            document.getElementById('statTrackEnd').textContent = data.by_type?.track_end || 0;
+            document.getElementById('statTrackStart').textContent = data.by_status?.tracking_start || 0;
+            document.getElementById('statTrackEnd').textContent = data.by_status?.tracking_end || 0;
             document.getElementById('statCar').textContent = data.by_class?.car || 0;
             
             if (data.by_class) {
