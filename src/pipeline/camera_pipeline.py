@@ -302,6 +302,7 @@ def run_pipeline(
                         frame_index.shm_block_id,
                         shm_name_prefix,
                         detection_results,
+                        header.sequence_num,  # 帧序号（用于回读 shm 时校验块是否已被覆盖）
                     ),
                     timeout=0.05,
                 )

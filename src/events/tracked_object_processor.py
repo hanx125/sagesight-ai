@@ -202,11 +202,21 @@ class TrackedObjectProcessor(mp.Process):
         self._start_triggered_count = 0
         self._end_triggered_count = 0
         self._event_durations = []
+        # 诊断计数器：统计 shm 帧回读和 FrameCache 写入成功率
+        self._shm_read_total = 0       # _read_frame_from_shm 调用总次数
+        self._shm_read_success = 0     # 成功返回非 None 的次数
+        self._frame_cache_push_total = 0   # frame_cache.push 调用次数
+        self._frame_cache_push_success = 0  # 实际写入缓存次数（采样通过+编码成功）
+        self._max_queue_size = 0       # 队列最大积压深度
 
         while not self.stop_event.is_set():
             try:
                 # 从队列获取数据（1秒超时,便于检查 stop_event）
                 data = self.detected_objects_queue.get(timeout=1)
+                # 诊断：记录队列积压深度
+                qsize = self.detected_objects_queue.qsize()
+                if qsize > self._max_queue_size:
+                    self._max_queue_size = qsize
             except Exception:
                 # 队列为空或出错
                 continue
@@ -225,13 +235,23 @@ class TrackedObjectProcessor(mp.Process):
                         sum(self._event_durations) / len(self._event_durations)
                         if self._event_durations else 0
                     )
+                    # 诊断：shm 回读成功率与 FrameCache 写入成功率
+                    shm_rate = (
+                        self._shm_read_success / max(1, self._shm_read_total) * 100
+                    )
+                    cache_rate = (
+                        self._frame_cache_push_success / max(1, self._frame_cache_push_total) * 100
+                    )
                     proc_logger.info(
                         f"已处理 {processed_count} 帧检测数据, "
                         f"活跃事件: {sum(len(v) for v in self.active_events.values())}, "
                         f"累计跟踪对象: {tracked_sum}, "
                         f"start触发: {self._start_triggered_count}, "
                         f"end触发: {self._end_triggered_count}, "
-                        f"平均事件持续: {avg_dur:.2f}s"
+                        f"平均事件持续: {avg_dur:.2f}s, "
+                        f"shm回读成功率: {shm_rate:.1f}% ({self._shm_read_success}/{self._shm_read_total}), "
+                        f"缓存写入成功率: {cache_rate:.1f}% ({self._frame_cache_push_success}/{self._frame_cache_push_total}), "
+                        f"队列最大积压: {self._max_queue_size}"
                     )
                     last_stats_time = now
 
@@ -362,7 +382,7 @@ class TrackedObjectProcessor(mp.Process):
 
         数据格式: (camera_id, frame_time, tracked_objects_dict,
                    motion_boxes, regions, shm_block_id, shm_name,
-                   detection_results)
+                   detection_results, frame_seq)
         """
         if len(data) < 7:
             logger.warning(f"检测数据格式错误,长度不足: {len(data)}")
@@ -376,6 +396,8 @@ class TrackedObjectProcessor(mp.Process):
         shm_block_id = data[5] if len(data) > 5 else None
         shm_name = data[6] if len(data) > 6 else None
         detection_results = data[7] if len(data) > 7 else []
+        # 帧序号：写入共享内存时记录的 sequence_num，回读 shm 时校验块是否已被覆盖
+        frame_seq = data[8] if len(data) > 8 else None
 
         if camera_id not in self.camera_states:
             logger.warning(f"未知的 camera_id: {camera_id}")
@@ -389,6 +411,7 @@ class TrackedObjectProcessor(mp.Process):
             "shm_block_id": shm_block_id,
             "shm_name": shm_name,
             "frame_time": frame_time,
+            "frame_seq": frame_seq,
         }
 
         # 保存当前帧的检测数据（供事件回调绘制检测框使用，与 AI 视频流绘制保持一致）
@@ -397,14 +420,19 @@ class TrackedObjectProcessor(mp.Process):
         self._current_regions = regions or []
         self._current_detection_results = detection_results or []
 
-        # 按需读一次 shm，回调/frame_cache/AI流共用（避免重复读 shm）
+        # 按需读 shm：仅 GIF 帧缓存启用时预读（FrameCache 必须每帧写入）
+        # 事件回调（start/update/end）和 AI 流推送均已有 self._current_frame 为 None
+        # 时的兜底读 shm 逻辑，无需每帧预读。每帧预读 shm（SharedMemory 连接 +
+        # 跨进程锁 + 614KB 复制 + YUV→RGB）在多相机高帧率场景下会导致消费端
+        # 跟不上生产端，事件队列积压丢弃数据
         frame_cache = self.frame_caches.get(camera_id)
-        need_frame = (
-            frame_cache is not None
-            or self._is_ai_stream_enabled(camera_id)
-            or self._event_callbacks_need_frame(camera_id)
-        )
+        need_frame = frame_cache is not None
         self._current_frame = self._read_frame_from_shm(camera_id) if need_frame else None
+        # 诊断：统计 shm 回读成功率
+        if need_frame:
+            self._shm_read_total += 1
+            if self._current_frame is not None:
+                self._shm_read_success += 1
 
         # 更新 CameraState（触发事件回调，回调复用 self._current_frame）
         self.camera_states[camera_id].update(
@@ -416,7 +444,9 @@ class TrackedObjectProcessor(mp.Process):
 
         # 帧缓存：复用已读帧写入 FrameCache（用于 GIF 帧回放）
         if frame_cache is not None and self._current_frame is not None:
-            frame_cache.push(frame_time, self._current_frame)
+            self._frame_cache_push_total += 1
+            if frame_cache.push(frame_time, self._current_frame):
+                self._frame_cache_push_success += 1
 
         # AI 视频流推送（复用已读帧）
         self._maybe_push_ai_stream(
@@ -714,6 +744,24 @@ class TrackedObjectProcessor(mp.Process):
         # 选择最终图片：优先使用置信度最高的缩略图，其次使用结束帧
         final_image = best_image if best_image is not None else end_image
 
+        # 诊断：标明 final_image 的来源，便于定位图片不产生的原因
+        if passes_zones:
+            source = (
+                "best_image" if best_image is not None
+                else "end_image" if end_image is not None
+                else "none"
+            )
+            has_thumb = best_thumbnail is not None
+            logger.warning(
+                f"[{camera_id}] 事件结束诊断: event_id={event_id[:8]}, "
+                f"passes_zones={passes_zones}, "
+                f"best_thumbnail存在={has_thumb}, "
+                f"best_image={'有' if best_image is not None else '无'}, "
+                f"end_image={'有' if end_image is not None else '无'}, "
+                f"final_image来源={source}, "
+                f"duration={frame_time - active_event.get('start_time', frame_time):.2f}s"
+            )
+
         # ✅ 更新事件：保存置信度最高的图片 + 推送 event_update（status=tracking_end）
         # required_zones 未通过时 image=None，仅更新状态（zone 轨迹仍在 update_data 中落库）
         # 事件类型按完整 metadata 最终确定（目标可能在跟踪过程中才进入区域或徘徊）
@@ -882,6 +930,7 @@ class TrackedObjectProcessor(mp.Process):
         从共享内存回读帧
 
         使用当前帧的 shm_block_id 和 shm_name 回读 YUV 帧,转换为 RGB。
+        同时传入 frame_seq 校验块是否已被环形缓冲区覆盖（避免帧与框错位）。
 
         Returns:
             RGB 帧 (height, width, 3),失败返回 None
@@ -892,6 +941,7 @@ class TrackedObjectProcessor(mp.Process):
 
         shm_block_id = shm_info.get("shm_block_id")
         shm_name = shm_info.get("shm_name")
+        frame_seq = shm_info.get("frame_seq")
 
         if shm_block_id is None or shm_name is None:
             return None
@@ -907,31 +957,12 @@ class TrackedObjectProcessor(mp.Process):
                 shm_name=shm_name,
                 shm_block_id=shm_block_id,
                 frame_shape=frame_shape,
+                expected_frame_seq=frame_seq,
             )
             return rgb_frame
         except Exception as e:
             logger.debug(f"[{camera_id}] 回读帧失败: {e}")
             return None
-
-    def _event_callbacks_need_frame(self, camera_id: str) -> bool:
-        """判断本帧事件回调是否可能需要快照帧（用于按需读 shm）"""
-        event_output = self.event_outputs.get(camera_id)
-        if event_output is None:
-            return False
-        # 任一 capture 开关开启，就可能在 start/end 时需要快照
-        if getattr(event_output, 'capture_save_full_on_start', False):
-            return True
-        if getattr(event_output, 'capture_save_full_on_end', False):
-            return True
-        # 徘徊检测可能需要快照
-        state = self.camera_states.get(camera_id)
-        if state is not None and hasattr(state, 'zone_manager'):
-            try:
-                if state.zone_manager.get_loitering_zones():
-                    return True
-            except Exception:
-                pass
-        return False
 
     def _is_ai_stream_enabled(self, camera_id: str) -> bool:
         """检查摄像机是否启用 AI 流推送。
@@ -997,7 +1028,8 @@ class TrackedObjectProcessor(mp.Process):
         if frame is None:
             frame = self._read_frame_from_shm(camera_id)
         if frame is None:
-            logger.warning(f"[{camera_id}] AI流：回读帧失败，跳过推送 (frame_seq={frame_seq})")
+            # 帧序号校验丢弃（块已被覆盖）或其他读取失败，属正常背压情况，降为 DEBUG 避免刷屏
+            logger.debug(f"[{camera_id}] AI流：回读帧失败，跳过推送 (frame_seq={frame_seq})")
             return
 
         # per-camera 背压锁：该 camera 上一帧还在编码中则丢弃本帧，避免积压

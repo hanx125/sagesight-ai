@@ -31,8 +31,10 @@ var aiFrameCanvases = {};  // {cameraId: canvasElement} 单画面 AI Canvas
 
 // AI 流渲染合并：每帧 WS 消息只缓存最新帧，requestAnimationFrame 合批渲染
 // （浏览器刷新率 60Hz 已天然限流，无需全局限流丢帧）
-var _pendingAIFrames = {};   // {cameraId: frameBase64} 待渲染的最新帧
+var _pendingAIFrames = {};   // {cameraId: {frame, seq}} 待渲染的最新帧及其序号
 var _rafScheduled = false;   // 是否已安排 rAF 任务
+// 已渲染到 Canvas 的最新帧序号（按 cameraId 记录），用于丢弃异步 Image 解码乱序的过期帧
+var _renderedFrameSeq = {};  // {cameraId: lastRenderedSeq}
 
 // 统计信息
 var aiStats = {
@@ -233,7 +235,7 @@ function initWebSocket() {
         // 前端只缓存最新帧，requestAnimationFrame 合批渲染（浏览器刷新率天然限流，
         // 不再使用全局限流丢帧，保证最新帧总能及时显示）
         socket.on('ai_stream_frame', function(data) {
-            const {camera_id, frame} = data;
+            const {camera_id, frame, frame_seq} = data;
 
             // 检查是否订阅了AI流（避免接收不需要的流）
             if (!aiStreamSubscriptions[camera_id] || aiStreamSubscriptions[camera_id].screenIndexes.size === 0) {
@@ -248,7 +250,8 @@ function initWebSocket() {
             aiStats.totalFrames++;
 
             // 只缓存最新帧（同一 camera 多帧到达时旧的直接被覆盖，等价于丢旧帧）
-            _pendingAIFrames[camera_id] = frame;
+            // 同时记录 frame_seq，渲染时用于丢弃异步解码乱序的过期帧
+            _pendingAIFrames[camera_id] = {frame: frame, seq: frame_seq || 0};
 
             // 安排一次 rAF 渲染（已安排则跳过，保证一帧只渲染一次）
             if (!_rafScheduled) {
@@ -1225,6 +1228,47 @@ function unsubscribeAIStream(cameraId, screenIndex) {
 }
 
 /**
+ * 页面切换/卸载时的资源清理
+ * - 通知后端停止所有正在推送的 AI 流（删除 .flag 标记文件）
+ * - 清理报警闪烁定时器（未注册到 TimerManager，需手动清除）
+ * - 清理前端订阅状态与 AI 模式标记
+ * - 取消未完成的 rAF 渲染调度
+ * 注意1：保留 screen.ai_mode，便于任务重启时恢复（与 task_stopped 事件处理一致）
+ * 注意2：事件推送监听器（new_event/event_update/gif_ready）复用全局 socket，
+ *        由 navigation.js 的 resetSocket → removeAllListeners 统一清理
+ */
+function cleanupMonitorPage() {
+    // 电视墙模式：清理每个处于 AI 模式的画面
+    screens.forEach((screen, index) => {
+        if (screen && screen.camera_id && aiStreamMode[index]) {
+            disableAIStream(screen.camera_id);
+            unsubscribeAIStream(screen.camera_id, index);
+            aiStreamMode[index] = false;
+            console.log(`[页面清理] 停止画面${index} AI流: camera_id=${screen.camera_id}`);
+        }
+    });
+
+    // 单画面模式：清理 AI 流
+    if (currentSingleCamera && singleScreenAIMode) {
+        disableAIStream(currentSingleCamera.id);
+        unsubscribeAIStream(currentSingleCamera.id, 'single');
+        singleScreenAIMode = false;
+        console.log(`[页面清理] 停止单画面 AI流: camera_id=${currentSingleCamera.id}`);
+    }
+
+    // 清空待渲染帧缓存，取消 rAF 调度（避免离开页面后继续渲染）
+    _pendingAIFrames = {};
+    _rafScheduled = false;
+
+    // 清理报警闪烁定时器（直接 setInterval/setTimeout 创建，未注册到 TimerManager）
+    if (_alarmBlinkTimer) { clearInterval(_alarmBlinkTimer); _alarmBlinkTimer = null; }
+    if (_alarmStopTimer) { clearTimeout(_alarmStopTimer); _alarmStopTimer = null; }
+
+    // 事件推送监听器（new_event/event_update/gif_ready）由 navigation.js 的
+    // resetSocket → socket.removeAllListeners() 统一清理，此处无需处理
+}
+
+/**
  * requestAnimationFrame 回调：批量渲染 _pendingAIFrames 中缓存的最新帧
  *
  * 设计要点：
@@ -1240,7 +1284,8 @@ function _flushPendingAIFrames() {
     _rafScheduled = false;
 
     for (const cameraId in framesToRender) {
-        renderAIStreamFrame(cameraId, framesToRender[cameraId]);
+        const item = framesToRender[cameraId];
+        renderAIStreamFrame(cameraId, item.frame, item.seq);
         aiStats.renderedFrames++;
     }
 }
@@ -1254,7 +1299,7 @@ function _flushPendingAIFrames() {
  * - drawImage 将后端帧拉伸填充整个 Canvas，画面自适应播放器大小
  * - 仅在容器尺寸变化时更新 Canvas 分辨率，避免每帧重置影响性能
  */
-function renderAIStreamFrame(cameraId, frameBase64) {
+function renderAIStreamFrame(cameraId, frameBase64, frameSeq) {
     // 将后端帧渲染到指定 Canvas，自适应容器大小
     const renderToCanvas = (canvas, img) => {
         const ctx = canvas.getContext('2d');
@@ -1272,6 +1317,16 @@ function renderAIStreamFrame(cameraId, frameBase64) {
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     };
 
+    // 序号检查：丢弃过期帧（异步 Image 解码完成顺序可能与赋值顺序不一致，
+    // 导致旧帧覆盖新帧，表现为画面倒退。这里在 onload 时再次检查序号）
+    const isExpired = () => {
+        if (frameSeq && _renderedFrameSeq[cameraId] !== undefined
+            && frameSeq < _renderedFrameSeq[cameraId]) {
+            return true;
+        }
+        return false;
+    };
+
     // 多画面渲染
     screens.forEach((screen, index) => {
         if (screen && screen.camera_id === cameraId && aiStreamMode[index]) {
@@ -1280,7 +1335,16 @@ function renderAIStreamFrame(cameraId, frameBase64) {
 
             const img = new Image();
             img.onload = function() {
+                // 丢弃过期帧：本帧序号小于已渲染序号说明是乱序到达的旧帧
+                if (isExpired()) {
+                    aiStats.droppedFrames++;
+                    return;
+                }
                 renderToCanvas(canvas, img);
+                // 更新已渲染序号
+                if (frameSeq) {
+                    _renderedFrameSeq[cameraId] = frameSeq;
+                }
                 // 第一帧渲染成功后，清除"等待AI视频流..."提示
                 const statusEl = document.getElementById(`aiStreamStatus${index}`);
                 if (statusEl) {
@@ -1301,7 +1365,15 @@ function renderAIStreamFrame(cameraId, frameBase64) {
         if (canvas) {
             const img = new Image();
             img.onload = function() {
+                // 丢弃过期帧
+                if (isExpired()) {
+                    aiStats.droppedFrames++;
+                    return;
+                }
                 renderToCanvas(canvas, img);
+                if (frameSeq) {
+                    _renderedFrameSeq[cameraId] = frameSeq;
+                }
                 // 第一帧渲染成功后，清除"等待AI视频流..."提示
                 const statusEl = document.getElementById('singleAIStatus');
                 if (statusEl) {
@@ -2729,7 +2801,6 @@ function addNewPatrol() {
 // ========================================
 
 var monitorEvents = [];
-var eventWebSocket = null;
 var monitorTaskMap = {};  // 任务ID到名称的映射
 
 // 初始化事件列表
@@ -3012,44 +3083,27 @@ function closeMonitorEventDetail() {
     if (modal) modal.style.display = 'none';
 }
 
-// 初始化WebSocket实时推送
+// 初始化WebSocket实时推送（复用全局 socket，由 main.js 统一管理生命周期）
 function initEventWebSocket() {
-    // 复用仍处于连接状态的 socket（监听器回调时会查询最新 DOM，无需重新绑定）
-    if (eventWebSocket && eventWebSocket.connected) return;
-
-    // 旧连接已断开或不存在，清理后重建
-    if (eventWebSocket) {
-        try { eventWebSocket.disconnect(); } catch (e) {}
-        eventWebSocket = null;
+    const socket = getSocket();
+    if (!socket) {
+        console.error('[事件推送] 全局 socket 未就绪');
+        return;
     }
 
-    try {
-        eventWebSocket = io('/ws', {
-            transports: ['websocket', 'polling']
-        });
+    // 监听器由 navigation.js cleanupPage → resetSocket 统一清理，
+    // 此处只负责注册驾驶舱事件相关监听器
+    socket.on('new_event', (event) => {
+        addNewEventToMonitor(event);
+    });
 
-        eventWebSocket.on('new_event', (event) => {
-            addNewEventToMonitor(event);
-        });
+    socket.on('event_update', (data) => {
+        updateMonitorEventCard(data);
+    });
 
-        eventWebSocket.on('event_update', (data) => {
-            updateMonitorEventCard(data);
-        });
-
-        eventWebSocket.on('gif_ready', (data) => {
-            updateMonitorEventGif(data);
-        });
-
-        eventWebSocket.on('connect', () => {
-            console.log('事件WebSocket已连接');
-        });
-
-        eventWebSocket.on('disconnect', () => {
-            console.log('事件WebSocket已断开');
-        });
-    } catch (error) {
-        console.error('初始化事件WebSocket失败:', error);
-    }
+    socket.on('gif_ready', (data) => {
+        updateMonitorEventGif(data);
+    });
 }
 
 // 添加新事件到列表（滚动显示）
@@ -3209,6 +3263,7 @@ function playEventNotificationSound() {
 return {
     setLayout: setLayout,
     clearAllScreens: clearAllScreens,
+    cleanup: cleanupMonitorPage,
     autoArrange: autoArrange,
     toggleMonitorWallFullscreen: toggleMonitorWallFullscreen,
     playCurrentStream: playCurrentStream,

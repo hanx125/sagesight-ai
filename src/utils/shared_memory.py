@@ -437,49 +437,72 @@ class SharedMemoryRingBuffer:
 def read_frame_from_shared_memory(
     shm_name: str,
     shm_block_id: int,
-    frame_shape: Tuple[int, int]
+    frame_shape: Tuple[int, int],
+    expected_frame_seq: Optional[int] = None
 ) -> Optional[np.ndarray]:
     """
     从共享内存读取帧(带跨进程锁保护)
-    
+
     Args:
         shm_name: 共享内存名称前缀(如 "sagesight_{camera_id}_block")
         shm_block_id: 块ID
         frame_shape: 帧形状(height, width)
-    
+        expected_frame_seq: 期望的帧序号(用于校验块是否已被覆盖)。
+            环形缓冲区会被生产者循环覆盖写入，如果本块在回读时已被新帧覆盖，
+            头部的 frame_seq 会与 expected_frame_seq 不匹配，此时返回 None，
+            避免用旧帧的检测框画在新帧画面上导致"框滞后于目标"。
+
     Returns:
         np.ndarray: RGB帧数据(height, width, 3),如果失败则返回None
     """
     # 构建完整的块名称
     block_name = f"{shm_name}_{shm_block_id}"
-    
+
     # ✅ 计算帧大小（I420格式：Y + U + V）
     height, width = frame_shape
     y_size = height * width
     u_size = (height // 2) * (width // 2)
-    v_size = (height // 2) * (width // 2)
+    v_size = u_size
     total_size = HEADER_SIZE + y_size + u_size + v_size
-    
+
     # 连接到共享内存
     shm = None
     try:
         shm = shared_memory.SharedMemory(name=block_name, create=False)
-        
-        # 读取帧数据 - 跨进程锁保护（Windows 命名互斥锁 / Linux fcntl 文件锁）
+
         try:
             with _ShmLock(block_name, timeout_ms=100):
-                # ✅ 原子读取: 一次性读取整个帧
-                full_data = bytes(shm.buf[HEADER_SIZE:total_size])
+                # ✅ 原子读取: 一次性读取头部+帧数据
+                full_data = bytes(shm.buf[:total_size])
+
+            # 解析头部，校验帧序号（防止环形缓冲区覆盖导致帧与框错位）
+            header_data = struct.unpack(HEADER_FORMAT, full_data[:HEADER_SIZE])
+            magic = header_data[0]
+            if magic != MAGIC_NUMBER:
+                logger.error(f"[read_frame_from_shared_memory] 魔数不匹配: {magic}")
+                return None
+
+            actual_frame_seq = header_data[1]
+            if expected_frame_seq is not None and actual_frame_seq != expected_frame_seq:
+                # 块已被新帧覆盖：检测框基于旧帧，但画面已是新帧，直接丢弃避免框错位
+                # 临时诊断：提升到 warning 级别，确认覆盖频率
+                logger.warning(
+                    f"[read_frame_from_shared_memory] 帧序号不匹配(块已被覆盖): "
+                    f"expected={expected_frame_seq}, actual={actual_frame_seq}, "
+                    f"block={block_name}"
+                )
+                return None
 
             # ✅ 解析帧数据(I420 -> RGB)
             # I420格式：Y平面 + U平面 + V平面（分离存储）
-            # 从读取的数据中解析Y、U、V平面
+            # 跳过头部，从 HEADER_SIZE 开始读取 YUV 数据
+            yuv_data = full_data[HEADER_SIZE:]
             u_size = (height // 2) * (width // 2)
             v_size = u_size
 
-            y_data = np.frombuffer(full_data[:y_size], dtype=np.uint8).copy()
-            u_data = np.frombuffer(full_data[y_size:y_size+u_size], dtype=np.uint8).copy()
-            v_data = np.frombuffer(full_data[y_size+u_size:y_size+u_size+v_size], dtype=np.uint8).copy()
+            y_data = np.frombuffer(yuv_data[:y_size], dtype=np.uint8).copy()
+            u_data = np.frombuffer(yuv_data[y_size:y_size+u_size], dtype=np.uint8).copy()
+            v_data = np.frombuffer(yuv_data[y_size+u_size:y_size+u_size+v_size], dtype=np.uint8).copy()
 
             # reshape
             y = y_data.reshape((height, width))
@@ -508,7 +531,7 @@ def read_frame_from_shared_memory(
             rgb_frame = cv2.cvtColor(i420_frame, cv2.COLOR_YUV2RGB_I420)
 
             return rgb_frame
-            
+
         except Exception as e:
             logger.error(f"[read_frame_from_shared_memory] 读取失败: {e}", exc_info=True)
             return None

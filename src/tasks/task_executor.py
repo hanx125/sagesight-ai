@@ -903,17 +903,22 @@ class MultiCameraTaskExecutor:
             process.start()
             self.worker_processes[camera_id] = process
 
-            # 设置 CPU 亲和性：避免核心竞争
+            # 设置 CPU 亲和性：核心 0-1 留给系统/Flask/TrackedObjectProcessor/DetectorPool，
+            # 其余核心分配给 CameraWorker（每进程 2 核，超出范围则降级到不绑定）
             try:
                 import psutil
                 p = psutil.Process(process.pid)
+                total_cores = psutil.cpu_count(logical=False) or 8
+                reserved_cores = 2  # 核心 0-1 保留给系统及非 CameraWorker 进程
                 worker_index = len(self.worker_processes) - 1
-                core_start = 2 + worker_index * 2
+                core_start = reserved_cores + worker_index * 2
                 core_end = core_start + 2
-                available_cores = list(range(core_start, min(core_end, 12)))
+                available_cores = list(range(core_start, min(core_end, total_cores)))
                 if available_cores:
                     p.cpu_affinity(available_cores)
                     logger.debug(f"[MultiCameraExecutor-{self.task_id}] CameraWorker-{camera_id} 绑定到核心 {available_cores}")
+                else:
+                    logger.debug(f"[MultiCameraExecutor-{self.task_id}] CameraWorker-{camera_id} 无可用独占核心（core_start={core_start}, total={total_cores}），不绑定亲和性")
             except Exception as e:
                 logger.debug(f"[MultiCameraExecutor-{self.task_id}] 设置 CPU 亲和性失败: {e}")
 

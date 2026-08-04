@@ -23,7 +23,6 @@ let audioTalkLocalStream = null;     // 本地音频流（麦克风）
 let audioTalkRemoteStream = null;    // 远程音频流（摄像机）
 let audioTalkSessionId = null;       // 会话ID
 let audioTalkActive = false;         // 对讲状态
-let audioTalkWebSocket = null;       // WebSocket连接（可选）
 let audioLevelCheckInterval = null;  // 音频级别检测定时器
 let audioTalkZlmPushClient = null;   // ZLM WebRTC推流客户端（新方案）
 let audioTalkZlmPlayClient = null;   // ZLM WebRTC播放客户端（新方案）
@@ -835,51 +834,10 @@ function showAudioTalkTip(message, type = 'info') {
  */
 function initAudioTalk() {
     console.log('初始化语音对讲功能...');
-    
+
     // 检测语音对讲能力
     if (currentSingleCamera) {
         checkAudioTalkCapabilities();
-    }
-    
-    // 初始化WebSocket（如果需要）
-    // initAudioTalkWebSocket();
-}
-
-/**
- * 初始化WebSocket信令通道（可选）
- */
-function initAudioTalkWebSocket() {
-    try {
-        const wsUrl = `ws://${window.location.host}/audio/talk`;
-        audioTalkWebSocket = new WebSocket(wsUrl);
-        
-        audioTalkWebSocket.onopen = () => {
-            console.log('✓ WebSocket已连接');
-        };
-        
-        audioTalkWebSocket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            console.log('WebSocket消息:', data);
-            
-            // 处理WebSocket消息
-            if (data.type === 'webrtc_answer_response') {
-                console.log('Answer响应:', data);
-            } else if (data.type === 'webrtc_ice_response') {
-                console.log('ICE响应:', data);
-            }
-        };
-        
-        audioTalkWebSocket.onerror = (error) => {
-            console.error('WebSocket错误:', error);
-        };
-        
-        audioTalkWebSocket.onclose = () => {
-            console.log('WebSocket已关闭');
-            audioTalkWebSocket = null;
-        };
-        
-    } catch (error) {
-        console.error('WebSocket初始化失败:', error);
     }
 }
 

@@ -800,6 +800,8 @@ def push_ai_stream_frame():
         # 兼容 frame_base64（TrackedObjectProcessor 发送）和 frame（旧版兼容）
         frame = data.get('frame_base64') or data.get('frame')
         timestamp = data.get('timestamp')
+        # frame_seq：单调递增帧序号，用于前端丢弃过期帧（避免异步 Image 解码乱序导致画面倒退）
+        frame_seq = data.get('frame_seq') or 0
 
         if not camera_id or not frame:
             return jsonify({'error': '参数不完整'}), 400
@@ -808,7 +810,8 @@ def push_ai_stream_frame():
         _ai_stream_cache[camera_id] = {
             'frame': frame,
             'timestamp': timestamp,
-            'task_id': task_id
+            'task_id': task_id,
+            'frame_seq': frame_seq
         }
 
         # 派发到后台 greenlet 执行 emit（start_background_task 在 eventlet 下用
@@ -817,6 +820,7 @@ def push_ai_stream_frame():
             'task_id': task_id,
             'camera_id': camera_id,
             'frame': frame,
+            'frame_seq': frame_seq,
             'timestamp': timestamp
         }
         try:
@@ -831,6 +835,23 @@ def push_ai_stream_frame():
         return jsonify({'error': str(e)}), 500
 
 
+def _emit_ws_event(event: str, data: dict, log_tag: str = ''):
+    """后台 greenlet 执行的 WebSocket 事件广播
+
+    socketio.emit + ws_manager.broadcast 均可能因慢客户端阻塞（ws_manager.broadcast
+    的 ws.send 是同步发送），在 eventlet 单线程 hub 下会阻塞所有 HTTP 协程，导致
+    /api/ai-stream/push 的 AI 帧请求无法及时处理、前端画面停顿。改为后台 greenlet
+    异步执行，HTTP 请求立即返回。
+    """
+    try:
+        socketio.emit(event, data, namespace='/ws')
+        ws_manager.broadcast(event, data)
+        if log_tag:
+            logger.info(log_tag)
+    except Exception as e:
+        logger.error(f"广播 WebSocket 事件失败 [{event}]: {e}")
+
+
 @app.route('/api/events/push', methods=['POST'])
 def push_event_to_websocket():
     """接收任务进程推送的事件数据，并通过 WebSocket 广播到驾驶舱"""
@@ -839,10 +860,9 @@ def push_event_to_websocket():
         if not data or 'event_id' not in data:
             return jsonify({'error': '参数不完整'}), 400
 
-        # 通过 WebSocket 广播到驾驶舱
-        socketio.emit('new_event', data, namespace='/ws')
-        ws_manager.broadcast('new_event', data)
-        logger.debug(f"事件已推送到驾驶舱: {data.get('event_id', '')[:8]}... type={data.get('type', '')}")
+        # 异步派发到后台 greenlet，避免 ws.send 阻塞 eventlet hub 影响 AI 帧推送
+        log_tag = f"事件已推送到驾驶舱: {data.get('event_id', '')[:8]}... type={data.get('type', '')}"
+        socketio.start_background_task(_emit_ws_event, 'new_event', data, log_tag)
 
         return jsonify({'success': True})
 
@@ -862,9 +882,9 @@ def push_event_update_to_websocket():
         if not data or 'event_id' not in data:
             return jsonify({'error': '参数不完整'}), 400
 
-        socketio.emit('event_update', data, namespace='/ws')
-        ws_manager.broadcast('event_update', data)
-        logger.info(f"[Event] event_update 推送: event_id={data['event_id'][:8]}, status={data.get('status', '')}")
+        # 异步派发到后台 greenlet，避免 ws.send 阻塞 eventlet hub 影响 AI 帧推送
+        log_tag = f"[Event] event_update 推送: event_id={data['event_id'][:8]}, status={data.get('status', '')}"
+        socketio.start_background_task(_emit_ws_event, 'event_update', data, log_tag)
 
         return jsonify({'success': True})
 
@@ -884,9 +904,9 @@ def push_gif_ready_to_websocket():
         if not data or 'event_id' not in data:
             return jsonify({'error': '参数不完整'}), 400
 
-        socketio.emit('gif_ready', data, namespace='/ws')
-        ws_manager.broadcast('gif_ready', data)
-        logger.info(f"[GIF] gif_ready 推送: event_id={data['event_id'][:8]}")
+        # 异步派发到后台 greenlet，避免 ws.send 阻塞 eventlet hub 影响 AI 帧推送
+        log_tag = f"[GIF] gif_ready 推送: event_id={data['event_id'][:8]}"
+        socketio.start_background_task(_emit_ws_event, 'gif_ready', data, log_tag)
 
         return jsonify({'success': True})
 

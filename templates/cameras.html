@@ -1,4 +1,4 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 
 {% block title %}流媒体{% endblock %}
 
@@ -286,8 +286,8 @@
     </div>
 </div>
 
-<!-- 手动添加ONVIF模态框（原有注册模态框） -->
-<div id="manualAddModal" class="modal">
+<!-- 手动添加ONVIF模态框（原有注册模态框，作为二级模态框浮在扫描结果之上） -->
+<div id="manualAddModal" class="modal modal-secondary">
     <div class="modal-content">
         <div class="modal-header">
             <h3>ONVIF注册摄像机</h3>

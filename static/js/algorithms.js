@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SageSight AI - 算法库页面 JavaScript
  */
 window.Algorithms = (function() {
@@ -285,27 +285,28 @@ function formatFileSize(bytes) {
 }
 
 // ========================================
-// WebSocket 初始化
+// WebSocket 初始化（复用全局 socket，由 main.js 统一管理生命周期）
 // ========================================
 
 function initWebSocket() {
-    if (typeof io !== 'undefined') {
-        const socket = io('/ws', {
-            transports: ['websocket', 'polling']
-        });
-        
-        socket.on('algorithm_created', function(data) {
-            loadAlgorithms();
-        });
-        
-        socket.on('algorithm_updated', function(data) {
-            loadAlgorithms();
-        });
-        
-        socket.on('algorithm_deleted', function(data) {
-            loadAlgorithms();
-        });
+    // 复用 main.js 的全局 socket；监听器由 navigation.js cleanupPage → resetSocket 统一清理
+    const socket = (typeof SageSight !== 'undefined' && SageSight.socket) ? SageSight.socket() : null;
+    if (!socket) {
+        console.error('[算法页] 全局 socket 未就绪');
+        return;
     }
+
+    socket.on('algorithm_created', function(data) {
+        loadAlgorithms();
+    });
+
+    socket.on('algorithm_updated', function(data) {
+        loadAlgorithms();
+    });
+
+    socket.on('algorithm_deleted', function(data) {
+        loadAlgorithms();
+    });
 }
 
 // ========================================

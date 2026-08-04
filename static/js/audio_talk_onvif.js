@@ -20,7 +20,6 @@ let audioTalkSessionId = null;       // ONVIF会话ID
 let audioTalkActive = false;         // 对讲状态
 let audioContext = null;             // AudioContext
 let audioScriptProcessor = null;     // ScriptProcessorNode（音频处理）
-let audioWebSocket = null;           // WebSocket连接（实时音频传输）
 let audioTalkInterval = null;        // 音频发送定时器（POST方式）
 let audioDataBuffer = [];            // 音频数据缓存（POST方式）
 let audioBufferMaxSize = 100;        // 最大缓存数量（约200ms音频）
@@ -226,61 +225,12 @@ async function startAudioTalk() {
         audioScriptProcessor.connect(audioContext.destination);
         
         console.log('✓ 音频处理器已创建');
-        
-        // 步骤5: 启动WebSocket连接（实时音频传输）
-        console.log('建立WebSocket连接...');
+
+        // 步骤5: 启动 HTTP POST 音频传输（后端无 WebSocket 端点，统一走 POST）
+        console.log('启动音频传输...');
         updateAudioTalkInfo('建立实时传输通道...');
-        
-        try {
-            const wsUrl = `ws://${window.location.host}/api/audio/talk/ws`;
-            
-            audioWebSocket = new WebSocket(wsUrl);
-            
-            audioWebSocket.onopen = () => {
-                console.log('✓ WebSocket连接已建立');
-                
-                // 发送会话ID
-                audioWebSocket.send(JSON.stringify({
-                    type: 'session_start',
-                    session_id: audioTalkSessionId
-                }));
-                
-                // 标记为激活状态
-                audioTalkActive = true;
-                updateAudioTalkStatus('active');
-                updateAudioTalkInfo('✓ 语音对讲已开始');
-                showAudioTalkTip('语音对讲已开始（ONVIF Audio Back Channel）', 'success');
-                
-                // 更新按钮状态
-                document.getElementById('audioTalkStartBtn').disabled = true;
-                document.getElementById('audioTalkStopBtn').disabled = false;
-            };
-            
-            audioWebSocket.onerror = (error) => {
-                console.error('WebSocket错误:', error);
-                updateAudioTalkInfo('✗ WebSocket连接失败');
-                showAudioTalkTip('实时传输通道建立失败，将使用HTTP POST方式', 'warning');
-                
-                // 切换到POST方式
-                startAudioPOSTMode();
-            };
-            
-            audioWebSocket.onclose = () => {
-                console.log('WebSocket连接已关闭');
-                
-                if (audioTalkActive) {
-                    updateAudioTalkInfo('实时传输通道已断开');
-                }
-            };
-            
-        } catch (wsError) {
-            console.error('创建WebSocket失败:', wsError);
-            console.log('切换到HTTP POST方式');
-            
-            // 切换到POST方式
-            startAudioPOSTMode();
-        }
-        
+        startAudioPOSTMode();
+
     } catch (error) {
         console.error('开始语音对讲失败:', error);
         updateAudioTalkInfo('✗ 启动失败');
@@ -304,26 +254,18 @@ function float32ToPCM16(float32Data) {
 }
 
 /**
- * 发送音频数据到后端（WebSocket方式或缓存到buffer）
+ * 缓存音频数据到 buffer（供 HTTP POST 定时发送）
  */
 function sendAudioDataToBackend(pcmData) {
-    // 如果WebSocket可用，直接发送
-    if (audioWebSocket && audioWebSocket.readyState === WebSocket.OPEN) {
-        // 发送PCM数据（二进制）
-        audioWebSocket.send(pcmData.buffer);
-        console.log('✓ WebSocket发送音频数据:', pcmData.length, '采样');
-    } else {
-        // WebSocket不可用，缓存到buffer（用于HTTP POST）
-        audioDataBuffer.push(pcmData);
-        
-        // 控制buffer大小，避免内存溢出
-        if (audioDataBuffer.length > audioBufferMaxSize) {
-            // 移除最旧的数据
-            audioDataBuffer.shift();
-        }
-        
-        console.log('音频数据已缓存:', audioDataBuffer.length, '/', audioBufferMaxSize);
+    audioDataBuffer.push(pcmData);
+
+    // 控制 buffer 大小，避免内存溢出
+    if (audioDataBuffer.length > audioBufferMaxSize) {
+        // 移除最旧的数据
+        audioDataBuffer.shift();
     }
+
+    console.log('音频数据已缓存:', audioDataBuffer.length, '/', audioBufferMaxSize);
 }
 
 /**
@@ -459,13 +401,7 @@ async function stopAudioTalk() {
             audioContext.close();
             audioContext = null;
         }
-        
-        // 关闭WebSocket
-        if (audioWebSocket) {
-            audioWebSocket.close();
-            audioWebSocket = null;
-        }
-        
+
         // 停止定时器
         if (audioTalkInterval) {
             clearInterval(audioTalkInterval);

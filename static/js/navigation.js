@@ -176,6 +176,11 @@
      *       无法通过移除标签来清理，重复加载会导致 SyntaxError
      */
     function cleanupPage() {
+        // 通知后端停止所有正在推送的 AI 流（删除 .flag 标记文件），
+        // 避免 pjax 切换页面后后端继续编码/画框/推送造成 CPU 与带宽浪费
+        if (window.Monitor && typeof Monitor.cleanup === 'function') {
+            try { Monitor.cleanup(); } catch (e) { console.error('[cleanup] Monitor.cleanup 失败:', e); }
+        }
         // 停止所有定时器
         if (window.TimerManager && TimerManager.stopAll) {
             TimerManager.stopAll();

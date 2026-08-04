@@ -146,7 +146,7 @@
             <button class="modal-close" onclick="Tasks.closeModal()">&times;</button>
         </div>
         <div class="modal-body task-modal-body">
-            <form id="taskForm" style="display: flex; width: 100%;">
+            <form id="taskForm">
                 <input type="hidden" id="taskId">
 
                 <!-- 左列：任务参数配置 -->
@@ -843,75 +843,34 @@
                             <input type="number" id="displayTrajectoryHistory" name="display_trajectory_history" placeholder="30">
                         </div>
                         <div class="form-group">
-                            <label for="displayBoxColor">检测框颜色(BGR)</label>
-                            <input type="text" id="displayBoxColor" name="display_box_color" placeholder="0,255,0">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
                             <label for="displayBoxThickness">检测框线宽</label>
                             <input type="number" id="displayBoxThickness" name="display_box_thickness" placeholder="2">
                         </div>
+                    </div>
+                    <div class="form-row">
                         <div class="form-group">
                             <label for="displayBoxFontScale">检测框字体大小</label>
                             <input type="number" id="displayBoxFontScale" name="display_box_font_scale" step="0.1" placeholder="0.5">
                         </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="displayBoxLabelColor">检测框标签颜色(BGR)</label>
-                            <input type="text" id="displayBoxLabelColor" name="display_box_label_color" placeholder="0,255,0">
-                        </div>
-                        <div class="form-group">
-                            <label for="displayTrackColor">跟踪框颜色(BGR)</label>
-                            <input type="text" id="displayTrackColor" name="display_track_color" placeholder="255,0,0">
-                        </div>
-                    </div>
-                    <div class="form-row">
                         <div class="form-group">
                             <label for="displayTrackThickness">跟踪框线宽</label>
                             <input type="number" id="displayTrackThickness" name="display_track_thickness" placeholder="2">
                         </div>
+                    </div>
+                    <div class="form-row">
                         <div class="form-group">
                             <label for="displayTrackFontScale">跟踪框字体大小</label>
                             <input type="number" id="displayTrackFontScale" name="display_track_font_scale" step="0.1" placeholder="0.5">
                         </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="displayTrackLabelColor">跟踪框标签颜色(BGR)</label>
-                            <input type="text" id="displayTrackLabelColor" name="display_track_label_color" placeholder="255,0,0">
-                        </div>
-                        <div class="form-group">
-                            <label for="displayTrajectoryColor">轨迹颜色(BGR)</label>
-                            <input type="text" id="displayTrajectoryColor" name="display_trajectory_color" placeholder="0,255,255">
-                        </div>
-                    </div>
-                    <div class="form-row">
                         <div class="form-group">
                             <label for="displayTrajectoryThickness">轨迹线宽</label>
                             <input type="number" id="displayTrajectoryThickness" name="display_trajectory_thickness" placeholder="1">
                         </div>
+                    </div>
+                    <div class="form-row">
                         <div class="form-group">
                             <label for="displayTrajectoryPointSize">轨迹点大小</label>
                             <input type="number" id="displayTrajectoryPointSize" name="display_trajectory_point_size" placeholder="2">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="displayTrajectoryPointColor">轨迹点颜色(BGR)</label>
-                            <input type="text" id="displayTrajectoryPointColor" name="display_trajectory_point_color" placeholder="0,0,255">
-                        </div>
-                        <div class="form-group">
-                            <!-- 占位，保持布局对齐 -->
-                        </div>
-                    </div>
-
-                    <h5 class="form-subsection-title">运动区域绘制</h5>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="displayMotionRegionColor">区域边界颜色(BGR)</label>
-                            <input type="text" id="displayMotionRegionColor" name="display_motion_region_color" placeholder="255,255,0">
                         </div>
                         <div class="form-group">
                             <label for="displayMotionRegionThickness">区域边界线宽</label>
@@ -920,12 +879,53 @@
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="displayMotionRegionFillColor">区域填充颜色(BGR)</label>
-                            <input type="text" id="displayMotionRegionFillColor" name="display_motion_region_fill_color" placeholder="255,255,0">
-                        </div>
-                        <div class="form-group">
                             <label for="displayMotionRegionFillAlpha">填充透明度(0-255)</label>
                             <input type="number" id="displayMotionRegionFillAlpha" name="display_motion_region_fill_alpha" placeholder="50">
+                        </div>
+                        <div class="form-group">
+                            <!-- 占位，保持布局对齐 -->
+                        </div>
+                    </div>
+
+                    <h5 class="form-subsection-title">颜色管理器</h5>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayBoxColor">检测框颜色(BGR)</label>
+                            <input type="text" id="displayBoxColor" name="display_box_color" placeholder="0,255,0">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayBoxLabelColor">检测框标签颜色(BGR)</label>
+                            <input type="text" id="displayBoxLabelColor" name="display_box_label_color" placeholder="0,255,0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayTrackColor">跟踪框颜色(BGR)</label>
+                            <input type="text" id="displayTrackColor" name="display_track_color" placeholder="255,0,0">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayTrackLabelColor">跟踪框标签颜色(BGR)</label>
+                            <input type="text" id="displayTrackLabelColor" name="display_track_label_color" placeholder="255,0,0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayTrajectoryColor">轨迹颜色(BGR)</label>
+                            <input type="text" id="displayTrajectoryColor" name="display_trajectory_color" placeholder="0,255,255">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayTrajectoryPointColor">轨迹点颜色(BGR)</label>
+                            <input type="text" id="displayTrajectoryPointColor" name="display_trajectory_point_color" placeholder="0,0,255">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayMotionRegionColor">区域边界颜色(BGR)</label>
+                            <input type="text" id="displayMotionRegionColor" name="display_motion_region_color" placeholder="255,255,0">
+                        </div>
+                        <div class="form-group">
+                            <label for="displayMotionRegionFillColor">区域填充颜色(BGR)</label>
+                            <input type="text" id="displayMotionRegionFillColor" name="display_motion_region_fill_color" placeholder="255,255,0">
                         </div>
                     </div>
 

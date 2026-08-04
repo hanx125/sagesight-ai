@@ -252,316 +252,294 @@ a:hover {
 }
 
 /* ========================================
-   任务创建模态框 - 两列布局样式
-   ======================================== */
+   任务创建模态框 - 两列布局（通道列表滚动）
+   ========================================
+   布局结构：
+   .modal-xlarge            height:90vh, flex column
+     .modal-header          auto
+     .task-modal-body       flex:1 1 0, padding:16px, overflow:hidden
+       form                 display:flex, align-items:stretch, height:100%
+         .task-config-column     左 45%, min-height:0, overflow-y:auto
+         .task-cameras-column    右 calc(55%-20px), min-height:0, overflow:hidden
+           .cameras-column-header    flex:0 0 auto
+           .cameras-quick-add        flex:0 0 auto
+           .task-camera-pool         flex:1 1 0, min-height:0, overflow-y:auto  ← 滚动区
+           .camera-pool-stats        flex:0 0 auto  ← 贴底
+     .modal-footer          auto
+   关键点：通道列表固定显示几行，超出滚动；两列等高，统计信息贴右列底部
+*/
 
-/* 模态框整体布局 - 确保两列布局生效 */
+/* 模态框 body - 内容自适应 */
 .task-modal-body {
-    display: flex !important;
-    gap: 20px !important;
-    max-height: 70vh !important;
-    padding: 16px !important;
-    overflow: hidden !important;
+    padding: 16px;
 }
 
-.task-modal-body form {
-    display: flex !important;
-    width: 100% !important;
-    gap: 20px !important;
-    max-height: 100% !important;
+/* form 两列布局 - 各列高度由内容决定，不强制等高 */
+#taskForm {
+    display: flex;
+    width: 100%;
+    gap: 20px;
+    align-items: flex-start;
 }
 
-/* 左列：任务参数配置 - 支持独立滚动 */
-.task-config-column {
-    flex: 0 0 45% !important;  /* 左列宽度调整为45% */
-    display: flex !important;
-    flex-direction: column !important;
-    gap: 8px !important;
-    height: 100% !important;  /* 固定高度100% */
-    max-height: 100% !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    padding-right: 8px !important;
-    min-height: 0 !important;  /* 允许flex子元素正确计算高度 */
+/* 左列：任务参数配置 - 高度由内容决定 */
+#taskForm .task-config-column {
+    min-width: 0;
+    flex: 0 0 45%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-right: 8px;
 }
 
-/* 检测配置区域增加高度 */
-.task-config-column .form-section:nth-child(2) {
-    flex: 1 1 auto !important;  /* 自动拉伸以填充剩余高度 */
-    min-height: 180px !important;  /* 最小高度 */
-}
-
-/* 左列表单区块优化 - 减少内边距 */
-.task-config-column .form-section {
-    background: #fff !important;
-    border: 1px solid var(--border-color) !important;
-    border-radius: 6px !important;
-    padding: 10px !important;
+/* 左列表单区块 - 覆盖全局 .form-section 的 margin-bottom:24px */
+#taskForm .form-section {
+    flex: 0 0 auto;
+    margin-bottom: 0;
+    background: #fff;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 10px;
 }
 
 .task-config-column .form-section-title {
-    font-size: 14px !important;
-    font-weight: 600 !important;
-    margin-bottom: 8px !important;
-    padding-bottom: 6px !important;
-    border-bottom: 1px solid var(--border-color) !important;
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border-color);
 }
 
 /* 子段标题（display 页签内运动区域/报警/调试信息等分组） */
 .task-config-column .form-subsection-title {
-    font-size: 13px !important;
-    font-weight: 600 !important;
-    margin: 14px 0 8px 0 !important;
-    padding-bottom: 4px !important;
-    border-bottom: 1px dashed var(--border-color) !important;
+    font-size: 13px;
+    font-weight: 600;
+    margin: 14px 0 8px 0;
+    padding-bottom: 4px;
+    border-bottom: 1px dashed var(--border-color);
     color: var(--text-secondary, #555);
 }
 
-/* 两列布局核心样式 */
-.task-config-column .form-row {
-    display: flex !important;
-    flex-direction: row !important;
-    gap: 8px !important;
-    margin-bottom: 6px !important;
-    width: 100% !important;
+/* 表单行 - 覆盖全局 .form-row 的 display:grid */
+#taskForm .form-row {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    margin-bottom: 6px;
+    width: 100%;
 }
 
-.task-config-column .form-row:last-child {
-    margin-bottom: 0 !important;
-}
-
-/* 每个字段占50%宽度 */
-.task-config-column .form-group {
-    flex: 0 0 calc(50% - 4px) !important;
-    width: calc(50% - 4px) !important;
-    min-width: calc(50% - 4px) !important;
-    max-width: calc(50% - 4px) !important;
-    margin-bottom: 0 !important;
-}
-
-.task-config-column .form-group.form-group-full {
-    flex: 0 0 100% !important;
-    width: 100% !important;
-    min-width: 100% !important;
-    max-width: 100% !important;
-}
-
-.task-config-column label {
-    font-size: 13px !important;
-    font-weight: 500 !important;
-    margin-bottom: 3px !important;
-    display: block !important;
-}
-
-.task-config-column input,
-.task-config-column select,
-.task-config-column textarea {
-    width: 100% !important;
-    padding: 6px 8px !important;
-    font-size: 13px !important;
-    border: 1px solid var(--border-color) !important;
-    border-radius: 3px !important;
-}
-
-.task-config-column textarea {
-    resize: vertical !important;
-    font-family: monospace !important;
-    font-size: 12px !important;
-    padding: 5px 8px !important;
-}
-
-/* 高级配置折叠区块 - 默认最小化 */
-.task-config-column .collapsible .form-section-content {
-    padding-top: 8px !important;
-}
-
-.task-config-column .collapse-icon {
-    width: 16px !important;
-    height: 16px !important;
-}
-
-/* 右列：设备通道检测池 - 支持独立滚动 */
-.task-cameras-column {
-    flex: 0 0 45% !important;  /* 右列宽度调整为45%，与左列一致 */
-    background: #fff !important;
-    border: 1px solid var(--border-color) !important;
-    border-radius: 6px !important;
-    padding: 10px !important;  /* 与左侧form-section的padding一致 */
-    display: flex !important;
-    flex-direction: column !important;
-    height: 100% !important;  /* 固定高度100%，与左侧列一致 */
-    max-height: 100% !important;
-    overflow: hidden !important;
-}
-
-/* 摄像机列头部 */
-.cameras-column-header {
-    display: flex !important;
-    justify-content: space-between !important;
-    align-items: center !important;
-    margin-bottom: 8px !important;
-    padding-bottom: 8px !important;
-    border-bottom: 1px solid var(--border-color) !important;
-}
-
-.cameras-column-header h4 {
-    font-size: 14px !important;
-    font-weight: 600 !important;
-    color: var(--text-primary) !important;
-    margin: 0 !important;
-}
-
-/* 快速搜索栏 */
-.cameras-quick-add {
-    margin-bottom: 8px !important;
-}
-
-.cameras-quick-add input {
-    width: 100% !important;
-    padding: 6px 10px !important;
-    border: 1px solid var(--border-color) !important;
-    border-radius: 3px !important;
-    font-size: 13px !important;
-}
-
-/* 设备池列表 - 支持独立滚动 */
-.task-camera-pool {
-    flex: 1 !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    padding: 6px !important;
-    border: 1px solid var(--border-color) !important;
-    border-radius: 4px !important;
-    background: var(--bg-light) !important;
-    margin-bottom: 8px !important;
-    min-height: 200px !important;
-    max-height: calc(100% - 80px) !important;
-}
-
-/* 左列和右列滚动条样式 */
-.task-config-column::-webkit-scrollbar,
-.task-camera-pool::-webkit-scrollbar {
-    width: 6px !important;
-}
-
-.task-config-column::-webkit-scrollbar-thumb,
-.task-camera-pool::-webkit-scrollbar-thumb {
-    background: #c1c1c1 !important;
-    border-radius: 3px !important;
-}
-
-.task-config-column::-webkit-scrollbar-thumb:hover,
-.task-camera-pool::-webkit-scrollbar-thumb:hover {
-    background: #a8a8a8 !important;
-}
-
-.task-config-column::-webkit-scrollbar-track,
-.task-camera-pool::-webkit-scrollbar-track {
-    background: #f1f1f1 !important;
-    border-radius: 3px !important;
-}
-
-/* 设备池中的摄像机项 */
-.task-camera-pool .camera-pool-item {
-    display: flex !important;
-    align-items: center !important;
-    padding: 8px !important;
-    background: #fff !important;
-    border-radius: 3px !important;
-    margin-bottom: 4px !important;
-    border: 1px solid var(--border-color) !important;
-    transition: all 0.2s !important;
-}
-
-.task-camera-pool .camera-pool-item:last-child {
-    margin-bottom: 0 !important;
-}
-
-.task-camera-pool .camera-pool-item:hover {
-    border-color: var(--primary-color) !important;
-    box-shadow: 0 1px 3px rgba(38, 108, 251, 0.1) !important;
-}
-
-.camera-pool-info {
-    flex: 1 !important;
-}
-
-.camera-pool-name {
-    font-size: 13px !important;
-    font-weight: 500 !important;
-    color: var(--text-primary) !important;
-    margin-bottom: 2px !important;
-}
-
-.camera-pool-url {
-    font-size: 11px !important;
-    color: var(--text-secondary) !important;
-}
-
-.camera-pool-remove {
-    flex: 0 0 auto !important;
-    margin-left: 8px !important;
-}
-
-.camera-pool-remove button {
-    padding: 3px 6px !important;
-    background: transparent !important;
-    border: none !important;
-    color: var(--danger-color) !important;
-    cursor: pointer !important;
-    border-radius: 3px !important;
-    transition: background 0.2s !important;
-}
-
-.camera-pool-remove button:hover {
-    background: rgba(255, 77, 79, 0.1) !important;
-}
-
-.camera-pool-remove svg {
-    width: 14px !important;
-    height: 14px !important;
-}
-
-/* 设备池统计 */
-.camera-pool-stats {
-    padding: 6px 10px !important;
-    background: rgba(38, 108, 251, 0.05) !important;
-    border-radius: 3px !important;
-    text-align: center !important;
-}
-
-.camera-pool-stats span {
-    font-size: 12px !important;
-    color: var(--primary-color) !important;
-    font-weight: 500 !important;
-}
-
-/* 超大模态框样式已移至文件末尾统一管理 */
-
-/* 左列表单优化 */
-.task-config-column .form-section {
-    background: #fff;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 16px;
-}
-
-.task-config-column .form-row {
-    margin-bottom: 12px;
-}
-
-.task-config-column .form-row:last-child {
+#taskForm .form-row:last-child {
     margin-bottom: 0;
 }
 
-.task-config-column textarea {
-    width: 100% !important;
-    padding: 8px 12px;
+/* 每个字段占 50% 宽度 - 覆盖全局 .form-group 的 display:flex */
+#taskForm .form-group {
+    flex: 0 0 calc(50% - 4px);
+    width: calc(50% - 4px);
+    min-width: calc(50% - 4px);
+    max-width: calc(50% - 4px);
+    margin-bottom: 0;
+}
+
+#taskForm .form-group.form-group-full {
+    flex: 0 0 100%;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+}
+
+#taskForm .task-config-column label {
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 3px;
+    display: block;
+}
+
+/* 仅作用于左列参数配置区的表单控件，不影响右列头部下拉框和搜索框 */
+#taskForm .task-config-column input,
+#taskForm .task-config-column select,
+#taskForm .task-config-column textarea {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 13px;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+}
+
+#taskForm .task-config-column textarea {
+    resize: vertical;
+    font-family: monospace;
+    font-size: 12px;
+    padding: 5px 8px;
+    min-height: 0;
+}
+
+/* 高级配置折叠区块 */
+#taskForm .collapsible .form-section-content {
+    padding-top: 8px;
+}
+
+#taskForm .collapse-icon {
+    width: 16px;
+    height: 16px;
+}
+
+/* 右列：设备通道检测池 - 高度跟随内容自适应 */
+#taskForm .task-cameras-column {
+    min-width: 0;
+    flex: 0 0 calc(55% - 20px);
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 10px;
+}
+
+/* 摄像机列头部 */
+#taskForm .cameras-column-header {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+#taskForm .cameras-column-header h4 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+/* 快速搜索栏 */
+#taskForm .cameras-quick-add {
+    flex: 0 0 auto;
+    margin-bottom: 8px;
+}
+
+#taskForm .cameras-quick-add input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    font-size: 13px;
+}
+
+/* 设备池列表 - 固定高度，超出滚动显示 */
+#taskForm .task-camera-pool {
+    flex: 0 0 204px;
+    height: 204px;
+    min-height: 204px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 6px;
     border: 1px solid var(--border-color);
     border-radius: 4px;
+    background: var(--bg-light);
+    margin-bottom: 8px;
+}
+
+/* 左列和右列滚动条样式 */
+#taskForm .task-config-column::-webkit-scrollbar,
+#taskForm .task-camera-pool::-webkit-scrollbar {
+    width: 6px;
+}
+
+#taskForm .task-config-column::-webkit-scrollbar-thumb,
+#taskForm .task-camera-pool::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+
+#taskForm .task-config-column::-webkit-scrollbar-thumb:hover,
+#taskForm .task-camera-pool::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
+
+#taskForm .task-config-column::-webkit-scrollbar-track,
+#taskForm .task-camera-pool::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+}
+
+/* 设备池中的摄像机项 */
+#taskForm .camera-pool-item {
+    display: flex;
+    align-items: center;
+    padding: 8px;
+    background: #fff;
+    border-radius: 3px;
+    margin-bottom: 4px;
+    border: 1px solid var(--border-color);
+    transition: all 0.2s;
+}
+
+#taskForm .camera-pool-item:last-child {
+    margin-bottom: 0;
+}
+
+#taskForm .camera-pool-item:hover {
+    border-color: var(--primary-color);
+    box-shadow: 0 1px 3px rgba(38, 108, 251, 0.1);
+}
+
+#taskForm .camera-pool-info {
+    flex: 1;
+}
+
+#taskForm .camera-pool-name {
     font-size: 13px;
-    font-family: monospace;
-    resize: vertical;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+#taskForm .camera-pool-url {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+#taskForm .camera-pool-remove {
+    flex: 0 0 auto;
+    margin-left: 8px;
+}
+
+#taskForm .camera-pool-remove button {
+    padding: 3px 6px;
+    background: transparent;
+    border: none;
+    color: var(--danger-color);
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background 0.2s;
+}
+
+#taskForm .camera-pool-remove button:hover {
+    background: rgba(255, 77, 79, 0.1);
+}
+
+#taskForm .camera-pool-remove svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* 设备池统计 - 紧跟列表下方，不撑大容器 */
+#taskForm .camera-pool-stats {
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    background: rgba(38, 108, 251, 0.05);
+    border-radius: 3px;
+    text-align: center;
+}
+
+#taskForm .camera-pool-stats span {
+    font-size: 12px;
+    color: var(--primary-color);
+    font-weight: 500;
 }
 
 /* ========================================
@@ -2426,8 +2404,17 @@ body.pjax-loading main.main-wrapper {
 }
 
 .modal-xlarge {
-    max-width: 850px;  /* 减小宽度：900px → 850px，使两列布局更紧凑 */
+    max-width: 850px;
     width: 95%;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* .modal-xlarge 下的 .modal-body 内容自适应，超出时滚动 */
+.modal-xlarge > .modal-body {
+    flex: 0 1 auto;
+    overflow-y: auto;
 }
 
 @keyframes slideIn {

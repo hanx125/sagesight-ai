@@ -69,19 +69,22 @@ class FrameCache:
         self._total_pushed = 0
         self._total_sampled = 0
 
-    def push(self, frame_time: float, image: np.ndarray):
+    def push(self, frame_time: float, image: np.ndarray) -> bool:
         """
         尝试将帧写入缓存（按 cache_fps 采样，JPEG 压缩存储）
 
         Args:
             frame_time: 帧时间戳
             image: 帧图像（BGR 格式）
+
+        Returns:
+            True 表示帧实际写入缓存（采样通过+编码成功），False 表示被采样过滤或编码失败
         """
         self._total_pushed += 1
 
         # 采样控制：仅当距上次采样超过采样间隔时才写入
         if frame_time - self._last_sample_time < self._sample_interval:
-            return
+            return False
 
         self._last_sample_time = frame_time
         self._total_sampled += 1
@@ -91,10 +94,12 @@ class FrameCache:
             ok, encoded = cv2.imencode('.jpg', image, _JPEG_ENCODE_PARAMS)
             if ok:
                 self._frames.append((frame_time, encoded.tobytes()))
+                return True
             else:
                 logger.warning(f"[FrameCache] JPEG 编码失败: camera_id={self.camera_id}")
         except Exception as e:
             logger.warning(f"[FrameCache] 压缩帧失败: {e}")
+        return False
 
     def get_frames(self, start_time: float, end_time: float,
                    max_frames: int = 60) -> List[Tuple[float, np.ndarray]]:

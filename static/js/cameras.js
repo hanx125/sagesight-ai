@@ -405,7 +405,6 @@ function closeManualAddModal() {
 function openOnvifRegisterModal(ip, port) {
     // 调试：打印接收的参数
     console.log('openOnvifRegisterModal 参数:', { ip, port });
-    closeDiscoverModal();
     openManualAddModal();
     
     // 预填充IP地址和端口
@@ -505,7 +504,6 @@ async function startDiscover() {
 function registerDiscoveredDevice(ip, port) {
     // 调试：打印传递的参数
     console.log('registerDiscoveredDevice 参数:', { ip, port });
-    closeDiscoverModal();
     openOnvifRegisterModal(ip, port);
 }
 
@@ -651,9 +649,8 @@ async function startNetworkScan() {
 }
 
 function registerNetworkDevice(ip, port) {
-    closeDiscoverModal();
     openManualAddModal();
-    
+
     // 预填充IP地址和端口
     setTimeout(() => {
         document.getElementById('onvifIp').value = ip;
@@ -1533,6 +1530,8 @@ return {
     startNetworkScan: startNetworkScan,
     registerDiscoveredDevice: registerDiscoveredDevice,
     registerOnvifCamera: registerOnvifCamera,
+    registerNetworkDevice: registerNetworkDevice,
+    openOnvifRegisterModal: openOnvifRegisterModal,
     closeOnvifRegisterModal: closeOnvifRegisterModal,
     openEditModal: openEditModal,
     openManualAddModal: openManualAddModal,
