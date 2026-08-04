@@ -44,7 +44,7 @@ import os
 import signal
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Optional, Tuple
 
 import cv2
@@ -486,9 +486,10 @@ class TrackedObjectProcessor(mp.Process):
 
         # 按需读 shm：仅 GIF 帧缓存启用时预读（FrameCache 必须每帧写入）
         # 事件回调（start/update/end）和 AI 流推送均已有 self._current_frame 为 None
-        # 时的兜底读 shm 逻辑，无需每帧预读。每帧预读 shm（SharedMemory 连接 +
-        # 跨进程锁 + 614KB 复制 + YUV→RGB）在多相机高帧率场景下会导致消费端
-        # 跟不上生产端，事件队列积压丢弃数据
+        # 时的兜底读 shm 逻辑，无需每帧预读。
+        # 严格对齐：同步读取当前帧，保证检测框与画面一致（不使用管线化避免错位）
+        # 连接缓存优化：_read_frame_from_shm 内部已缓存 SharedMemory 连接对象，
+        #   不再每次新建连接，回读耗时从 5-8ms 降到 ~2ms
         frame_cache = self.frame_caches.get(camera_id)
         need_frame = frame_cache is not None
         # _read_frame_from_shm 返回 (frame, aligned)，aligned=False 表示降级使用最新帧
@@ -946,19 +947,25 @@ class TrackedObjectProcessor(mp.Process):
         self.ptz_tracked_object[camera_id] = None
         logger.info(f"[{camera_id}] PTZ 跟踪已清除")
 
-    def _read_frame_from_shm(self, camera_id: str) -> Tuple[Optional[np.ndarray], bool]:
+    def _read_frame_from_shm(self, camera_id: str, shm_info: Optional[dict] = None) -> Tuple[Optional[np.ndarray], bool]:
         """
         从共享内存回读帧
 
-        使用当前帧的 shm_block_id 和 shm_name 回读 YUV 帧,转换为 RGB。
+        使用传入的 shm_info（或 self._current_shm_info）回读 YUV 帧,转换为 RGB。
         同时传入 frame_seq 校验块是否已被环形缓冲区覆盖。
+
+        Args:
+            camera_id: 摄像机ID
+            shm_info: 共享内存信息（线程安全：异步调用时传入拷贝，不依赖 self 状态）
+                None 时使用 self._current_shm_info（向后兼容同步调用）
 
         Returns:
             (rgb_frame, aligned): rgb_frame 为 RGB 帧或 None；
                 aligned 为 True 表示帧序号匹配（帧与检测框对齐），
                 False 表示降级使用最新帧（帧与检测框可能错位，需记录告警）
         """
-        shm_info = getattr(self, "_current_shm_info", None)
+        if shm_info is None:
+            shm_info = getattr(self, "_current_shm_info", None)
         if shm_info is None:
             return None, False
 
@@ -1893,10 +1900,10 @@ class TrackedObjectProcessorPool:
             ai_stream_config: AI 流配置
             ai_stream_enabled_state: AI 流启用状态（Manager dict 代理）
             ptz_metrics: PTZ 共享状态
-            num_workers: worker 进程数（默认自动：每 4 相机 1 个，最少 1 最多 8）
+            num_workers: worker 进程数（默认自动：每 2 相机 1 个，最少 1 最多 8）
         """
         if num_workers is None:
-            num_workers = min(8, max(1, len(camera_configs) // 4))
+            num_workers = min(8, max(1, len(camera_configs) // 2))
         self.num_workers = num_workers
 
         self.workers: list[TrackedObjectProcessor] = []

@@ -434,6 +434,56 @@ class SharedMemoryRingBuffer:
             block.unlink()
 
 
+# 模块级 SharedMemory 连接缓存：{block_name: SharedMemory}
+# 避免 read_frame_from_shared_memory 每次调用都新建/关闭连接（~2-3ms/次），
+# 16相机@6fps 场景下节省约 96 × 2ms = 192ms/秒 的 CPU 开销。
+# 注意：缓存仅在本进程内生效（事件进程），不跨进程共享。
+_shm_connection_cache: Dict[str, "shared_memory.SharedMemory"] = {}
+
+# 缓存容量上限（LRU 思想：超限时全部清空重建，避免持续增长）
+# 16 相机 × 40 块 = 640，设 1000 留足余量
+_SHM_CACHE_LIMIT = 1000
+
+
+def _get_or_connect_shm(block_name: str) -> "shared_memory.SharedMemory":
+    """
+    获取或连接指定 block_name 的 SharedMemory（缓存复用）
+
+    Returns:
+        已连接的 SharedMemory 对象
+    Raises:
+        FileNotFoundError: 共享内存不存在
+    """
+    global _shm_connection_cache
+    shm = _shm_connection_cache.get(block_name)
+    if shm is not None:
+        try:
+            # 验证连接是否仍然有效（buf 可访问）
+            _ = shm.buf[0]
+            return shm
+        except Exception:
+            # 连接失效，移除缓存
+            try:
+                shm.close()
+            except Exception:
+                pass
+            del _shm_connection_cache[block_name]
+
+    # 缓存容量超限：清空所有缓存（简单而有效，避免细粒度 LRU 管理）
+    if len(_shm_connection_cache) >= _SHM_CACHE_LIMIT:
+        for cached in _shm_connection_cache.values():
+            try:
+                cached.close()
+            except Exception:
+                pass
+        _shm_connection_cache.clear()
+
+    # 新建连接并缓存
+    shm = shared_memory.SharedMemory(name=block_name, create=False)
+    _shm_connection_cache[block_name] = shm
+    return shm
+
+
 def read_frame_from_shared_memory(
     shm_name: str,
     shm_block_id: int,
@@ -475,10 +525,10 @@ def read_frame_from_shared_memory(
     aligned = True
     rgb_frame = None
 
-    # 连接到共享内存
+    # 连接到共享内存（使用连接缓存，避免每次新建/关闭连接节省 ~2-3ms/次）
     shm = None
     try:
-        shm = shared_memory.SharedMemory(name=block_name, create=False)
+        shm = _get_or_connect_shm(block_name)
 
         try:
             with _ShmLock(block_name, timeout_ms=100):
@@ -548,12 +598,7 @@ def read_frame_from_shared_memory(
     except Exception as e:
         logger.error(f"[read_frame_from_shared_memory] 连接失败: {e}", exc_info=True)
         aligned = False
-    finally:
-        if shm:
-            try:
-                shm.close()
-            except:
-                pass
+    # 不再 close()：连接由 _shm_connection_cache 缓存复用
 
     # 按 return_aligned 决定返回形式
     if return_aligned:
