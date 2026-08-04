@@ -65,6 +65,15 @@ def _camera_worker_process_wrapper(
         stop_event: 停止事件（mp.Event）
         ptz_metrics: PTZ 共享状态（可选）
     """
+    # 子进程日志配置：用 QueueHandler 把日志发到主进程，避免多进程写同一文件
+    # Windows spawn 模式下子进程会继承主进程的 RotatingFileHandler，多进程同时
+    # 写同一日志文件会触发 PermissionError [WinError 32]（文件锁冲突）
+    try:
+        from src.utils.log_manager import LogManager
+        LogManager.get_instance().setup_worker_process()
+    except Exception:
+        pass
+
     try:
         worker = CameraWorker(
             camera_config=camera_config,
@@ -132,6 +141,9 @@ class CameraWorker:
         self.decoder_cfg = task_config.get('decoder_config', {})
         self.tracker_cfg = task_config.get('tracker_config', {})
         self.motion_cfg = task_config.get('motion_config', {})
+        # 功能开关
+        self.motion_detection_enabled = task_config.get('motion_detection_enabled', True)
+        self.tracking_enabled = task_config.get('tracking_enabled', True)
         # zones_config 是通道级配置（存储于 device_channel_pool.zones_config），
         # 由 run.py 通过 task_manager.get_channel_zones() 读取并附加到 camera_config。
         # task_config 是任务级配置，不含通道级 zones_config，必须从 camera_config 读取。
@@ -268,8 +280,9 @@ class CameraWorker:
 
                 # 新架构配置参数
                 'use_ring_buffer': self.decoder_cfg.get('use_ring_buffer', True),
-                # 增大环形缓冲区块数，避免事件进程回读 YUV 时被覆盖
-                'ring_buffer_block_count': self.decoder_cfg.get('ring_buffer_block_count', 16),
+                # 环形缓冲区块数：需覆盖事件进程回读延迟（队列+检测+跟踪+事件回调+SHM回读）
+                # 16相机@6fps场景下事件链路延迟约1.5-2秒，40块可缓存约6.7秒，留足余量
+                'ring_buffer_block_count': self.decoder_cfg.get('ring_buffer_block_count', 40),
                 'index_queue_size': self.decoder_cfg.get('index_queue_size', 30),
 
                 # 摄像机 ID 和任务 ID（避免共享内存冲突）
@@ -291,10 +304,12 @@ class CameraWorker:
                 decoder_config['video_file'] = ''
                 logger.debug(f"[CameraWorker-{self.camera_id}] RTSP 流输入: {self.rtsp_url}")
 
+            # 仅创建解码器对象，不启动：避免在 pipeline 组件（RemoteObjectDetector/
+            # MotionDetector/NorfairTracker）创建完成前 FFmpeg 就开始写帧，
+            # 导致环形缓冲区被覆盖多圈、事件进程回读时帧序号全部不匹配
             self.decoder = VideoDecoder(decoder_config)
-            self.decoder.start()
 
-            logger.debug(f"[CameraWorker-{self.camera_id}] 解码器初始化成功")
+            logger.debug(f"[CameraWorker-{self.camera_id}] 解码器初始化成功（未启动，等待 pipeline 组件就绪后启动）")
             logger.debug(f"[CameraWorker-{self.camera_id}]   分辨率: {decoder_config['width']}x{decoder_config['height']}")
             logger.debug(f"[CameraWorker-{self.camera_id}]   硬件加速: {decoder_config['hwaccel_preset']}")
             logger.debug(f"[CameraWorker-{self.camera_id}]   环形缓冲区块数: {decoder_config['ring_buffer_block_count']}")
@@ -312,9 +327,10 @@ class CameraWorker:
         运行摄像机检测
 
         流程：
-        1. 初始化解码器（init_components）
+        1. init_components 创建解码器对象（不启动，避免 FFmpeg 提前写帧导致环形缓冲区被覆盖）
         2. 在子进程内创建 RemoteObjectDetector / ImprovedMotionDetector / NorfairTracker
-        3. 调用 camera_pipeline.run_pipeline() 主循环
+        3. pipeline 组件就绪后启动解码器（decoder.start），确保首帧即可被消费
+        4. 调用 camera_pipeline.run_pipeline() 主循环
         """
         self.running = True
 
@@ -370,40 +386,48 @@ class CameraWorker:
             # ========================================
             # 2. 创建 ImprovedMotionDetector（帧差法）
             # ========================================
-            logger.debug(f"[CameraWorker-{self.camera_id}] 创建 ImprovedMotionDetector...")
-            self.motion_detector = ImprovedMotionDetector(
-                frame_shape=self.frame_shape,
-                motion_height=self.motion_cfg.get('motion_height', 180),
-                threshold=self.motion_cfg.get('threshold', 25),
-                contour_area=self.motion_cfg.get('contour_area', 200),
-                improve_contrast=self.motion_cfg.get('improve_contrast', True),
-                blur_radius=self.motion_cfg.get('blur_radius', 1),
-                frame_alpha=self.motion_cfg.get('frame_alpha', 0.2),
-                contrast_frame_history=self.motion_cfg.get('contrast_frame_history', 50),
-                lightning_threshold=self.motion_cfg.get('lightning_threshold', 0.8),
-            )
-            logger.debug(f"[CameraWorker-{self.camera_id}] ImprovedMotionDetector 创建成功")
+            if self.motion_detection_enabled:
+                logger.debug(f"[CameraWorker-{self.camera_id}] 创建 ImprovedMotionDetector...")
+                self.motion_detector = ImprovedMotionDetector(
+                    frame_shape=self.frame_shape,
+                    motion_height=self.motion_cfg.get('motion_height', 180),
+                    threshold=self.motion_cfg.get('threshold', 25),
+                    contour_area=self.motion_cfg.get('contour_area', 200),
+                    improve_contrast=self.motion_cfg.get('improve_contrast', True),
+                    blur_radius=self.motion_cfg.get('blur_radius', 1),
+                    frame_alpha=self.motion_cfg.get('frame_alpha', 0.2),
+                    contrast_frame_history=self.motion_cfg.get('contrast_frame_history', 50),
+                    lightning_threshold=self.motion_cfg.get('lightning_threshold', 0.8),
+                )
+                logger.debug(f"[CameraWorker-{self.camera_id}] ImprovedMotionDetector 创建成功")
+            else:
+                self.motion_detector = None
+                logger.info(f"[CameraWorker-{self.camera_id}] 运动检测已关闭，跳过创建 ImprovedMotionDetector")
 
             # ========================================
             # 3. 创建 NorfairTracker
             # ========================================
-            logger.debug(f"[CameraWorker-{self.camera_id}] 创建 NorfairTracker...")
-            detect_config = {
-                'min_initialized': self.tracker_cfg.get('n_init', 3),
-                'max_disappeared': self.tracker_cfg.get('max_age', 30),
-                'stationary_threshold': self.task_config.get('stationary_threshold', 10),
-                'threshold': self.detect_threshold,
-                'max_frames': self.task_config.get('max_frames', {}),
-                'fps': self.decoder_cfg.get('fps', 25),
-            }
-            self.tracker = NorfairTracker(
-                camera_id=self.camera_id,
-                frame_shape=self.frame_shape,
-                detect_config=detect_config,
-                ptz_metrics=self.ptz_metrics,
-                zones_config=self.zones_config,
-            )
-            logger.debug(f"[CameraWorker-{self.camera_id}] NorfairTracker 创建成功")
+            if self.tracking_enabled:
+                logger.debug(f"[CameraWorker-{self.camera_id}] 创建 NorfairTracker...")
+                detect_config = {
+                    'min_initialized': self.tracker_cfg.get('n_init', 3),
+                    'max_disappeared': self.tracker_cfg.get('max_age', 30),
+                    'stationary_threshold': self.task_config.get('stationary_threshold', 10),
+                    'threshold': self.detect_threshold,
+                    'max_frames': self.task_config.get('max_frames', {}),
+                    'fps': self.decoder_cfg.get('fps', 25),
+                }
+                self.tracker = NorfairTracker(
+                    camera_id=self.camera_id,
+                    frame_shape=self.frame_shape,
+                    detect_config=detect_config,
+                    ptz_metrics=self.ptz_metrics,
+                    zones_config=self.zones_config,
+                )
+                logger.debug(f"[CameraWorker-{self.camera_id}] NorfairTracker 创建成功")
+            else:
+                self.tracker = None
+                logger.info(f"[CameraWorker-{self.camera_id}] 目标跟踪已关闭，跳过创建 NorfairTracker")
             # 打印 zones_config 加载情况，便于确认通道级 zone 配置（含徘徊设置）是否正确传入
             if self.zones_config:
                 zones_info = ", ".join(
@@ -417,8 +441,14 @@ class CameraWorker:
                 logger.info(f"[CameraWorker-{self.camera_id}] zones_config 为空，zone 检测与徘徊告警将不可用")
 
             # ========================================
-            # 4. 调用 run_pipeline 主循环
+            # 4. 启动解码器并调用 run_pipeline 主循环
+            # 此时 pipeline 组件（检测器/运动检测/跟踪器）均已就绪，
+            # 解码器启动后 FFmpeg 写入的第一帧即可被 pipeline 立即消费，
+            # 避免环形缓冲区在被读取前就被覆盖
             # ========================================
+            logger.info(f"[CameraWorker-{self.camera_id}] pipeline 组件就绪，启动解码器")
+            self.decoder.start()
+
             logger.debug(f"[CameraWorker-{self.camera_id}] 启动检测管道主循环")
             logger.debug(f"[CameraWorker-{self.camera_id}]   frame_shape={self.frame_shape}")
             logger.debug(f"[CameraWorker-{self.camera_id}]   model_size={self.model_size}")
@@ -568,7 +598,7 @@ class MultiCameraTaskExecutor:
                 'use_fp16': detector_config_block.get('use_fp16', True),
                 'engine_cache_path': detector_config_block.get('engine_cache_path', './trt_cache'),
                 'device_id': detector_config_block.get('device_id', 0),
-                'gpu_mem_limit': detector_config_block.get('gpu_mem_limit', 6442450944),
+                'gpu_mem_limit': detector_config_block.get('gpu_mem_limit', 0),
                 'tensorrt_lib_path': detector_config_block.get('tensorrt_lib_path', ''),
                 'tensorrt_engine_path': detector_config_block.get('tensorrt_engine_path', ''),
                 'rknn_target': detector_config_block.get('rknn_target', 'rk3588'),
@@ -727,7 +757,23 @@ class MultiCameraTaskExecutor:
                 'input_height': input_height,
             }
 
-            num_detectors = self.task_config.get('num_detectors', 3)
+            # 检测器进程数：优先用 detector_config 中的配置，否则按摄像机数自动计算
+            num_detectors = detector_config_block.get('num_detectors')
+            if num_detectors is None:
+                num_detectors = max(2, min(16, (len(camera_ids) + 3) // 4))
+                logger.info(f"[MultiCameraExecutor-{self.task_id}] 检测器数量自动计算: "
+                            f"{len(camera_ids)}路摄像机 → {num_detectors}个检测器")
+            else:
+                logger.info(f"[MultiCameraExecutor-{self.task_id}] 检测器数量(手动配置): {num_detectors}")
+
+            # 多进程共享 GPU 时强制取消 per-process gpu_mem_limit
+            # gpu_mem_limit 是每进程上限，N进程 × 6GB 在 8GB 显卡上会互相抢占导致 CUDA handle 损坏
+            if num_detectors > 1 and detector_config_dict.get('gpu_mem_limit'):
+                logger.info(f"[MultiCameraExecutor-{self.task_id}] 多进程({num_detectors})场景, "
+                            f"取消 per-process gpu_mem_limit={detector_config_dict['gpu_mem_limit']}, "
+                            f"改由 ONNX 动态管理显存")
+                detector_config_dict['gpu_mem_limit'] = 0
+
             input_shape = (1, input_height, input_width, 3)
 
             # 注册任务（创建共享内存 + RemoteObjectDetector）
@@ -769,6 +815,9 @@ class MultiCameraTaskExecutor:
             # ========================================
             self.detected_objects_queue = multiprocessing.Queue(maxsize=2000)
             self.stop_event = multiprocessing.Event()
+            # processor 就绪事件：子进程完成初始化后 set，
+            # 主进程等待此事件后再启动 CameraWorker，避免队列在 processor 就绪前被填满
+            self.processor_ready_event = multiprocessing.Event()
 
             # ========================================
             # 步骤7：构建 camera_configs（给 TrackedObjectProcessor 用）
@@ -798,11 +847,13 @@ class MultiCameraTaskExecutor:
             ai_stream_config = self._build_ai_stream_config()
 
             # ========================================
-            # 步骤9：创建 TrackedObjectProcessor 进程
+            # 步骤9：创建 TrackedObjectProcessorPool（多进程并行处理事件）
+            # 单进程处理 16 路高帧率相机时吞吐量不足，改为多进程：
+            # 每 4 个相机 1 个 worker 进程（最少 1 最多 8），分发线程按 camera_id 路由
             # ========================================
-            from src.events.tracked_object_processor import TrackedObjectProcessor
+            from src.events.tracked_object_processor import TrackedObjectProcessorPool
 
-            self.tracked_object_processor = TrackedObjectProcessor(
+            self.tracked_object_processor = TrackedObjectProcessorPool(
                 camera_configs=camera_configs_for_processor,
                 detected_objects_queue=self.detected_objects_queue,
                 stop_event=self.stop_event,
@@ -811,7 +862,7 @@ class MultiCameraTaskExecutor:
                 ptz_metrics=self.ptz_metrics if self.ptz_metrics else None,
             )
 
-            logger.debug(f"[MultiCameraExecutor-{self.task_id}] TrackedObjectProcessor 初始化完成")
+            logger.debug(f"[MultiCameraExecutor-{self.task_id}] TrackedObjectProcessorPool 初始化完成")
 
             return True
 
@@ -876,9 +927,41 @@ class MultiCameraTaskExecutor:
         # 1. 启动所有检测器进程（必须先于 CameraWorker，确保共享内存已就绪）
         self.detector_pool_manager.start_all()
 
-        # 2. 启动 TrackedObjectProcessor 进程
+        # 等待检测器进程就绪（模型加载+SHM连接完成）
+        # 不等待的话 CameraWorker 启动后检测全部超时，帧被环形缓冲区覆盖
+        logger.info(f"[MultiCameraExecutor-{self.task_id}] 等待检测器进程加载模型...")
+        _wait_start = time.time()
+        if not self.detector_pool_manager.wait_ready(timeout=120):
+            logger.warning(
+                f"[MultiCameraExecutor-{self.task_id}] "
+                f"等待检测器就绪超时(120s)，部分检测器可能未就绪，继续启动"
+            )
+        else:
+            logger.info(
+                f"[MultiCameraExecutor-{self.task_id}] "
+                f"所有检测器已就绪（模型加载+SHM连接完成），耗时 {time.time()-_wait_start:.2f}s"
+            )
+
+        # 2. 启动 TrackedObjectProcessorPool（多进程并行处理事件）
+        _proc_start = time.time()
         self.tracked_object_processor.start()
-        logger.debug(f"[MultiCameraExecutor-{self.task_id}] TrackedObjectProcessor 已启动")
+        logger.info(
+            f"[MultiCameraExecutor-{self.task_id}] "
+            f"TrackedObjectProcessorPool 已启动 (workers={self.tracked_object_processor.num_workers})"
+        )
+
+        # 等待所有 worker 完成初始化（CameraState/EventOutput/FrameCache/线程池就绪）
+        # 再启动 CameraWorker，避免 CameraWorker 投递的帧在 worker 就绪前填满队列
+        if not self.tracked_object_processor.wait_ready(timeout=60):
+            logger.warning(
+                f"[MultiCameraExecutor-{self.task_id}] "
+                f"等待 TrackedObjectProcessorPool 就绪超时(60s)，继续启动 CameraWorker"
+            )
+        else:
+            logger.info(
+                f"[MultiCameraExecutor-{self.task_id}] "
+                f"TrackedObjectProcessorPool 所有 worker 已就绪，耗时 {time.time()-_proc_start:.2f}s，开始启动 CameraWorker"
+            )
 
         # 3. 为每个摄像机创建工作进程
         for camera in self.cameras:
@@ -956,6 +1039,11 @@ class MultiCameraTaskExecutor:
                     logger.debug(f"[MultiCameraExecutor-{self.task_id}] 所有工作进程已停止，退出主循环")
                     self.running = False
                     break
+
+                # 检查并重启死掉的检测器进程
+                # 检测器进程可能因 CUDA 错误、OOM 等原因退出，不重启会导致队列堆积、所有 CameraWorker 超时
+                if self.detector_pool_manager:
+                    self.detector_pool_manager.check_and_restart_dead()
 
                 # 每5秒检查一次进程状态
                 time.sleep(5)

@@ -207,9 +207,8 @@ class ZoneManager:
             if len(pixel_polygon) < 3:
                 continue
 
-            # 颜色（配置中为 RGB，OpenCV 使用 BGR）
-            color_rgb = zone.color if zone.color else [0, 255, 0]
-            color_bgr = tuple(reversed(color_rgb))
+            # 颜色（zones_config 中为 RGB 格式，帧也是 RGB，直接使用）
+            color = tuple(zone.color if zone.color else [0, 255, 0])
 
             # 活跃区域高亮（提高填充透明度）
             is_active = zone.name in active_zones
@@ -218,11 +217,11 @@ class ZoneManager:
 
             # 半透明填充
             overlay = frame.copy()
-            cv2.fillPoly(overlay, [pixel_polygon], color_bgr)
+            cv2.fillPoly(overlay, [pixel_polygon], color)
             frame = cv2.addWeighted(overlay, fill_alpha, frame, 1 - fill_alpha, 0)
 
             # 边框
-            cv2.polylines(frame, [pixel_polygon], True, color_bgr, border_thickness)
+            cv2.polylines(frame, [pixel_polygon], True, color, border_thickness)
 
             # 区域名称（绘制在重心位置）
             moments = cv2.moments(pixel_polygon)

@@ -5,6 +5,58 @@
 // 当前配置的任务ID
 let currentConfigTaskId = null;
 
+// 辅助函数：解析颜色输入（#RRGGBB 或 R,G,B）为 RGB 数组
+function _parseColorInput(value, defaultColor) {
+    if (!value || typeof value !== 'string') return defaultColor;
+    if (value.startsWith('#')) {
+        const hex = value.slice(1);
+        if (hex.length === 6) {
+            const r = parseInt(hex.slice(0, 2), 16);
+            const g = parseInt(hex.slice(2, 4), 16);
+            const b = parseInt(hex.slice(4, 6), 16);
+            if (!isNaN(r) && !isNaN(g) && !isNaN(b)) return [r, g, b];
+        }
+        return defaultColor;
+    }
+    const parts = value.trim().split(/[,\s]+/).map(s => parseInt(s.trim()));
+    if (parts.length === 3 && parts.every(n => !isNaN(n) && n >= 0 && n <= 255)) return parts;
+    return defaultColor;
+}
+
+// 辅助函数：RGB 数组转 #RRGGBB（用于 color picker）
+function _colorToHex(colorArr, defaultHex) {
+    if (Array.isArray(colorArr) && colorArr.length === 3 &&
+        colorArr.every(n => typeof n === 'number' && !isNaN(n) && n >= 0 && n <= 255)) {
+        const toHex = n => n.toString(16).padStart(2, '0');
+        return '#' + toHex(colorArr[0]) + toHex(colorArr[1]) + toHex(colorArr[2]);
+    }
+    return defaultHex;
+}
+
+// 辅助函数：RGB 数组转 "R,G,B"（用于显示）
+function _colorToRgbText(colorArr, defaultText) {
+    if (Array.isArray(colorArr) && colorArr.length === 3 &&
+        colorArr.every(n => typeof n === 'number' && !isNaN(n) && n >= 0 && n <= 255)) {
+        return colorArr.join(',');
+    }
+    return defaultText;
+}
+
+// 辅助函数：设置颜色选择器 + 对应 RGB 文本显示
+function _setColorInput(id, colorArr, defaultHex, defaultRgb) {
+    const picker = document.getElementById(id);
+    const display = document.getElementById(id + 'Value');
+    if (picker) picker.value = _colorToHex(colorArr, defaultHex);
+    if (display) display.textContent = _colorToRgbText(colorArr, defaultRgb);
+}
+
+// 辅助函数：从颜色选择器读取 RGB 数组（自动处理 #RRGGBB 格式）
+function _getColorFromInput(id, defaultColor) {
+    const picker = document.getElementById(id);
+    if (!picker) return defaultColor;
+    return _parseColorInput(picker.value, defaultColor);
+}
+
 /**
  * 存储开关归一化：将旧版 method / output_method / local_backup 字段统一转换为独立开关
  * 优先级：独立开关字段 > 旧版 method 字段 > 默认值
@@ -114,7 +166,7 @@ function loadConfigToForm(task) {
     document.getElementById('decoderBufferSize').value = decoderConfig.buffer_size || 2097152;  // 2MB
     
     // ========== 环形缓冲区配置（新架构）==========
-    document.getElementById('decoderRingBufferBlockCount').value = decoderConfig.ring_buffer_block_count || 10;
+    document.getElementById('decoderRingBufferBlockCount').value = decoderConfig.ring_buffer_block_count ?? 40;
     document.getElementById('decoderIndexQueueSize').value = decoderConfig.index_queue_size || 50;
     
     // ========== FFmpeg 滤镜参数（视频预处理）==========
@@ -136,6 +188,12 @@ function loadConfigToForm(task) {
     const gpuMemLimitBytes = detectorConfig.gpu_mem_limit || 6442450944;  // 6GB
     const gpuMemLimitMB = Math.round(gpuMemLimitBytes / (1024 * 1024));  // 转换为MB
     document.getElementById('detectorGpuMemLimit').value = gpuMemLimitMB || 6144;
+
+    // 检测器进程数（null 表示自动计算）
+    const numDetectorsEl = document.getElementById('detectorNumDetectors');
+    if (numDetectorsEl) {
+        numDetectorsEl.value = detectorConfig.num_detectors != null ? detectorConfig.num_detectors : '';
+    }
 
     // 跟踪器配置（Norfair）
     const trackerConfig = task.tracker_config || {};
@@ -202,18 +260,28 @@ function loadConfigToForm(task) {
     document.getElementById('displayAIStreamInterval').value = displayObj.ai_stream_interval || 10;
     document.getElementById('displayTrajectoryHistory').value = displayObj.trajectory_history_length || 30;
 
-    document.getElementById('displayBoxColor').value = (detectionBoxObj.color || [0, 255, 0]).join(',');
+    // 颜色管理器配置（✅ 修复：input[type=color] 只接受 #RRGGBB 格式）
+    _setColorInput('displayBoxColor', detectionBoxObj.color, '#00ff00', '0,255,0');
     document.getElementById('displayBoxThickness').value = detectionBoxObj.thickness || 2;
     document.getElementById('displayBoxFontScale').value = detectionBoxObj.font_scale || 0.5;
-    document.getElementById('displayBoxLabelColor').value = (detectionBoxObj.label_color || [0, 255, 0]).join(',');
-    document.getElementById('displayTrackColor').value = (trackBoxObj.color || [255, 0, 0]).join(',');
+    _setColorInput('displayBoxLabelColor', detectionBoxObj.label_color, '#00ff00', '0,255,0');
+
+    _setColorInput('displayTrackColor', trackBoxObj.color, '#0000ff', '0,0,255');
     document.getElementById('displayTrackThickness').value = trackBoxObj.thickness || 2;
     document.getElementById('displayTrackFontScale').value = trackBoxObj.font_scale || 0.5;
-    document.getElementById('displayTrackLabelColor').value = (trackBoxObj.label_color || [255, 0, 0]).join(',');
-    document.getElementById('displayTrajectoryColor').value = (trajectoryObj.color || [0, 255, 255]).join(',');
+    _setColorInput('displayTrackLabelColor', trackBoxObj.label_color, '#0000ff', '0,0,255');
+
+    _setColorInput('displayTrajectoryColor', trajectoryObj.color, '#ffff00', '255,255,0');
     document.getElementById('displayTrajectoryThickness').value = trajectoryObj.thickness || 1;
     document.getElementById('displayTrajectoryPointSize').value = trajectoryObj.point_size || 2;
-    document.getElementById('displayTrajectoryPointColor').value = (trajectoryObj.point_color || [0, 0, 255]).join(',');
+    _setColorInput('displayTrajectoryPointColor', trajectoryObj.point_color, '#ff0000', '255,0,0');
+
+    // 加载运动区域颜色配置
+    const motionRegionObj = displayConfig.motion_region || {};
+    _setColorInput('displayMotionRegionColor', motionRegionObj.color, '#00ffff', '0,255,255');
+    document.getElementById('displayMotionRegionThickness').value = motionRegionObj.thickness || 1;
+    _setColorInput('displayMotionRegionFillColor', motionRegionObj.fill_color, '#00ffff', '0,255,255');
+    document.getElementById('displayMotionRegionFillAlpha').value = motionRegionObj.fill_alpha ?? 50;
 }
 
 // 关闭参数配置模态框
@@ -268,7 +336,7 @@ async function saveConfig() {
                 buffer_size: parseInt(document.getElementById('decoderBufferSize').value) || 2097152,  // 2MB
 
                 // ========== 环形缓冲区配置（新架构）==========
-                ring_buffer_block_count: parseInt(document.getElementById('decoderRingBufferBlockCount').value) || 10,
+                ring_buffer_block_count: parseInt(document.getElementById('decoderRingBufferBlockCount').value) || 40,
                 index_queue_size: parseInt(document.getElementById('decoderIndexQueueSize').value) || 50,
 
                 // ========== FFmpeg 滤镜参数（视频预处理）==========
@@ -286,6 +354,11 @@ async function saveConfig() {
 
                 // 显存限制（MB转换为字节）
                 gpu_mem_limit: (parseInt(document.getElementById('detectorGpuMemLimit').value) || 6144) * 1024 * 1024,
+
+                // 检测器进程数（空值表示自动计算）
+                num_detectors: document.getElementById('detectorNumDetectors')?.value
+                    ? parseInt(document.getElementById('detectorNumDetectors').value)
+                    : null,
 
                 // 注意：
                 // 1. target_classes是任务表的单独字段，不放在detector_config中
@@ -402,28 +475,28 @@ async function saveConfig() {
                     ai_stream_interval: parseInt(document.getElementById('displayAIStreamInterval').value) || 10
                 },
                 detection_box: {
-                    color: document.getElementById('displayBoxColor').value.split(',').map(Number),
+                    color: _getColorFromInput('displayBoxColor', [0, 255, 0]),
                     thickness: parseInt(document.getElementById('displayBoxThickness').value) || 2,
                     font_scale: parseFloat(document.getElementById('displayBoxFontScale').value) || 0.5,
-                    label_color: document.getElementById('displayBoxLabelColor').value.split(',').map(Number)
+                    label_color: _getColorFromInput('displayBoxLabelColor', [0, 255, 0])
                 },
                 track_box: {
-                    color: document.getElementById('displayTrackColor').value.split(',').map(Number),
+                    color: _getColorFromInput('displayTrackColor', [0, 0, 255]),
                     thickness: parseInt(document.getElementById('displayTrackThickness').value) || 2,
                     font_scale: parseFloat(document.getElementById('displayTrackFontScale').value) || 0.5,
-                    label_color: document.getElementById('displayTrackLabelColor').value.split(',').map(Number)
+                    label_color: _getColorFromInput('displayTrackLabelColor', [0, 0, 255])
                 },
                 trajectory: {
-                    color: document.getElementById('displayTrajectoryColor').value.split(',').map(Number),
+                    color: _getColorFromInput('displayTrajectoryColor', [255, 255, 0]),
                     thickness: parseInt(document.getElementById('displayTrajectoryThickness').value) || 1,
                     point_size: parseInt(document.getElementById('displayTrajectoryPointSize').value) || 2,
-                    point_color: document.getElementById('displayTrajectoryPointColor').value.split(',').map(Number)
+                    point_color: _getColorFromInput('displayTrajectoryPointColor', [255, 0, 0])
                 },
-                motion_region: task.display_config?.motion_region || {
-                    color: [255, 255, 0],
-                    thickness: 1,
-                    fill_color: [255, 255, 0],
-                    fill_alpha: 50
+                motion_region: {
+                    color: _getColorFromInput('displayMotionRegionColor', [0, 255, 255]),
+                    thickness: parseInt(document.getElementById('displayMotionRegionThickness').value) || 1,
+                    fill_color: _getColorFromInput('displayMotionRegionFillColor', [0, 255, 255]),
+                    fill_alpha: parseInt(document.getElementById('displayMotionRegionFillAlpha').value) ?? 50
                 }
             }
         };

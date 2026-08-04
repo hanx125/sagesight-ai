@@ -123,7 +123,7 @@ def get_default_detector_config() -> Dict:
         'tensorrt_engine_cache_path': detector_config.get('tensorrt_engine_cache_path', './trt_cache'),
         'tensorrt_lib_path': detector_config.get('tensorrt_lib_path', ''),
         'device_id': detector_config.get('device_id', 0),
-        'gpu_mem_limit': detector_config.get('gpu_mem_limit', 6442450944)
+        'gpu_mem_limit': detector_config.get('gpu_mem_limit', 0)
     }
 
     # 注意：target_classes 是任务表的单独字段，不从配置文件读取
@@ -322,13 +322,15 @@ def get_default_display_config() -> Dict:
     config = load_yaml_config(DISPLAY_CONFIG_PATH)
 
     # 读取所有显示相关配置
+    # 颜色格式统一为 RGB（详见 display_config.yaml），带标记供迁移脚本识别
     display_config = {
         'display': config.get('display', {}),
         'detection_box': config.get('detection_box', {}),
         'track_box': config.get('track_box', {}),
         'trajectory': config.get('trajectory', {}),
         'motion_region': config.get('motion_region', {}),
-        'alarm': config.get('alarm', {})
+        'alarm': config.get('alarm', {}),
+        '__color_format': 'rgb'
     }
 
     return display_config
@@ -343,7 +345,7 @@ def get_default_zones_config() -> List[Dict]:
             - name: 区域名称
             - polygon: 多边形顶点列表 [[x1,y1], [x2,y2], ...]
             - required: 是否为必需区域
-            - color: BGR颜色 [B, G, R]
+            - color: RGB颜色 [R, G, B]
             - min_area: 最小区域面积
     """
     config = load_yaml_config(ZONES_CONFIG_PATH)

@@ -1241,3 +1241,50 @@ def get_image_from_recording(
         return process.stdout
     else:
         return None
+
+
+# ========================================
+# JPEG 编解码辅助函数（PIL，原生 RGB，无需 BGR 转换）
+# ========================================
+
+def encode_jpeg(rgb_image: np.ndarray, quality: int = 70) -> bytes:
+    """RGB 帧编码为 JPEG 字节
+
+    使用 PIL 编码，原生支持 RGB，无需 cvtColor 转换。
+
+    Args:
+        rgb_image: RGB 格式的图像数组 (H, W, 3) uint8
+        quality: JPEG 压缩质量 (1-100)
+
+    Returns:
+        JPEG 字节数据
+    """
+    from PIL import Image
+    import io
+
+    img = Image.fromarray(rgb_image)
+    buf = io.BytesIO()
+    img.save(buf, 'JPEG', quality=quality)
+    return buf.getvalue()
+
+
+def decode_jpeg(jpeg_bytes: bytes) -> Optional[np.ndarray]:
+    """JPEG 字节解码为 RGB 帧
+
+    使用 PIL 解码，原生返回 RGB，无需 cvtColor 转换。
+
+    Args:
+        jpeg_bytes: JPEG 字节数据
+
+    Returns:
+        RGB 格式的图像数组 (H, W, 3) uint8，失败返回 None
+    """
+    from PIL import Image
+    import io
+
+    try:
+        img = Image.open(io.BytesIO(jpeg_bytes))
+        return np.array(img.convert('RGB'))
+    except Exception as e:
+        logger.warning(f"[decode_jpeg] 解码失败: {e}")
+        return None

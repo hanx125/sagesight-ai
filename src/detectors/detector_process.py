@@ -215,6 +215,7 @@ def run_detector(
     class_names: list,
     input_shape: tuple,
     task_id: str = "",
+    ready_event=None,
 ):
     """
     检测器进程主函数
@@ -222,7 +223,8 @@ def run_detector(
     进程启动后:
     1. 创建 LocalObjectDetector（加载模型）
     2. 连接所有相机的输入/输出共享内存
-    3. 循环:从 detection_queue 获取 camera_id → 读输入SHM → 检测 → 写输出SHM → set event
+    3. set ready_event 通知主进程检测器已就绪
+    4. 循环:从 detection_queue 获取 camera_id → 读输入SHM → 检测 → 写输出SHM → set event
 
     Args:
         name: 检测器进程名称（如 "detector-yolov11-1"）
@@ -233,7 +235,17 @@ def run_detector(
         class_names: 类别名称列表
         input_shape: 输入共享内存形状 (1, H, W, 3)
         task_id: 任务ID（参与共享内存命名，确保同 camera 多任务各自独立 SHM）
+        ready_event: 就绪事件（模型加载+SHM连接完成后 set，通知主进程可以启动 CameraWorker）
     """
+    # 子进程日志配置：用 QueueHandler 把日志发到主进程，避免多进程写同一文件
+    # Windows spawn 模式下子进程会继承主进程的 RotatingFileHandler，多进程同时
+    # 写同一日志文件会触发 PermissionError [WinError 32]（文件锁冲突）
+    try:
+        from src.utils.log_manager import LogManager
+        LogManager.get_instance().setup_worker_process()
+    except Exception:
+        pass
+
     threading.current_thread().name = f"detector:{name}"
     proc_logger = logging.getLogger(f"detector.{name}")
     proc_logger.info(f"检测器进程启动: pid={os.getpid()}, model_type={model_type}")
@@ -294,6 +306,10 @@ def run_detector(
         f"检测器就绪: 已连接 {len(inputs)} 个相机的共享内存,等待检测任务..."
     )
 
+    # 通知主进程检测器已就绪（模型加载+SHM连接完成），可以启动 CameraWorker
+    if ready_event is not None:
+        ready_event.set()
+
     # 主循环
     detection_count = 0
     last_log_time = datetime.datetime.now()
@@ -335,12 +351,28 @@ def run_detector(
                 last_log_time = now
 
         except Exception as e:
+            error_msg = str(e)
             proc_logger.error(f"检测失败 (camera_id={cam_id}): {e}", exc_info=True)
             # 即使失败也要 set event,避免 CameraWorker 永久等待
             try:
                 out_events[cam_id].set()
             except Exception:
                 pass
+
+            # CUDA 错误（handle 损坏/执行失败）后会话不可恢复，退出进程让监控重启
+            # 否则后续每次推理都会重复失败，检测器变成空转
+            cuda_error_keywords = [
+                'cudaErrorInvalidResourceHandle',
+                'CUDNN_STATUS_EXECUTION_FAILED',
+                'CUDA error',
+                'out of memory',
+                'cudaErrorLaunchFailure',
+            ]
+            if any(kw in error_msg for kw in cuda_error_keywords):
+                proc_logger.error(
+                    f"检测到不可恢复的 CUDA 错误,退出进程等待监控重启: {error_msg}"
+                )
+                break
 
     # 清理
     proc_logger.info("检测器进程正在清理资源...")
@@ -382,6 +414,7 @@ class ObjectDetectProcess:
         class_names: list,
         input_shape: tuple,
         task_id: str = "",
+        ready_event=None,
     ):
         """
         Args:
@@ -393,6 +426,7 @@ class ObjectDetectProcess:
             class_names: 类别名称列表
             input_shape: 输入共享内存形状 (1, H, W, 3)
             task_id: 任务ID（参与共享内存命名，确保同 camera 多任务各自独立 SHM）
+            ready_event: 就绪事件（模型加载完成后 set，None 时表示不等待）
         """
         self.name = name
         self.model_type = model_type
@@ -402,6 +436,7 @@ class ObjectDetectProcess:
         self.class_names = class_names
         self.input_shape = input_shape
         self.task_id = task_id
+        self.ready_event = ready_event
 
         self.detect_process: Optional[mp.Process] = None
         self.start_or_restart()
@@ -431,6 +466,11 @@ class ObjectDetectProcess:
 
         logger.info(f"[{self.name}] 启动检测器进程 (model_type={self.model_type})")
 
+        # 仅在重启时（detect_process 不为 None）创建新的 ready_event
+        # 首次启动时使用 __init__ 传入的 event，保持与 DetectorPool.ready_events 引用一致
+        if self.detect_process is not None and self.ready_event is not None:
+            self.ready_event = mp.Event()
+
         self.detect_process = mp.Process(
             target=run_detector,
             name=f"detector:{self.name}",
@@ -443,6 +483,7 @@ class ObjectDetectProcess:
                 self.class_names,
                 self.input_shape,
                 self.task_id,
+                self.ready_event,
             ),
         )
         self.detect_process.daemon = True

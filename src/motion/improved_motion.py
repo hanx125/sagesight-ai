@@ -122,7 +122,7 @@ class ImprovedMotionDetector:
         检测运动区域
 
         Args:
-            frame: 输入帧（BGR或灰度格式）
+            frame: 输入帧（RGB 或灰度格式）
 
         Returns:
             运动区域列表
@@ -146,10 +146,10 @@ class ImprovedMotionDetector:
             }
         self._perf_frame_count = getattr(self, '_perf_frame_count', 0) + 1
 
-        # 转换为灰度图（如果是BGR）
+        # 转换为灰度图（如果是 RGB）
         t1 = time.time()
         if len(frame.shape) == 3:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         else:
             gray = frame
         self._perf_step_times['cvtColor'].append((time.time() - t1) * 1000)
@@ -373,7 +373,7 @@ class ImprovedMotionDetector:
         可视化运动区域
 
         Args:
-            frame: 输入帧（BGR 格式）
+            frame: 输入帧（RGB 格式）
 
         Returns:
             可视化帧（叠加运动区域）

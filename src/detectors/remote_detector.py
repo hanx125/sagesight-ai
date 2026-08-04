@@ -123,6 +123,19 @@ class RemoteObjectDetector:
         if self.stop_event is not None and self.stop_event.is_set():
             return []
 
+        # 队列深度限流：检测器进程池处理不过来时跳过本帧，避免队列堆积
+        # 堆积会导致所有 CameraWorker 等待超时（5s），帧序号大幅跳跃
+        try:
+            if self.detection_queue.qsize() > 50:
+                logger.warning(
+                    f"[RemoteObjectDetector-{self.camera_id}] "
+                    f"检测队列堆积({self.detection_queue.qsize()}),跳过本帧"
+                )
+                return []
+        except NotImplementedError:
+            # macOS 上 qsize 不可用，跳过限流检查
+            pass
+
         # 写入输入共享内存
         self.np_shm[:] = tensor_input[:]
 

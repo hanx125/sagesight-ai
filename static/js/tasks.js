@@ -44,6 +44,7 @@ SageSight.registerPage('/tasks', function() {
     loadAddedChannels();  // 加载已添加的设备通道列表
     loadAlgorithms();  // 加载算法库列表
     initWebSocket();
+    setupColorPickerListeners();  // 注册颜色选择器变化监听
 });
 
 // ========================================
@@ -1192,7 +1193,7 @@ function openCreateModal() {
     document.getElementById('motionDetectionEnabled').value = 'true';  // 运动检测默认启用
     document.getElementById('trackingEnabled').value = 'true';  // 跟踪功能默认启用
     document.getElementById('taskEnabled').value = 'true';
-    
+
     // 重置算法配置选择
     const algorithmConfigSelect = document.getElementById('algorithmConfig');
     if (algorithmConfigSelect) {
@@ -1200,6 +1201,28 @@ function openCreateModal() {
     }
     document.getElementById('algorithm').value = '';
     document.getElementById('modelPath').value = '';
+
+    // 显式设置颜色选择器默认值（form.reset() 对 input[type=color] 可能恢复为 #000000）
+    const colorDefaults = {
+        'displayBoxColor': '#00ff00',
+        'displayBoxLabelColor': '#00ff00',
+        'displayTrackColor': '#0000ff',
+        'displayTrackLabelColor': '#0000ff',
+        'displayTrajectoryColor': '#ffff00',
+        'displayTrajectoryPointColor': '#ff0000',
+        'displayMotionRegionColor': '#00ffff',
+        'displayMotionRegionFillColor': '#00ffff'
+    };
+    Object.entries(colorDefaults).forEach(([id, hex]) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.value = hex;
+            const valueDisplay = document.getElementById(id + 'Value');
+            if (valueDisplay) {
+                valueDisplay.textContent = parseColorInput(hex, [0, 0, 0]).join(',');
+            }
+        }
+    });
     
     // 确保算法库列表已加载
     if (algorithms.length === 0) {
@@ -1326,7 +1349,7 @@ async function openEditModal(taskId, event) {
         if (decoderReconnect) decoderReconnect.value = decoderConfig.reconnect !== false ? 'true' : 'false';
         if (decoderReconnectDelay) decoderReconnectDelay.value = decoderConfig.reconnect_delay ?? 5;
         if (decoderBufferSize) decoderBufferSize.value = decoderConfig.buffer_size ?? 2097152;
-        if (decoderRingBufferBlockCount) decoderRingBufferBlockCount.value = decoderConfig.ring_buffer_block_count ?? 10;
+        if (decoderRingBufferBlockCount) decoderRingBufferBlockCount.value = decoderConfig.ring_buffer_block_count ?? 40;
         if (decoderIndexQueueSize) decoderIndexQueueSize.value = decoderConfig.index_queue_size ?? 50;
         if (decoderFfmpegFilters) decoderFfmpegFilters.value = decoderConfig.ffmpeg_filters || '';
 
@@ -1435,28 +1458,60 @@ async function openEditModal(taskId, event) {
         if (displayShowMotionRegions) displayShowMotionRegions.value = displayCfg.show_motion_regions !== false ? 'true' : 'false';
         if (displayShowZones) displayShowZones.value = displayCfg.show_zones !== false ? 'true' : 'false';
         if (displayTrajectoryHistory) displayTrajectoryHistory.value = displayCfg.trajectory_history_length ?? 30;
-        if (displayBoxColor) displayBoxColor.value = colorToText(detectionBoxCfg.color, '0,255,0');
+        if (displayBoxColor) {
+            displayBoxColor.value = colorToText(detectionBoxCfg.color, '#00ff00');
+            const v = document.getElementById('displayBoxColorValue');
+            if (v) v.textContent = colorToRgbText(detectionBoxCfg.color, '0,255,0');
+        }
         if (displayBoxThickness) displayBoxThickness.value = detectionBoxCfg.thickness ?? 2;
         if (displayBoxFontScale) displayBoxFontScale.value = detectionBoxCfg.font_scale ?? 0.5;
-        if (displayBoxLabelColor) displayBoxLabelColor.value = colorToText(detectionBoxCfg.label_color, '0,255,0');
-        if (displayTrackColor) displayTrackColor.value = colorToText(trackBoxCfg.color, '255,0,0');
+        if (displayBoxLabelColor) {
+            displayBoxLabelColor.value = colorToText(detectionBoxCfg.label_color, '#00ff00');
+            const v = document.getElementById('displayBoxLabelColorValue');
+            if (v) v.textContent = colorToRgbText(detectionBoxCfg.label_color, '0,255,0');
+        }
+        if (displayTrackColor) {
+            displayTrackColor.value = colorToText(trackBoxCfg.color, '#0000ff');
+            const v = document.getElementById('displayTrackColorValue');
+            if (v) v.textContent = colorToRgbText(trackBoxCfg.color, '0,0,255');
+        }
         if (displayTrackThickness) displayTrackThickness.value = trackBoxCfg.thickness ?? 2;
         if (displayTrackFontScale) displayTrackFontScale.value = trackBoxCfg.font_scale ?? 0.5;
-        if (displayTrackLabelColor) displayTrackLabelColor.value = colorToText(trackBoxCfg.label_color, '255,0,0');
-        if (displayTrajectoryColor) displayTrajectoryColor.value = colorToText(trajectoryCfg.color, '0,255,255');
+        if (displayTrackLabelColor) {
+            displayTrackLabelColor.value = colorToText(trackBoxCfg.label_color, '#0000ff');
+            const v = document.getElementById('displayTrackLabelColorValue');
+            if (v) v.textContent = colorToRgbText(trackBoxCfg.label_color, '0,0,255');
+        }
+        if (displayTrajectoryColor) {
+            displayTrajectoryColor.value = colorToText(trajectoryCfg.color, '#ffff00');
+            const v = document.getElementById('displayTrajectoryColorValue');
+            if (v) v.textContent = colorToRgbText(trajectoryCfg.color, '255,255,0');
+        }
         if (displayTrajectoryThickness) displayTrajectoryThickness.value = trajectoryCfg.thickness ?? 1;
         if (displayTrajectoryPointSize) displayTrajectoryPointSize.value = trajectoryCfg.point_size ?? 2;
-        if (displayTrajectoryPointColor) displayTrajectoryPointColor.value = colorToText(trajectoryCfg.point_color, '0,0,255');
+        if (displayTrajectoryPointColor) {
+            displayTrajectoryPointColor.value = colorToText(trajectoryCfg.point_color, '#ff0000');
+            const v = document.getElementById('displayTrajectoryPointColorValue');
+            if (v) v.textContent = colorToRgbText(trajectoryCfg.point_color, '255,0,0');
+        }
 
-        // ✅ 加载运动区域绘制配置（motion_region）
+        // 加载运动区域绘制配置（motion_region）
         const motionRegionCfg = displayConfig.motion_region || {};
         const displayMotionRegionColor = document.getElementById('displayMotionRegionColor');
         const displayMotionRegionThickness = document.getElementById('displayMotionRegionThickness');
         const displayMotionRegionFillColor = document.getElementById('displayMotionRegionFillColor');
         const displayMotionRegionFillAlpha = document.getElementById('displayMotionRegionFillAlpha');
-        if (displayMotionRegionColor) displayMotionRegionColor.value = colorToText(motionRegionCfg.color, '255,255,0');
+        if (displayMotionRegionColor) {
+            displayMotionRegionColor.value = colorToText(motionRegionCfg.color, '#00ffff');
+            const v = document.getElementById('displayMotionRegionColorValue');
+            if (v) v.textContent = colorToRgbText(motionRegionCfg.color, '0,255,255');
+        }
         if (displayMotionRegionThickness) displayMotionRegionThickness.value = motionRegionCfg.thickness ?? 1;
-        if (displayMotionRegionFillColor) displayMotionRegionFillColor.value = colorToText(motionRegionCfg.fill_color, '255,255,0');
+        if (displayMotionRegionFillColor) {
+            displayMotionRegionFillColor.value = colorToText(motionRegionCfg.fill_color, '#00ffff');
+            const v = document.getElementById('displayMotionRegionFillColorValue');
+            if (v) v.textContent = colorToRgbText(motionRegionCfg.fill_color, '0,255,255');
+        }
         if (displayMotionRegionFillAlpha) displayMotionRegionFillAlpha.value = motionRegionCfg.fill_alpha ?? 50;
 
         // ✅ 加载屏幕闪烁报警配置（alarm）
@@ -1812,9 +1867,24 @@ function filterChannelList() {
 // 保存任务
 // ========================================
 
-// ✅ 辅助函数：将颜色文本输入（如 "0,255,0"）转换为数组 [0, 255, 0]
+// 辅助函数：将颜色输入转换为 RGB 数组 [R, G, B]
+// 支持 RGB HEX 格式（#RRGGBB，来自 color picker）和 "R,G,B" 文本格式
 function parseColorInput(value, defaultColor) {
     if (!value || typeof value !== 'string') return defaultColor;
+    // 处理 RGB HEX 格式（color picker 输出）
+    if (value.startsWith('#')) {
+        const hex = value.slice(1);
+        if (hex.length === 6) {
+            const r = parseInt(hex.slice(0, 2), 16);
+            const g = parseInt(hex.slice(2, 4), 16);
+            const b = parseInt(hex.slice(4, 6), 16);
+            if (!isNaN(r) && !isNaN(g) && !isNaN(b)) {
+                return [r, g, b];
+            }
+        }
+        return defaultColor;
+    }
+    // 兼容 "R,G,B" 文本格式
     const parts = value.trim().split(/[,\s]+/).map(s => parseInt(s.trim()));
     if (parts.length === 3 && parts.every(n => !isNaN(n) && n >= 0 && n <= 255)) {
         return parts;
@@ -1822,12 +1892,47 @@ function parseColorInput(value, defaultColor) {
     return defaultColor;
 }
 
-// ✅ 辅助函数：将颜色数组 [0, 255, 0] 转换为文本 "0,255,0"（用于表单填充）
+// 辅助函数：将 RGB 数组 [R, G, B] 转换为 RGB HEX 格式 "#RRGGBB"（用于 color picker）
 function colorToText(colorArr, defaultText) {
-    if (Array.isArray(colorArr) && colorArr.length === 3) {
+    if (Array.isArray(colorArr) && colorArr.length === 3 &&
+        colorArr.every(n => typeof n === 'number' && !isNaN(n) && n >= 0 && n <= 255)) {
+        const toHex = n => n.toString(16).padStart(2, '0');
+        return '#' + toHex(colorArr[0]) + toHex(colorArr[1]) + toHex(colorArr[2]);
+    }
+    return defaultText;
+}
+
+// 辅助函数：将 RGB 数组 [R, G, B] 转换为 "R,G,B" 文本（用于显示）
+function colorToRgbText(colorArr, defaultText) {
+    if (Array.isArray(colorArr) && colorArr.length === 3 &&
+        colorArr.every(n => typeof n === 'number' && !isNaN(n) && n >= 0 && n <= 255)) {
         return colorArr.join(',');
     }
     return defaultText;
+}
+
+// 颜色选择器变化时同步显示 RGB 文本值
+function setupColorPickerListeners() {
+    const pickers = [
+        { id: 'displayBoxColor', valueId: 'displayBoxColorValue' },
+        { id: 'displayBoxLabelColor', valueId: 'displayBoxLabelColorValue' },
+        { id: 'displayTrackColor', valueId: 'displayTrackColorValue' },
+        { id: 'displayTrackLabelColor', valueId: 'displayTrackLabelColorValue' },
+        { id: 'displayTrajectoryColor', valueId: 'displayTrajectoryColorValue' },
+        { id: 'displayTrajectoryPointColor', valueId: 'displayTrajectoryPointColorValue' },
+        { id: 'displayMotionRegionColor', valueId: 'displayMotionRegionColorValue' },
+        { id: 'displayMotionRegionFillColor', valueId: 'displayMotionRegionFillColorValue' }
+    ];
+    pickers.forEach(({ id, valueId }) => {
+        const picker = document.getElementById(id);
+        const valueDisplay = document.getElementById(valueId);
+        if (picker && valueDisplay) {
+            picker.addEventListener('input', () => {
+                const rgbArr = parseColorInput(picker.value, [0, 0, 0]);
+                valueDisplay.textContent = rgbArr.join(',');
+            });
+        }
+    });
 }
 
 async function saveTask() {
@@ -1882,7 +1987,10 @@ async function saveTask() {
             gpu_mem_limit: parseInt(document.getElementById('detectorGpuMemLimit')?.value) || 6144,
             rknn_target: document.getElementById('detectorRknnTarget')?.value || 'rk3588',
             rknn_core_mask: parseInt(document.getElementById('detectorRknnCoreMask')?.value) || 0,
-            rknn_device_id: document.getElementById('detectorRknnDeviceId')?.value || ''
+            rknn_device_id: document.getElementById('detectorRknnDeviceId')?.value || '',
+            num_detectors: document.getElementById('detectorNumDetectors')?.value
+                ? parseInt(document.getElementById('detectorNumDetectors').value)
+                : null
         },
 
         // 解码器配置（新增 - 之前遗漏）
@@ -1896,7 +2004,7 @@ async function saveTask() {
             reconnect: document.getElementById('decoderReconnect')?.value === 'true',
             reconnect_delay: parseInt(document.getElementById('decoderReconnectDelay')?.value) || 5,
             buffer_size: parseInt(document.getElementById('decoderBufferSize')?.value) || 2097152,
-            ring_buffer_block_count: parseInt(document.getElementById('decoderRingBufferBlockCount')?.value) || 10,
+            ring_buffer_block_count: parseInt(document.getElementById('decoderRingBufferBlockCount')?.value) || 40,
             index_queue_size: parseInt(document.getElementById('decoderIndexQueueSize')?.value) || 50,
             ffmpeg_filters: document.getElementById('decoderFfmpegFilters')?.value || ''
         },
@@ -1967,21 +2075,21 @@ async function saveTask() {
                 label_color: parseColorInput(document.getElementById('displayBoxLabelColor')?.value, [0, 255, 0])
             },
             track_box: {
-                color: parseColorInput(document.getElementById('displayTrackColor')?.value, [255, 0, 0]),
+                color: parseColorInput(document.getElementById('displayTrackColor')?.value, [0, 0, 255]),
                 thickness: parseInt(document.getElementById('displayTrackThickness')?.value) || 2,
                 font_scale: parseFloat(document.getElementById('displayTrackFontScale')?.value) || 0.5,
-                label_color: parseColorInput(document.getElementById('displayTrackLabelColor')?.value, [255, 0, 0])
+                label_color: parseColorInput(document.getElementById('displayTrackLabelColor')?.value, [0, 0, 255])
             },
             trajectory: {
-                color: parseColorInput(document.getElementById('displayTrajectoryColor')?.value, [0, 255, 255]),
+                color: parseColorInput(document.getElementById('displayTrajectoryColor')?.value, [255, 255, 0]),
                 thickness: parseInt(document.getElementById('displayTrajectoryThickness')?.value) || 1,
                 point_size: parseInt(document.getElementById('displayTrajectoryPointSize')?.value) || 2,
-                point_color: parseColorInput(document.getElementById('displayTrajectoryPointColor')?.value, [0, 0, 255])
+                point_color: parseColorInput(document.getElementById('displayTrajectoryPointColor')?.value, [255, 0, 0])
             },
             motion_region: {
-                color: parseColorInput(document.getElementById('displayMotionRegionColor')?.value, [255, 255, 0]),
+                color: parseColorInput(document.getElementById('displayMotionRegionColor')?.value, [0, 255, 255]),
                 thickness: parseInt(document.getElementById('displayMotionRegionThickness')?.value) || 1,
-                fill_color: parseColorInput(document.getElementById('displayMotionRegionFillColor')?.value, [255, 255, 0]),
+                fill_color: parseColorInput(document.getElementById('displayMotionRegionFillColor')?.value, [0, 255, 255]),
                 fill_alpha: parseInt(document.getElementById('displayMotionRegionFillAlpha')?.value) || 50
             },
             alarm: {

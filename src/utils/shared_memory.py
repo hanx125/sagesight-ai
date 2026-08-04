@@ -438,8 +438,9 @@ def read_frame_from_shared_memory(
     shm_name: str,
     shm_block_id: int,
     frame_shape: Tuple[int, int],
-    expected_frame_seq: Optional[int] = None
-) -> Optional[np.ndarray]:
+    expected_frame_seq: Optional[int] = None,
+    return_aligned: bool = False
+):
     """
     从共享内存读取帧(带跨进程锁保护)
 
@@ -449,11 +450,16 @@ def read_frame_from_shared_memory(
         frame_shape: 帧形状(height, width)
         expected_frame_seq: 期望的帧序号(用于校验块是否已被覆盖)。
             环形缓冲区会被生产者循环覆盖写入，如果本块在回读时已被新帧覆盖，
-            头部的 frame_seq 会与 expected_frame_seq 不匹配，此时返回 None，
-            避免用旧帧的检测框画在新帧画面上导致"框滞后于目标"。
+            头部的 frame_seq 会与 expected_frame_seq 不匹配。
+            此时降级使用块中当前最新帧（避免快照完全缺失），但通过 aligned=False 标记，
+            调用方可据此记录告警或拒绝使用该帧。
+        return_aligned: 是否返回对齐状态。True 返回 (frame, aligned) 元组；
+            False 返回 frame（向后兼容）
 
     Returns:
-        np.ndarray: RGB帧数据(height, width, 3),如果失败则返回None
+        return_aligned=False: np.ndarray 或 None
+        return_aligned=True: (np.ndarray 或 None, bool) — 第二个元素为 True 表示帧序号匹配，
+            False 表示降级使用最新帧（帧与检测框可能错位）
     """
     # 构建完整的块名称
     block_name = f"{shm_name}_{shm_block_id}"
@@ -464,6 +470,10 @@ def read_frame_from_shared_memory(
     u_size = (height // 2) * (width // 2)
     v_size = u_size
     total_size = HEADER_SIZE + y_size + u_size + v_size
+
+    # 对齐状态：True=帧序号匹配，False=降级使用最新帧
+    aligned = True
+    rgb_frame = None
 
     # 连接到共享内存
     shm = None
@@ -480,71 +490,72 @@ def read_frame_from_shared_memory(
             magic = header_data[0]
             if magic != MAGIC_NUMBER:
                 logger.error(f"[read_frame_from_shared_memory] 魔数不匹配: {magic}")
-                return None
+                aligned = False
+            else:
+                actual_frame_seq = header_data[1]
+                if expected_frame_seq is not None and actual_frame_seq != expected_frame_seq:
+                    # 块已被新帧覆盖：检测框基于旧帧，画面已是新帧
+                    # 降级策略：不丢弃，使用块中当前最新帧（框可能轻微滞后于画面，
+                    # 但事件能拿到快照，避免事件快照/GIF 完全缺失）
+                    # 通过 aligned=False 标记，调用方可记录告警或拒绝使用
+                    aligned = False
+                    logger.debug(
+                        f"[read_frame_from_shared_memory] 帧序号不匹配(降级使用最新帧): "
+                        f"expected={expected_frame_seq}, actual={actual_frame_seq}, "
+                        f"block={block_name}"
+                    )
 
-            actual_frame_seq = header_data[1]
-            if expected_frame_seq is not None and actual_frame_seq != expected_frame_seq:
-                # 块已被新帧覆盖：检测框基于旧帧，但画面已是新帧，直接丢弃避免框错位
-                # 临时诊断：提升到 warning 级别，确认覆盖频率
-                logger.warning(
-                    f"[read_frame_from_shared_memory] 帧序号不匹配(块已被覆盖): "
-                    f"expected={expected_frame_seq}, actual={actual_frame_seq}, "
-                    f"block={block_name}"
-                )
-                return None
+                # ✅ 解析帧数据(I420 -> RGB)
+                # I420格式：Y平面 + U平面 + V平面（分离存储）
+                # 跳过头部，从 HEADER_SIZE 开始读取 YUV 数据
+                yuv_data = full_data[HEADER_SIZE:]
+                u_size = (height // 2) * (width // 2)
+                v_size = u_size
 
-            # ✅ 解析帧数据(I420 -> RGB)
-            # I420格式：Y平面 + U平面 + V平面（分离存储）
-            # 跳过头部，从 HEADER_SIZE 开始读取 YUV 数据
-            yuv_data = full_data[HEADER_SIZE:]
-            u_size = (height // 2) * (width // 2)
-            v_size = u_size
+                y_data = np.frombuffer(yuv_data[:y_size], dtype=np.uint8).copy()
+                u_data = np.frombuffer(yuv_data[y_size:y_size+u_size], dtype=np.uint8).copy()
+                v_data = np.frombuffer(yuv_data[y_size+u_size:y_size+u_size+v_size], dtype=np.uint8).copy()
 
-            y_data = np.frombuffer(yuv_data[:y_size], dtype=np.uint8).copy()
-            u_data = np.frombuffer(yuv_data[y_size:y_size+u_size], dtype=np.uint8).copy()
-            v_data = np.frombuffer(yuv_data[y_size+u_size:y_size+u_size+v_size], dtype=np.uint8).copy()
+                # reshape
+                y = y_data.reshape((height, width))
+                u = u_data.reshape((height // 2, width // 2))
+                v = v_data.reshape((height // 2, width // 2))
 
-            # reshape
-            y = y_data.reshape((height, width))
-            u = u_data.reshape((height // 2, width // 2))
-            v = v_data.reshape((height // 2, width // 2))
+                # I420 -> RGB（使用OpenCV）
+                import cv2
 
-            # I420 -> RGB(使用OpenCV)
-            import cv2
+                # FFmpeg -pix_fmt yuv420p 输出标准 I420 (Y-U-V 顺序)，
+                # 直接拼接后用 COLOR_YUV2RGB_I420 转换即可，无需交换 U/V
+                i420_data = np.concatenate([
+                    y.flatten(),
+                    u.flatten(),
+                    v.flatten()
+                ])
 
-            # ✅ 关键修复：FFmpeg的yuv420p格式实际上是YV12（Y-V-U顺序），不是I420（Y-U-V顺序）
-            # OpenCV的COLOR_YUV2RGB_I420期望I420格式（Y-U-V顺序）
-            # 所以我们需要交换U和V平面
+                # reshape为I420格式（height×1.5, width）
+                i420_frame = i420_data.reshape((height + height // 2, width))
 
-            # 构建正确的I420格式数据（Y-U-V顺序）
-            # 注意：FFmpeg输出是Y-V-U顺序，所以v_data实际上是U平面，u_data是V平面
-            i420_data = np.concatenate([
-                y.flatten(),
-                v.flatten(),  # ✅ 交换：FFmpeg的第2个平面是V，但OpenCV期望U
-                u.flatten()   # ✅ 交换：FFmpeg的第3个平面是U，但OpenCV期望V
-            ])
-
-            # reshape为I420格式（height×1.5, width）
-            i420_frame = i420_data.reshape((height + height // 2, width))
-
-            # I420 -> RGB
-            rgb_frame = cv2.cvtColor(i420_frame, cv2.COLOR_YUV2RGB_I420)
-
-            return rgb_frame
+                # I420 -> RGB
+                rgb_frame = cv2.cvtColor(i420_frame, cv2.COLOR_YUV2RGB_I420)
 
         except Exception as e:
             logger.error(f"[read_frame_from_shared_memory] 读取失败: {e}", exc_info=True)
-            return None
-            
+            aligned = False
+
     except FileNotFoundError:
         logger.warning(f"[read_frame_from_shared_memory] 共享内存不存在: {block_name}")
-        return None
+        aligned = False
     except Exception as e:
         logger.error(f"[read_frame_from_shared_memory] 连接失败: {e}", exc_info=True)
-        return None
+        aligned = False
     finally:
         if shm:
             try:
                 shm.close()
             except:
                 pass
+
+    # 按 return_aligned 决定返回形式
+    if return_aligned:
+        return rgb_frame, aligned
+    return rgb_frame

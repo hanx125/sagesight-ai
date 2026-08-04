@@ -28,6 +28,7 @@
 
 import logging
 import multiprocessing as mp
+import time
 from typing import Optional
 
 import numpy as np
@@ -93,6 +94,8 @@ class DetectorPool:
 
         # 检测器进程列表
         self.detectors: list[ObjectDetectProcess] = []
+        # 检测器就绪事件列表（每个检测器进程一个，模型加载完成后 set）
+        self.ready_events: list[mp.Event] = []
         self._started = False
 
         logger.info(
@@ -153,8 +156,12 @@ class DetectorPool:
                     in_shm = shared_memory.SharedMemory(name=in_shm_name, create=False)
                     if in_shm.size != input_size:
                         in_shm.close()
-                        in_shm.unlink()
-                        in_shm = shared_memory.SharedMemory(name=in_shm_name, create=True, size=input_size)
+                        try:
+                            in_shm.unlink()
+                            in_shm = shared_memory.SharedMemory(name=in_shm_name, create=True, size=input_size)
+                        except FileExistsError:
+                            # Windows 上 unlink 后可能未立即释放,回退为复用
+                            in_shm = shared_memory.SharedMemory(name=in_shm_name, create=False)
                 except FileNotFoundError:
                     in_shm = shared_memory.SharedMemory(name=in_shm_name, create=True, size=input_size)
 
@@ -175,17 +182,16 @@ class DetectorPool:
                     out_shm = shared_memory.SharedMemory(name=out_shm_name, create=False)
                     if out_shm.size != output_size:
                         out_shm.close()
-                        out_shm.unlink()
-                        out_shm = shared_memory.SharedMemory(name=out_shm_name, create=True, size=output_size)
-                        # 重新创建后初始化为零
-                        np.ndarray(
-                            (MAX_DETECTIONS, OUTPUT_FIELDS), dtype=np.float32, buffer=out_shm.buf
-                        )[:] = 0
-                    else:
-                        # 复用已有SHM时也清零，确保没有残留数据
-                        np.ndarray(
-                            (MAX_DETECTIONS, OUTPUT_FIELDS), dtype=np.float32, buffer=out_shm.buf
-                        )[:] = 0
+                        try:
+                            out_shm.unlink()
+                            out_shm = shared_memory.SharedMemory(name=out_shm_name, create=True, size=output_size)
+                        except FileExistsError:
+                            # Windows 上 unlink 后可能未立即释放,回退为复用
+                            out_shm = shared_memory.SharedMemory(name=out_shm_name, create=False)
+                    # 复用已有SHM时清零，确保没有残留数据
+                    np.ndarray(
+                        (MAX_DETECTIONS, OUTPUT_FIELDS), dtype=np.float32, buffer=out_shm.buf
+                    )[:] = 0
                 except FileNotFoundError:
                     out_shm = shared_memory.SharedMemory(name=out_shm_name, create=True, size=output_size)
                     np.ndarray(
@@ -235,6 +241,8 @@ class DetectorPool:
 
         for i in range(self.num_detectors):
             name = f"{self.model_type}-{i + 1}"
+            ready_event = mp.Event()
+            self.ready_events.append(ready_event)
             proc = ObjectDetectProcess(
                 name=name,
                 model_type=self.model_type,
@@ -244,11 +252,40 @@ class DetectorPool:
                 class_names=self.class_names,
                 input_shape=self.input_shape,
                 task_id=self.task_id,
+                ready_event=ready_event,
             )
             self.detectors.append(proc)
 
         self._started = True
         logger.info(f"[DetectorPool-{self.model_type}] 检测器进程全部启动完成")
+
+    def wait_ready(self, timeout: float = 60.0) -> bool:
+        """
+        等待所有检测器进程就绪（模型加载+SHM连接完成）
+
+        Args:
+            timeout: 总超时时间（秒）
+
+        Returns:
+            bool: True 表示所有检测器就绪，False 表示超时
+        """
+        if not self.ready_events:
+            return True
+
+        deadline = time.time() + timeout
+        for i, evt in enumerate(self.ready_events):
+            remaining = max(0, deadline - time.time())
+            if not evt.wait(timeout=remaining):
+                logger.warning(
+                    f"[DetectorPool-{self.model_type}] 检测器 {i+1}/{len(self.ready_events)} "
+                    f"就绪超时(剩余{remaining:.1f}s)"
+                )
+                return False
+
+        logger.info(
+            f"[DetectorPool-{self.model_type}] 所有 {len(self.ready_events)} 个检测器已就绪"
+        )
+        return True
 
     def check_and_restart_dead(self):
         """检查并重启已死的检测器进程"""
@@ -415,6 +452,25 @@ class DetectorPoolManager:
             pool.start_detectors()
 
         logger.info("[DetectorPoolManager] 所有检测器进程启动完成")
+
+    def wait_ready(self, timeout: float = 60.0) -> bool:
+        """
+        等待所有检测器池的检测器进程就绪（模型加载+SHM连接完成）
+
+        Args:
+            timeout: 总超时时间（秒）
+
+        Returns:
+            bool: True 表示所有检测器就绪，False 表示超时
+        """
+        deadline = time.time() + timeout
+        all_ready = True
+        for model_type, pool in self.pools.items():
+            remaining = max(0, deadline - time.time())
+            if not pool.wait_ready(timeout=remaining):
+                logger.warning(f"[DetectorPoolManager] 池 {model_type} 就绪超时")
+                all_ready = False
+        return all_ready
 
     def check_and_restart_dead(self):
         """检查并重启所有池中已死的检测器进程"""

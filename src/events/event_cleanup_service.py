@@ -127,7 +127,7 @@ class EventCleanupService:
                     '''SELECT event_id, local_image_url, minio_image_url, ftp_image_url,
                               local_gif_url, minio_gif_url, ftp_gif_url
                        FROM events
-                       WHERE created_at < datetime("now", ?)''',
+                       WHERE created_at < datetime("now", "localtime", ?)''',
                     (f'-{days} days',)
                 )
                 rows = cursor.fetchall()
@@ -153,7 +153,7 @@ class EventCleanupService:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    'DELETE FROM events WHERE created_at < datetime("now", ?)',
+                    'DELETE FROM events WHERE created_at < datetime("now", "localtime", ?)',
                     (f'-{days} days',)
                 )
                 conn.commit()

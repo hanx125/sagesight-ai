@@ -108,7 +108,7 @@ event_output:
     max_width: 240                    # 最大宽度（像素，GIF预览用，无需高分辨率）
     max_height: 180                   # 最大高度（像素）
     draw_trajectory: true             # 是否绘制轨迹
-    trajectory_color: [0, 255, 0]     # 轨迹颜色（BGR格式，绿色）
+    trajectory_color: [0, 255, 0]     # 轨迹颜色（RGB格式，绿色）— 已由 display_config.trajectory 统一管控，此字段仅作兼容回退
     draw_bbox: true                   # 是否在GIF帧上绘制检测框
 
     # GIF 生成模式（基于帧缓存）

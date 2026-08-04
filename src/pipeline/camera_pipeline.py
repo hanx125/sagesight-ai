@@ -3,20 +3,23 @@
 
 核心流程（每帧执行）:
 1. 解码: read_frame_i420 → (header, y_plane, u_plane, v_plane)
-2. 运动检测: motion_detector.detect(y_plane) → motion_boxes
+2. 运动检测(可选): motion_detector.detect(y_plane) → motion_boxes
 3. Region 生成: motion_boxes + tracked_object_boxes → 聚类 → regions
-4. 检测: 对每个 region 同步检测（RemoteObjectDetector）
+4. 检测: 全帧检测（运动+跟踪都关闭）或逐 region 同步检测
 5. 合并去重: reduce_detections → 去重后的检测列表
-6. 跟踪: NorfairTracker.match_and_update() → 更新跟踪状态
+6. 跟踪(可选): NorfairTracker.match_and_update() → 更新跟踪状态
 7. 输出: detected_objects_queue.put() → 事件处理进程
 
 架构特点:
-- 运动检测用于缩小检测区域（每帧都检测）,而非触发检测
+- 运动检测用于缩小检测区域（可选，开启时每帧执行）,而非触发检测
 - 帧连续（不跳帧）,跟踪轨迹不断裂
 - 同步检测（当帧完成）,非异步流水线
-- 检测单元是 region（运动框+跟踪框聚类）,非整帧
+- 检测单元是 region（运动框+跟踪框聚类）或整帧（运动+跟踪都关闭时）
 - 结果通过共享内存+Event传递,非队列返回RGB帧
 - 事件处理在独立进程,非CameraWorker内
+- 运动检测和跟踪均可通过任务配置独立关闭（None 表示关闭）
+- 关闭运动检测+跟踪时自动切换为全帧检测模式
+- 关闭跟踪时检测结果直接进入事件队列（无跟踪ID）
 """
 
 import logging
@@ -46,9 +49,9 @@ def run_pipeline(
     camera_id: str,
     task_id: str,
     decoder,
-    motion_detector: ImprovedMotionDetector,
+    motion_detector: Optional[ImprovedMotionDetector],
     remote_detector,
-    tracker: NorfairTracker,
+    tracker: Optional[NorfairTracker],
     detected_objects_queue,
     frame_shape: tuple,
     model_size: tuple,
@@ -61,15 +64,15 @@ def run_pipeline(
     """
     CameraWorker 主循环
 
-    每帧执行: 解码 → 运动检测 → region生成 → 同步检测 → 跟踪 → 输出
+    每帧执行: 解码 → 运动检测(可选) → region生成 → 同步检测 → 跟踪(可选) → 输出
 
     Args:
         camera_id: 摄像机ID
         task_id: 任务ID（用于共享内存命名）
         decoder: 视频解码器（保留不变,提供 get_frame_index 和 ring_buffer）
-        motion_detector: 运动检测器（ImprovedMotionDetector）
+        motion_detector: 运动检测器（ImprovedMotionDetector），None 表示关闭运动检测
         remote_detector: 远程检测器代理（RemoteObjectDetector）
-        tracker: Norfair 跟踪器
+        tracker: Norfair 跟踪器，None 表示关闭跟踪
         detected_objects_queue: 事件处理队列（输出8-元组）
         frame_shape: 帧形状 (height, width)
         model_size: 模型输入尺寸 (height, width)
@@ -165,32 +168,38 @@ def run_pipeline(
                 first_frame = False
 
             # ========================================
-            # 2. 运动检测（每帧执行,用于缩小检测区域）
+            # 2. 运动检测（可选，用于缩小检测区域）
             # ========================================
             motion_start = time.time()
-            motion_boxes = motion_detector.detect(y_plane)
+            if motion_detector is not None:
+                motion_boxes = motion_detector.detect(y_plane)
+                motion_box_tuples = [
+                    tuple(m.bbox) if hasattr(m, 'bbox') else tuple(m)
+                    for m in motion_boxes
+                ]
+            else:
+                motion_boxes = []
+                motion_box_tuples = []
             motion_time = (time.time() - motion_start) * 1000
             perf_stats["motion_ms"].append(motion_time)
-
-            # 提取 bbox 元组列表（MotionRegion 不可下标，region_utils 需要可下标的 box）
-            motion_box_tuples = [
-                tuple(m.bbox) if hasattr(m, 'bbox') else tuple(m)
-                for m in motion_boxes
-            ]
 
             # ========================================
             # 3. Region 生成（motion_boxes + tracked_object_boxes 聚类）
             # ========================================
             region_start = time.time()
 
-            # 获取已跟踪对象的框
-            tracked_objects_dict = tracker.get_tracked_objects_dict()
-            tracked_object_boxes = [
-                obj["box"] for obj in tracked_objects_dict.values() if obj.get("box")
-            ]
-
-            # 合并 motion_boxes 和未匹配的跟踪框
-            all_boxes = motion_box_tuples + list(tracker.untracked_object_boxes)
+            # 获取已跟踪对象的框（跟踪关闭时无框）
+            if tracker is not None:
+                tracked_objects_dict = tracker.get_tracked_objects_dict()
+                tracked_object_boxes = [
+                    obj["box"] for obj in tracked_objects_dict.values() if obj.get("box")
+                ]
+                # 合并 motion_boxes 和未匹配的跟踪框
+                all_boxes = motion_box_tuples + list(tracker.untracked_object_boxes)
+            else:
+                tracked_objects_dict = {}
+                tracked_object_boxes = []
+                all_boxes = list(motion_box_tuples)
 
             # 聚类生成 regions
             regions = []
@@ -215,31 +224,47 @@ def run_pipeline(
             perf_stats["region_ms"].append(region_time)
 
             # ========================================
-            # 4. 同步检测（对每个 region）
+            # 4. 同步检测
             # ========================================
             detect_start = time.time()
 
             all_detections = []
 
-            if regions:
-                # 合并 YUV 平面为完整 YUV 帧
+            if motion_detector is None and tracker is None:
+                # 运动检测和跟踪都关闭：直接全帧检测（绕过 regions）
+                yuv_frame = merge_yuv_planes(
+                    y_plane, u_plane, v_plane, frame_shape
+                )
+                full_frame_region = (0, 0, frame_shape[1], frame_shape[0])
+                tensor = create_tensor_input_hw(
+                    yuv_frame, full_frame_region, model_size,
+                    use_rga=use_rga, use_cuda=use_cuda,
+                )
+                detections = remote_detector.detect(tensor, detect_threshold)
+
+                for label, score, box in detections:
+                    if target_classes and label not in target_classes:
+                        continue
+                    abs_box = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+                    all_detections.append(
+                        (label, score, abs_box, area(abs_box),
+                         (abs_box[2] - abs_box[0]) / max(1, abs_box[3] - abs_box[1]),
+                         list(full_frame_region))
+                    )
+
+            elif regions:
+                # 有 regions（运动检测或跟踪提供）：逐 region 检测
                 yuv_frame = merge_yuv_planes(
                     y_plane, u_plane, v_plane, frame_shape
                 )
 
                 for region in regions:
-                    # 从 YUV 帧裁剪 region 并转为模型输入 tensor
-                    # 硬件加速：RK3588→RGA（裁剪+缩放+YUV→RGB），Linux→CUDA（resize）
-                    # 任一不可用或异常时自动回退 cv2 CPU 路径
                     tensor = create_tensor_input_hw(
                         yuv_frame, region, model_size,
                         use_rga=use_rga, use_cuda=use_cuda,
                     )
-
-                    # 同步检测（写输入SHM → queue.put → wait event → 读输出SHM）
                     detections = remote_detector.detect(tensor, detect_threshold)
 
-                    # region 相对坐标 → 原图绝对坐标
                     for label, score, box in detections:
                         abs_box = (
                             int(box[0] + region[0]),
@@ -247,18 +272,12 @@ def run_pipeline(
                             int(box[2] + region[0]),
                             int(box[3] + region[1]),
                         )
-
-                        # 目标类别过滤
                         if target_classes and label not in target_classes:
                             continue
-
-                        box_area = area(abs_box)
-                        box_w = abs_box[2] - abs_box[0]
-                        box_h = abs_box[3] - abs_box[1]
-                        ratio = box_w / max(1, box_h)
-
                         all_detections.append(
-                            (label, score, abs_box, box_area, ratio, list(region))
+                            (label, score, abs_box, area(abs_box),
+                             (abs_box[2] - abs_box[0]) / max(1, abs_box[3] - abs_box[1]),
+                             list(region))
                         )
 
             detect_time = (time.time() - detect_start) * 1000
@@ -273,17 +292,20 @@ def run_pipeline(
                 reduced_detections = []
 
             # ========================================
-            # 6. 跟踪（更新跟踪状态）
+            # 6. 跟踪（更新跟踪状态，可选）
             # ========================================
             track_start = time.time()
-            tracker.match_and_update(frame_name, frame_time, reduced_detections)
+            if tracker is not None:
+                tracker.match_and_update(frame_name, frame_time, reduced_detections)
+                tracked_objects_dict = tracker.get_tracked_objects_dict()
+            else:
+                tracked_objects_dict = {}
             track_time = (time.time() - track_start) * 1000
             perf_stats["track_ms"].append(track_time)
 
             # ========================================
             # 7. 输出到事件处理进程
             # ========================================
-            tracked_objects_dict = tracker.get_tracked_objects_dict()
 
             # 构造精简的检测结果列表（仅传坐标、标签、分数，不含面积/比率/region）
             detection_results = [

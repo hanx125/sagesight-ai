@@ -112,49 +112,42 @@ class ONNXCUDADetector(BaseDetector):
             # 创建会话选项（针对 GPU 优化）
             # ========================================
             session_options = ort.SessionOptions()
-            
-            # 尝试启用 CUDA Graph 加速（需要 ONNX Runtime 1.17+）
+
+            # CUDA Graph 在多进程共享 GPU 场景下不安全：
+            # - 多个检测器进程在同一 GPU 上各自捕获/重放 CUDA Graph
+            # - 捕获的图引用 cuDNN handle，被其他进程的 CUDA 操作破坏
+            # - 导致 cudaErrorInvalidResourceHandle
+            # 仅在单进程场景下可手动启用
+            # 旧版 onnxruntime 无此属性，用 try-except 兼容
             try:
-                session_options.enable_cuda_graph = True
-                logger.debug(f"[ONNXCUDADetector] CUDA Graph 加速已启用")
+                session_options.enable_cuda_graph = False
             except AttributeError:
-                # 旧版本不支持 CUDA Graph，跳过
-                logger.debug(f"[ONNXCUDADetector] 当前版本不支持 CUDA Graph，使用默认优化")
-            
+                pass
+
             # 启用图优化
             session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            
+
             # ========================================
             # CUDA Execution Provider 配置
             # ========================================
             cuda_options = {
                 'device_id': self._device_id,
                 # cuDNN 卷积算法搜索策略
-                # - 'EXHAUSTIVE': 搜索所有算法，耗时但性能最优
-                # - 'HEURISTIC': 启发式搜索，平衡速度和性能（推荐）
-                # - 'DEFAULT': 使用默认算法
-                'cudnn_conv_algo_search': 'HEURISTIC',
-                
-                # 内存分配策略
-                # - 'kSameAsRequested': 按需分配，节省内存
-                # - 'kNextPowerOfTwo': 按2的幂次分配，减少碎片
-                'arena_extend_strategy': 'kSameAsRequested',
+                # 多进程共享 GPU 时必须用 'DEFAULT'：
+                # - 'HEURISTIC'/'EXHAUSTIVE' 每个进程独立搜索，分配额外显存做 benchmark
+                # - 多进程叠加导致显存压力过大 → CUDNN_STATUS_EXECUTION_FAILED
+                'cudnn_conv_algo_search': 'DEFAULT',
 
-                # cuDNN 卷积 padding 优化
-                'cudnn_conv1d_pad_to_nc1d': True,
+                # 内存分配策略：按需分配，节省显存
+                'arena_extend_strategy': 'kSameAsRequested',
             }
 
-            # GPU 内存限制（字节）保护：
-            # 仅在合理值（>= 1GB）时传给 ONNX，避免历史任务的错误小值
-            # （如 6144 字节，把 GB 误当 KB）导致 BFCArena 分配失败、模型加载崩溃。
-            # 不传该键时 ONNX 使用默认（不限制 GPU 显存）。
-            MIN_GPU_MEM_LIMIT = 1024 * 1024 * 1024  # 1GB
-            if self._gpu_mem_limit and self._gpu_mem_limit >= MIN_GPU_MEM_LIMIT:
+            # GPU 内存限制：多进程场景下不设置 per-process gpu_mem_limit
+            # gpu_mem_limit 是每进程上限，N 个进程 × 6GB 在 8GB 显卡上会互相抢占
+            # 不传该键时 ONNX 动态管理显存，按需分配，避免多进程冲突
+            # 单进程场景如需限制，可在配置中设置（>= 1GB 才生效）
+            if self._gpu_mem_limit and self._gpu_mem_limit >= 1024 * 1024 * 1024:
                 cuda_options['gpu_mem_limit'] = self._gpu_mem_limit
-            elif self._gpu_mem_limit:
-                logger.debug(f"[ONNXCUDADetector] [警告] gpu_mem_limit={self._gpu_mem_limit} 字节 "
-                      f"(< 1GB)，疑似配置错误（GB 误当 KB），已忽略，使用 ONNX 默认（不限制显存）")
-                sys.stdout.flush()
 
             # Provider 列表（CUDA优先，CPU作为回退）
             providers = [
@@ -185,7 +178,10 @@ class ONNXCUDADetector(BaseDetector):
             logger.debug(f"  输入形状：{self.input_shape}")
             logger.debug(f"  可用 Provider: {active_providers}")
             logger.debug(f"  GPU 设备ID: {self._device_id}")
-            logger.debug(f"  GPU 内存限制: {self._gpu_mem_limit / (1024**3):.1f} GB")
+            if self._gpu_mem_limit and self._gpu_mem_limit >= 1024 * 1024 * 1024:
+                logger.debug(f"  GPU 内存限制: {self._gpu_mem_limit / (1024**3):.1f} GB (per-process)")
+            else:
+                logger.debug(f"  GPU 内存限制: 不限制（ONNX 动态管理，适用于多进程）")
             
             # 验证 CUDA Provider 是否生效
             if 'CUDAExecutionProvider' not in active_providers:
@@ -285,7 +281,7 @@ class ONNXCUDADetector(BaseDetector):
             'model_path': self.config.model_path,
             'input_shape': self.input_shape,
             'device_id': self._device_id,
-            'gpu_mem_limit_gb': self._gpu_mem_limit / (1024**3),
+            'gpu_mem_limit_gb': self._gpu_mem_limit / (1024**3) if self._gpu_mem_limit else 0,
             'class_names': self.config.class_names,
             'conf_threshold': self.config.conf_threshold,
             'iou_threshold': self.config.iou_threshold

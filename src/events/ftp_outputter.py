@@ -7,6 +7,7 @@ FTP 输出器
 import ftplib
 import io
 from typing import Dict
+from urllib.parse import urlparse, unquote
 import logging
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,53 @@ class FTPOutputter:
         
         return ftp_url
     
+    def delete(self, url: str) -> bool:
+        """
+        从 FTP 服务器删除文件
+
+        支持两种输入：
+        - 完整 FTP URL（ftp://user:pass@host:port/{path}/{filename}）
+        - 纯 filename（使用配置的 remote_dir 拼接路径）
+
+        Args:
+            url: FTP URL 或 filename
+
+        Returns:
+            bool: 是否删除成功（文件不存在视为已删除）
+        """
+        try:
+            # 解析 URL 提取文件路径
+            if url.startswith('ftp://'):
+                parsed = urlparse(url)
+                file_path = unquote(parsed.path)
+            else:
+                # 纯 filename，拼接 remote_dir
+                file_path = f"{self.remote_dir}/{url}"
+
+            if not file_path:
+                logger.warning(f"[FTPOutputter] 无法从URL解析文件路径: {url}")
+                return False
+
+            with ftplib.FTP() as ftp:
+                ftp.connect(self.host, self.port, timeout=self.timeout)
+                ftp.login(self.username, self.password)
+                if self.passive_mode:
+                    ftp.set_pasv(True)
+                ftp.delete(file_path)
+
+            logger.debug(f"[FTPOutputter] 已删除文件: {file_path}")
+            return True
+        except ftplib.error_perm as e:
+            # 550: 文件不存在，视为已删除
+            if '550' in str(e):
+                logger.debug(f"[FTPOutputter] 文件不存在，视为已删除: {url}")
+                return True
+            logger.warning(f"[FTPOutputter] 删除文件失败 url={url}: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"[FTPOutputter] 删除文件失败 url={url}: {e}")
+            return False
+
     def close(self):
         """关闭连接（FTP 在 with 语句中自动关闭）"""
         logger.debug(f"[FTPOutputter] 已关闭")

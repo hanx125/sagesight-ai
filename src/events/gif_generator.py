@@ -79,11 +79,22 @@ class GIFGenerator:
 
         # 是否绘制轨迹
         self.draw_trajectory = self.config.get('draw_trajectory', True)
-        self.trajectory_color = self.config.get('trajectory_color', (0, 255, 0))  # 绿色
         # 裁剪模式：'full' = 全场景帧（不裁剪，bbox直接画在完整画面上）；'target' = 裁剪目标区域
         self.crop_mode = self.config.get('crop_mode', 'full')
         # 是否绘制检测框（受前端开关控制，False时只保留轨迹/场景不画bbox）
         self.draw_bbox = self.config.get('draw_bbox', True)
+
+        # 显示配置（与 AI 视频流/事件图片共用同一颜色来源）
+        # display_config 中颜色为 RGB 格式，GIF 帧也是 RGB（FrameCache 输出），直接使用
+        dc = self.config.get('display_config', {}) or {}
+        det_box_cfg = dc.get('detection_box', {}) or {}
+        traj_cfg = dc.get('trajectory', {}) or {}
+        self.bbox_color = tuple(det_box_cfg.get('color', [0, 255, 0]))        # 检测框颜色
+        self.bbox_thickness = det_box_cfg.get('thickness', 2)                  # 检测框线宽
+        self.trajectory_color = tuple(traj_cfg.get('color', [255, 255, 0]))    # 轨迹线颜色
+        self.trajectory_point_color = tuple(traj_cfg.get('point_color', [255, 0, 0]))  # 轨迹点颜色
+        self.trajectory_thickness = traj_cfg.get('thickness', 1)               # 轨迹线宽
+        self.trajectory_point_size = traj_cfg.get('point_size', 2)             # 轨迹点大小
 
         # 初始化 MinIO 输出器（任务开关 AND 系统全局开关）
         self.minio_outputter = None
@@ -324,7 +335,7 @@ class GIFGenerator:
                     cv2.rectangle(cropped,
                                  (int(adj_x1), int(adj_y1)),
                                  (int(adj_x2), int(adj_y2)),
-                                 (0, 255, 0), 2)
+                                 self.bbox_color, self.bbox_thickness)
                     # 中心十字标记
                     cx = int((adj_x1 + adj_x2) / 2)
                     cy = int((adj_y1 + adj_y2) / 2)
@@ -336,10 +347,10 @@ class GIFGenerator:
                 adj_y1 = (bbox[1] - crop_offset[1]) * scale_y
                 adj_x2 = (bbox[2] - crop_offset[0]) * scale_x
                 adj_y2 = (bbox[3] - crop_offset[1]) * scale_y
-                cv2.rectangle(cropped, 
-                             (int(adj_x1), int(adj_y1)), 
-                             (int(adj_x2), int(adj_y2)), 
-                             (0, 255, 0), 2)
+                cv2.rectangle(cropped,
+                             (int(adj_x1), int(adj_y1)),
+                             (int(adj_x2), int(adj_y2)),
+                             self.bbox_color, self.bbox_thickness)
                 # 绘制中心十字标记
                 cx = int((adj_x1 + adj_x2) / 2)
                 cy = int((adj_y1 + adj_y2) / 2)
@@ -482,21 +493,19 @@ class GIFGenerator:
         """
         if len(points) < 2:
             return frame
-        
-        # 绘制轨迹线
+
+        # 绘制轨迹线（渐变效果：从浅到深，增强方向感）
         for i in range(1, len(points)):
             pt1 = points[i - 1]
             pt2 = points[i]
-            
-            # 渐变颜色（从浅到深）
             alpha = i / len(points)
             color = tuple(int(c * alpha) for c in self.trajectory_color)
-            
-            cv2.line(frame, pt1, pt2, color, 2)
-        
+            cv2.line(frame, pt1, pt2, color, self.trajectory_thickness)
+
         # 绘制当前位置点
-        cv2.circle(frame, points[-1], 5, self.trajectory_color, -1)
-        
+        cv2.circle(frame, points[-1], self.trajectory_point_size + 3,
+                   self.trajectory_point_color, -1)
+
         return frame
     
     def _calculate_duration_from_timestamps(self, frames: List[Dict]) -> int:
@@ -541,7 +550,7 @@ class GIFGenerator:
     
     def _generate_gif_bytes(self, frames: List[np.ndarray], duration: int = None) -> Optional[bytes]:
         """
-        生成 GIF 字节数据（✅ PIL 调色板优化编码，替代 imageio.mimsave）
+        生成 GIF 字节数据（PIL 调色板优化编码）
 
         优化点：
         - 用 PIL.Image.quantize 生成共用 256 色调色板
@@ -549,7 +558,7 @@ class GIFGenerator:
         - optimize=True 进一步压缩
 
         Args:
-            frames: 帧序列（BGR numpy 数组）
+            frames: 帧序列（RGB numpy 数组，来自 FrameCache）
             duration: 每帧时长（毫秒），None 则使用默认值
 
         Returns:
@@ -562,9 +571,8 @@ class GIFGenerator:
             if not frames:
                 return None
 
-            # 转换为 RGB（PIL 需要 RGB）
-            rgb_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2RGB) for f in frames]
-            pil_images = [Image.fromarray(f) for f in rgb_frames]
+            # 帧已是 RGB 格式，直接转 PIL Image
+            pil_images = [Image.fromarray(f) for f in frames]
 
             # ✅ 共用调色板量化（256色）：所有帧共用同一调色板 → 文件大幅缩小
             first = pil_images[0].convert('P', palette=Image.ADAPTIVE, colors=256)

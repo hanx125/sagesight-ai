@@ -391,16 +391,22 @@ class TaskProcessManager:
 # Flask应用初始化
 # ========================================
 
-# 创建Flask应用
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'sagesight-detection-platform'
-app.config['JSON_AS_ASCII'] = False
-app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
-app.config['UPLOAD_FOLDER'] = 'models'
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
+# Windows spawn 模式下子进程会重新导入本模块（_fixup_main_from_path 阶段）
+# 通过 __name__ 区分：主进程 __name__ == '__main__'，子进程 __name__ == 'run'
+# 注意：multiprocessing.current_process().name 在 _fixup_main_from_path 阶段不可靠
+_is_main_process = __name__ == '__main__'
 
-# 初始化SocketIO
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# 创建Flask应用
+app = Flask(__name__) if _is_main_process else None
+if _is_main_process:
+    app.config['SECRET_KEY'] = 'sagesight-detection-platform'
+    app.config['JSON_AS_ASCII'] = False
+    app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+    app.config['UPLOAD_FOLDER'] = 'models'
+    app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
+
+    # 初始化SocketIO
+    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # ========================================
 # 原生 WebSocket 端点（/ws/raw，供第三方系统标准 WebSocket 接入）
@@ -454,16 +460,17 @@ def _ws_raw_handler(ws):
 
 
 # WSGI 中间件：分发 /ws/raw 到原生 WebSocket，其他路径交给 socketio
-_socketio_wsgi = app.wsgi_app
+if _is_main_process:
+    _socketio_wsgi = app.wsgi_app
 
 
-def _dispatching_wsgi(environ, start_response):
-    if environ.get('PATH_INFO') == '/ws/raw':
-        return _ws_raw_handler(environ, start_response)
-    return _socketio_wsgi(environ, start_response)
+    def _dispatching_wsgi(environ, start_response):
+        if environ.get('PATH_INFO') == '/ws/raw':
+            return _ws_raw_handler(environ, start_response)
+        return _socketio_wsgi(environ, start_response)
 
 
-app.wsgi_app = _dispatching_wsgi
+    app.wsgi_app = _dispatching_wsgi
 
 # ========================================
 # AI 视频流推送状态（文件标记方案）
@@ -518,48 +525,50 @@ def _clear_ai_stream_flags(camera_ids: list):
         except Exception:
             pass
 
-# 注册Blueprint
-register_algorithm_blueprint(app, socketio)
-register_task_blueprint(app, socketio)
-register_device_channel_pool_blueprint(app, socketio)
-app.register_blueprint(register_system_blueprint(socketio))
-register_camera_blueprint(app, socketio)
-init_audio_talk_api(app, socketio)
-register_stream_blueprint(app)
-register_directory_blueprint(app)
-register_ptz_api(app)
+# 注册Blueprint（仅主进程执行，子进程跳过避免重复加载）
+if _is_main_process:
+    register_algorithm_blueprint(app, socketio)
+    register_task_blueprint(app, socketio)
+    register_device_channel_pool_blueprint(app, socketio)
+    app.register_blueprint(register_system_blueprint(socketio))
+    register_camera_blueprint(app, socketio)
+    init_audio_talk_api(app, socketio)
+    register_stream_blueprint(app)
+    register_directory_blueprint(app)
+    register_ptz_api(app)
 
-# 注册认证模块
-from src.auth.auth_api import register_auth_blueprint, login_required, get_current_user
-register_auth_blueprint(app)
+    # 注册认证模块
+    from src.auth.auth_api import register_auth_blueprint, login_required, get_current_user
+    register_auth_blueprint(app)
 
-# 会话配置
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.permanent_session_lifetime = 86400  # 24小时
+    # 会话配置
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    app.permanent_session_lifetime = 86400  # 24小时
 
 # ========================================
 # 静态文件路由 - 提供output目录访问
 # ========================================
 from flask import send_from_directory
 
-@app.route('/output/images/<path:filename>')
-def serve_output_image(filename):
-    """提供output/images目录下的图片访问"""
-    output_dir = os.path.join(os.path.dirname(__file__), 'output', 'images')
-    return send_from_directory(output_dir, filename)
+if _is_main_process:
+    @app.route('/output/images/<path:filename>')
+    def serve_output_image(filename):
+        """提供output/images目录下的图片访问"""
+        output_dir = os.path.join(os.path.dirname(__file__), 'output', 'images')
+        return send_from_directory(output_dir, filename)
 
-@app.route('/output/<path:filename>')
-def serve_output_file(filename):
-    """提供output目录下的文件访问"""
-    output_dir = os.path.join(os.path.dirname(__file__), 'output')
-    return send_from_directory(output_dir, filename)
+    @app.route('/output/<path:filename>')
+    def serve_output_file(filename):
+        """提供output目录下的文件访问"""
+        output_dir = os.path.join(os.path.dirname(__file__), 'output')
+        return send_from_directory(output_dir, filename)
 
-@app.route('/uploads/<path:filename>')
-def serve_upload_file(filename):
-    """提供uploads目录下的文件访问（视频文件等）"""
-    uploads_dir = os.path.join(os.path.dirname(__file__), 'uploads')
-    return send_from_directory(uploads_dir, filename)
+    @app.route('/uploads/<path:filename>')
+    def serve_upload_file(filename):
+        """提供uploads目录下的文件访问（视频文件等）"""
+        uploads_dir = os.path.join(os.path.dirname(__file__), 'uploads')
+        return send_from_directory(uploads_dir, filename)
 
 # 全局实例
 task_manager = None
@@ -589,63 +598,64 @@ def get_process_manager():
 # 不需要认证的路径前缀
 PUBLIC_PATHS = ('/login', '/api/auth/', '/api/ai-stream/', '/api/events/push', '/api/events/update', '/api/events/gif_ready', '/api/display/config', '/static/', '/output/')
 
-@app.before_request
-def check_auth():
-    """全局认证检查"""
-    # 静态资源、登录页、认证API不需要检查
-    if request.path.startswith(PUBLIC_PATHS):
-        return None
-    
-    # 已登录则放行
-    if 'user_id' in session:
-        return None
-    
-    # API请求返回401
-    if request.path.startswith('/api/'):
-        return jsonify({'error': '未登录', 'code': 'UNAUTHORIZED'}), 401
-    
-    # 页面请求重定向到登录页
-    return redirect('/login')
+if _is_main_process:
+    @app.before_request
+    def check_auth():
+        """全局认证检查"""
+        # 静态资源、登录页、认证API不需要检查
+        if request.path.startswith(PUBLIC_PATHS):
+            return None
+
+        # 已登录则放行
+        if 'user_id' in session:
+            return None
+
+        # API请求返回401
+        if request.path.startswith('/api/'):
+            return jsonify({'error': '未登录', 'code': 'UNAUTHORIZED'}), 401
+
+        # 页面请求重定向到登录页
+        return redirect('/login')
 
 
-# ========================================
-# 页面路由
-# ========================================
+    # ========================================
+    # 页面路由
+    # ========================================
 
-@app.route('/login')
-def login_page():
-    """登录页面"""
-    if 'user_id' in session:
-        return redirect('/')
-    return render_template('login.html')
+    @app.route('/login')
+    def login_page():
+        """登录页面"""
+        if 'user_id' in session:
+            return redirect('/')
+        return render_template('login.html')
 
-@app.route('/')
-def index():
-    return render_template('monitor.html')
+    @app.route('/')
+    def index():
+        return render_template('monitor.html')
 
-@app.route('/tasks')
-def tasks_page():
-    return render_template('tasks.html')
+    @app.route('/tasks')
+    def tasks_page():
+        return render_template('tasks.html')
 
-@app.route('/cameras')
-def cameras_page():
-    return render_template('cameras.html')
+    @app.route('/cameras')
+    def cameras_page():
+        return render_template('cameras.html')
 
-@app.route('/events')
-def events_page():
-    return render_template('events.html')
+    @app.route('/events')
+    def events_page():
+        return render_template('events.html')
 
-@app.route('/monitor')
-def monitor_page():
-    return render_template('monitor.html')
+    @app.route('/monitor')
+    def monitor_page():
+        return render_template('monitor.html')
 
-@app.route('/algorithms')
-def algorithms_page():
-    return render_template('algorithms.html')
+    @app.route('/algorithms')
+    def algorithms_page():
+        return render_template('algorithms.html')
 
-@app.route('/system')
-def system_page():
-    return render_template('system.html')
+    @app.route('/system')
+    def system_page():
+        return render_template('system.html')
 
 
 # ========================================
@@ -669,85 +679,86 @@ def system_page():
 # 注意：/api/events 路由已在 task_api.py 蓝图中定义
 # 这里只定义额外的事件相关路由
 
-@app.route('/api/events/stats', methods=['GET'])
-def get_event_stats():
-    """获取事件统计
+if _is_main_process:
+    @app.route('/api/events/stats', methods=['GET'])
+    def get_event_stats():
+        """获取事件统计
 
-    返回字段说明：
-    - by_type:   按 type 列分组（tracking/zone/loitering，事件检测维度）
-    - by_status: 按 status 列分组（tracking_start/tracking_end 等，事件生命周期维度）
-    - by_class:  按 class_name 列分组（检测目标类别）
-    - daily:     最近 7 天每日事件数
-    """
-    tm = get_task_manager()
+        返回字段说明：
+        - by_type:   按 type 列分组（tracking/zone/loitering，事件检测维度）
+        - by_status: 按 status 列分组（tracking_start/tracking_end 等，事件生命周期维度）
+        - by_class:  按 class_name 列分组（检测目标类别）
+        - daily:     最近 7 天每日事件数
+        """
+        tm = get_task_manager()
 
-    total = tm.get_event_count()
+        total = tm.get_event_count()
 
-    import sqlite3
-    with sqlite3.connect(tm.db_path) as conn:
-        cursor = conn.cursor()
-        # 按事件类型统计（tracking/zone/loitering）
-        cursor.execute('SELECT type, COUNT(*) FROM events GROUP BY type')
-        type_stats = dict(cursor.fetchall())
+        import sqlite3
+        with sqlite3.connect(tm.db_path) as conn:
+            cursor = conn.cursor()
+            # 按事件类型统计（tracking/zone/loitering）
+            cursor.execute('SELECT type, COUNT(*) FROM events GROUP BY type')
+            type_stats = dict(cursor.fetchall())
 
-        # 按事件状态统计（tracking_start/tracking_update/tracking_end/gif_ready）
-        cursor.execute('SELECT status, COUNT(*) FROM events GROUP BY status')
-        status_stats = dict(cursor.fetchall())
+            # 按事件状态统计（tracking_start/tracking_update/tracking_end/gif_ready）
+            cursor.execute('SELECT status, COUNT(*) FROM events GROUP BY status')
+            status_stats = dict(cursor.fetchall())
 
-        cursor.execute('SELECT class_name, COUNT(*) FROM events GROUP BY class_name ORDER BY COUNT(*) DESC LIMIT 10')
-        class_stats = dict(cursor.fetchall())
+            cursor.execute('SELECT class_name, COUNT(*) FROM events GROUP BY class_name ORDER BY COUNT(*) DESC LIMIT 10')
+            class_stats = dict(cursor.fetchall())
 
-        cursor.execute('SELECT DATE(created_at) as date, COUNT(*) FROM events GROUP BY DATE(created_at) ORDER BY date DESC LIMIT 7')
-        daily_stats = [{'date': row[0], 'count': row[1]} for row in cursor.fetchall()]
+            cursor.execute('SELECT DATE(created_at) as date, COUNT(*) FROM events GROUP BY DATE(created_at) ORDER BY date DESC LIMIT 7')
+            daily_stats = [{'date': row[0], 'count': row[1]} for row in cursor.fetchall()]
 
-    return jsonify({
-        'total': total,
-        'by_type': type_stats,
-        'by_status': status_stats,
-        'by_class': class_stats,
-        'daily': daily_stats
-    })
-
-
-@app.route('/api/display/config', methods=['GET'])
-def get_display_config():
-    """返回显示配置（含 alarm 报警开关）给前端
-
-    前端实时监控页通过此接口拉取 display_config.yaml 中的 alarm 段，
-    用于控制屏幕闪烁报警行为。配置文件为单一真相源，避免前端硬编码。
-    """
-    from src.tasks.task_manager import get_default_display_config
-    return jsonify(get_default_display_config())
-
-
-# ========================================
-# 监控 API
-# ========================================
-
-@app.route('/api/streams/<int:task_id>')
-def get_stream(task_id):
-    tm = get_task_manager()
-    task = tm.get_task(task_id)
-    if task:
         return jsonify({
-            'task_id': task_id,
-            'stream_url': task.rtsp_url,
-            'status': task.status
+            'total': total,
+            'by_type': type_stats,
+            'by_status': status_stats,
+            'by_class': class_stats,
+            'daily': daily_stats
         })
-    return jsonify({'error': '任务不存在'}), 404
 
-@app.route('/api/streams/<int:task_id>/status')
-def get_stream_status(task_id):
-    tm = get_task_manager()
-    task = tm.get_task(task_id)
-    if task:
-        return jsonify({
-            'task_id': task_id,
-            'status': task.status,
-            'camera_name': task.camera_name,
-            'enabled': task.enabled
-        })
-    return jsonify({'error': '任务不存在'}), 404
+
+    @app.route('/api/display/config', methods=['GET'])
+    def get_display_config():
+        """返回显示配置（含 alarm 报警开关）给前端
+
+        前端实时监控页通过此接口拉取 display_config.yaml 中的 alarm 段，
+        用于控制屏幕闪烁报警行为。配置文件为单一真相源，避免前端硬编码。
+        """
+        from src.tasks.task_manager import get_default_display_config
+        return jsonify(get_default_display_config())
+
+
+    # ========================================
+    # 监控 API
+    # ========================================
+
+    @app.route('/api/streams/<int:task_id>')
+    def get_stream(task_id):
+        tm = get_task_manager()
+        task = tm.get_task(task_id)
+        if task:
+            return jsonify({
+                'task_id': task_id,
+                'stream_url': task.rtsp_url,
+                'status': task.status
+            })
+        return jsonify({'error': '任务不存在'}), 404
+
+    @app.route('/api/streams/<int:task_id>/status')
+    def get_stream_status(task_id):
+        tm = get_task_manager()
+        task = tm.get_task(task_id)
+        if task:
+            return jsonify({
+                'task_id': task_id,
+                'status': task.status,
+                'camera_name': task.camera_name,
+                'enabled': task.enabled
+            })
+        return jsonify({'error': '任务不存在'}), 404
 
 
 # ========================================
@@ -784,55 +795,56 @@ def _emit_ai_stream_frame(payload):
         logger.error(f"广播 AI 帧失败 [{payload.get('camera_id', '')}]: {e}")
 
 
-@app.route('/api/ai-stream/push', methods=['POST'])
-def push_ai_stream_frame():
-    """接收任务进程推送的 AI 视频帧，并派发到后台 greenlet 异步广播
+if _is_main_process:
+    @app.route('/api/ai-stream/push', methods=['POST'])
+    def push_ai_stream_frame():
+        """接收任务进程推送的 AI 视频帧，并派发到后台 greenlet 异步广播
 
-    HTTP 处理只做：解析 → 缓存最新帧 → 派发 emit greenlet，立即返回，
-    避免前端客户端接收慢时阻塞本协程导致任务进程 HTTP 超时。
-    （注意：不能用标准库 queue.Queue 的阻塞 get 做常驻 greenlet——本项目未调用
-     eventlet.monkey_patch()，阻塞 get 会卡死 eventlet hub，导致整个服务无响应。）
-    """
-    try:
-        data = request.get_json()
-        task_id = data.get('task_id')
-        camera_id = data.get('camera_id')
-        # 兼容 frame_base64（TrackedObjectProcessor 发送）和 frame（旧版兼容）
-        frame = data.get('frame_base64') or data.get('frame')
-        timestamp = data.get('timestamp')
-        # frame_seq：单调递增帧序号，用于前端丢弃过期帧（避免异步 Image 解码乱序导致画面倒退）
-        frame_seq = data.get('frame_seq') or 0
-
-        if not camera_id or not frame:
-            return jsonify({'error': '参数不完整'}), 400
-
-        # 缓存最新帧
-        _ai_stream_cache[camera_id] = {
-            'frame': frame,
-            'timestamp': timestamp,
-            'task_id': task_id,
-            'frame_seq': frame_seq
-        }
-
-        # 派发到后台 greenlet 执行 emit（start_background_task 在 eventlet 下用
-        # eventlet.spawn，非阻塞；HTTP 立即返回，emit 不阻塞本协程）
-        payload = {
-            'task_id': task_id,
-            'camera_id': camera_id,
-            'frame': frame,
-            'frame_seq': frame_seq,
-            'timestamp': timestamp
-        }
+        HTTP 处理只做：解析 → 缓存最新帧 → 派发 emit greenlet，立即返回，
+        避免前端客户端接收慢时阻塞本协程导致任务进程 HTTP 超时。
+        （注意：不能用标准库 queue.Queue 的阻塞 get 做常驻 greenlet——本项目未调用
+         eventlet.monkey_patch()，阻塞 get 会卡死 eventlet hub，导致整个服务无响应。）
+        """
         try:
-            socketio.start_background_task(_emit_ai_stream_frame, payload)
+            data = request.get_json()
+            task_id = data.get('task_id')
+            camera_id = data.get('camera_id')
+            # 兼容 frame_base64（TrackedObjectProcessor 发送）和 frame（旧版兼容）
+            frame = data.get('frame_base64') or data.get('frame')
+            timestamp = data.get('timestamp')
+            # frame_seq：单调递增帧序号，用于前端丢弃过期帧（避免异步 Image 解码乱序导致画面倒退）
+            frame_seq = data.get('frame_seq') or 0
+
+            if not camera_id or not frame:
+                return jsonify({'error': '参数不完整'}), 400
+
+            # 缓存最新帧
+            _ai_stream_cache[camera_id] = {
+                'frame': frame,
+                'timestamp': timestamp,
+                'task_id': task_id,
+                'frame_seq': frame_seq
+            }
+
+            # 派发到后台 greenlet 执行 emit（start_background_task 在 eventlet 下用
+            # eventlet.spawn，非阻塞；HTTP 立即返回，emit 不阻塞本协程）
+            payload = {
+                'task_id': task_id,
+                'camera_id': camera_id,
+                'frame': frame,
+                'frame_seq': frame_seq,
+                'timestamp': timestamp
+            }
+            try:
+                socketio.start_background_task(_emit_ai_stream_frame, payload)
+            except Exception as e:
+                logger.error(f"[AI流] 派发广播 greenlet 失败: {e}")
+
+            return jsonify({'success': True})
+
         except Exception as e:
-            logger.error(f"[AI流] 派发广播 greenlet 失败: {e}")
-
-        return jsonify({'success': True})
-
-    except Exception as e:
-        logger.error(f"推送 AI 视频帧失败: {e}")
-        return jsonify({'error': str(e)}), 500
+            logger.error(f"推送 AI 视频帧失败: {e}")
+            return jsonify({'error': str(e)}), 500
 
 
 def _emit_ws_event(event: str, data: dict, log_tag: str = ''):
@@ -852,169 +864,170 @@ def _emit_ws_event(event: str, data: dict, log_tag: str = ''):
         logger.error(f"广播 WebSocket 事件失败 [{event}]: {e}")
 
 
-@app.route('/api/events/push', methods=['POST'])
-def push_event_to_websocket():
-    """接收任务进程推送的事件数据，并通过 WebSocket 广播到驾驶舱"""
-    try:
-        data = request.get_json()
-        if not data or 'event_id' not in data:
-            return jsonify({'error': '参数不完整'}), 400
+if _is_main_process:
+    @app.route('/api/events/push', methods=['POST'])
+    def push_event_to_websocket():
+        """接收任务进程推送的事件数据，并通过 WebSocket 广播到驾驶舱"""
+        try:
+            data = request.get_json()
+            if not data or 'event_id' not in data:
+                return jsonify({'error': '参数不完整'}), 400
 
-        # 异步派发到后台 greenlet，避免 ws.send 阻塞 eventlet hub 影响 AI 帧推送
-        log_tag = f"事件已推送到驾驶舱: {data.get('event_id', '')[:8]}... type={data.get('type', '')}"
-        socketio.start_background_task(_emit_ws_event, 'new_event', data, log_tag)
+            # 异步派发到后台 greenlet，避免 ws.send 阻塞 eventlet hub 影响 AI 帧推送
+            log_tag = f"事件已推送到驾驶舱: {data.get('event_id', '')[:8]}... type={data.get('type', '')}"
+            socketio.start_background_task(_emit_ws_event, 'new_event', data, log_tag)
 
-        return jsonify({'success': True})
+            return jsonify({'success': True})
 
-    except Exception as e:
-        logger.error(f"推送事件到驾驶舱失败: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/events/update', methods=['POST'])
-def push_event_update_to_websocket():
-    """接收事件状态更新（ended），通过 WebSocket 广播到驾驶舱
-
-    单一事件模型：跟踪结束时调用，让前端更新已显示事件卡片的状态为"已结束"。
-    """
-    try:
-        data = request.get_json()
-        if not data or 'event_id' not in data:
-            return jsonify({'error': '参数不完整'}), 400
-
-        # 异步派发到后台 greenlet，避免 ws.send 阻塞 eventlet hub 影响 AI 帧推送
-        log_tag = f"[Event] event_update 推送: event_id={data['event_id'][:8]}, status={data.get('status', '')}"
-        socketio.start_background_task(_emit_ws_event, 'event_update', data, log_tag)
-
-        return jsonify({'success': True})
-
-    except Exception as e:
-        logger.error(f"推送 event_update 失败: {e}")
-        return jsonify({'error': str(e)}), 500
+        except Exception as e:
+            logger.error(f"推送事件到驾驶舱失败: {e}")
+            return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/events/gif_ready', methods=['POST'])
-def push_gif_ready_to_websocket():
-    """接收 GIF 生成完成通知，通过 WebSocket 广播到驾驶舱和事件管理页面
+    @app.route('/api/events/update', methods=['POST'])
+    def push_event_update_to_websocket():
+        """接收事件状态更新（ended），通过 WebSocket 广播到驾驶舱
 
-    让前端实时收到 GIF 并更新已显示事件卡片的 GIF 缩略图。
-    """
-    try:
-        data = request.get_json()
-        if not data or 'event_id' not in data:
-            return jsonify({'error': '参数不完整'}), 400
+        单一事件模型：跟踪结束时调用，让前端更新已显示事件卡片的状态为"已结束"。
+        """
+        try:
+            data = request.get_json()
+            if not data or 'event_id' not in data:
+                return jsonify({'error': '参数不完整'}), 400
 
-        # 异步派发到后台 greenlet，避免 ws.send 阻塞 eventlet hub 影响 AI 帧推送
-        log_tag = f"[GIF] gif_ready 推送: event_id={data['event_id'][:8]}"
-        socketio.start_background_task(_emit_ws_event, 'gif_ready', data, log_tag)
+            # 异步派发到后台 greenlet，避免 ws.send 阻塞 eventlet hub 影响 AI 帧推送
+            log_tag = f"[Event] event_update 推送: event_id={data['event_id'][:8]}, status={data.get('status', '')}"
+            socketio.start_background_task(_emit_ws_event, 'event_update', data, log_tag)
 
-        return jsonify({'success': True})
+            return jsonify({'success': True})
 
-    except Exception as e:
-        logger.error(f"推送 gif_ready 失败: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/ai-stream/enable/<camera_id>', methods=['POST'])
-def enable_ai_stream(camera_id):
-    """启用摄像机的 AI 视频流（前端点击 AI 播放时调用）
-
-    通过创建文件标记通知任务子进程的 TrackedObjectProcessor 开始推送 AI 帧到前端。
-    文件标记方案不依赖 Manager dict 代理的跨进程传递，更加可靠。
-    """
-    try:
-        _set_ai_stream_flag(camera_id, True)
-        logger.info(f"[AI流] 已启用: camera_id={camera_id}")
-        return jsonify({'success': True, 'message': 'AI 视频流已启用'})
-
-    except Exception as e:
-        logger.error(f"启用 AI 视频流失败: {e}")
-        return jsonify({'error': str(e)}), 500
+        except Exception as e:
+            logger.error(f"推送 event_update 失败: {e}")
+            return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/ai-stream/disable/<camera_id>', methods=['POST'])
-def disable_ai_stream(camera_id):
-    """禁用摄像机的 AI 视频流（前端点击停止 AI 播放时调用）
+    @app.route('/api/events/gif_ready', methods=['POST'])
+    def push_gif_ready_to_websocket():
+        """接收 GIF 生成完成通知，通过 WebSocket 广播到驾驶舱和事件管理页面
 
-    通过删除文件标记通知任务子进程的 TrackedObjectProcessor 停止推送 AI 帧到前端。
-    """
-    try:
-        _set_ai_stream_flag(camera_id, False)
-        _ai_stream_cache.pop(camera_id, None)
-        logger.info(f"[AI流] 已禁用: camera_id={camera_id}")
-        return jsonify({'success': True, 'message': 'AI 视频流已禁用'})
+        让前端实时收到 GIF 并更新已显示事件卡片的 GIF 缩略图。
+        """
+        try:
+            data = request.get_json()
+            if not data or 'event_id' not in data:
+                return jsonify({'error': '参数不完整'}), 400
 
-    except Exception as e:
-        logger.error(f"禁用 AI 视频流失败: {e}")
-        return jsonify({'error': str(e)}), 500
+            # 异步派发到后台 greenlet，避免 ws.send 阻塞 eventlet hub 影响 AI 帧推送
+            log_tag = f"[GIF] gif_ready 推送: event_id={data['event_id'][:8]}"
+            socketio.start_background_task(_emit_ws_event, 'gif_ready', data, log_tag)
+
+            return jsonify({'success': True})
+
+        except Exception as e:
+            logger.error(f"推送 gif_ready 失败: {e}")
+            return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/ai-stream/frame/<camera_id>', methods=['GET'])
-def get_ai_stream_frame(camera_id):
-    """获取摄像机的最新 AI 视频帧（用于视频文件播放）"""
-    try:
-        # 从缓存获取最新帧
-        frame_data = _ai_stream_cache.get(camera_id)
+    @app.route('/api/ai-stream/enable/<camera_id>', methods=['POST'])
+    def enable_ai_stream(camera_id):
+        """启用摄像机的 AI 视频流（前端点击 AI 播放时调用）
 
-        if not frame_data:
-            return jsonify({'error': '没有可用的帧数据'}), 404
+        通过创建文件标记通知任务子进程的 TrackedObjectProcessor 开始推送 AI 帧到前端。
+        文件标记方案不依赖 Manager dict 代理的跨进程传递，更加可靠。
+        """
+        try:
+            _set_ai_stream_flag(camera_id, True)
+            logger.info(f"[AI流] 已启用: camera_id={camera_id}")
+            return jsonify({'success': True, 'message': 'AI 视频流已启用'})
+
+        except Exception as e:
+            logger.error(f"启用 AI 视频流失败: {e}")
+            return jsonify({'error': str(e)}), 500
+
+
+    @app.route('/api/ai-stream/disable/<camera_id>', methods=['POST'])
+    def disable_ai_stream(camera_id):
+        """禁用摄像机的 AI 视频流（前端点击停止 AI 播放时调用）
+
+        通过删除文件标记通知任务子进程的 TrackedObjectProcessor 停止推送 AI 帧到前端。
+        """
+        try:
+            _set_ai_stream_flag(camera_id, False)
+            _ai_stream_cache.pop(camera_id, None)
+            logger.info(f"[AI流] 已禁用: camera_id={camera_id}")
+            return jsonify({'success': True, 'message': 'AI 视频流已禁用'})
+
+        except Exception as e:
+            logger.error(f"禁用 AI 视频流失败: {e}")
+            return jsonify({'error': str(e)}), 500
+
+
+    @app.route('/api/ai-stream/frame/<camera_id>', methods=['GET'])
+    def get_ai_stream_frame(camera_id):
+        """获取摄像机的最新 AI 视频帧（用于视频文件播放）"""
+        try:
+            # 从缓存获取最新帧
+            frame_data = _ai_stream_cache.get(camera_id)
+
+            if not frame_data:
+                return jsonify({'error': '没有可用的帧数据'}), 404
+
+            return jsonify({
+                'success': True,
+                'camera_id': camera_id,
+                'frame': frame_data.get('frame'),
+                'timestamp': frame_data.get('timestamp')
+            })
+
+        except Exception as e:
+            logger.error(f"获取 AI 视频帧失败: {e}")
+            return jsonify({'error': str(e)}), 500
+
+
+    # ========================================
+    # WebSocket 事件处理
+    # ========================================
+
+    @socketio.on('connect', namespace='/ws')
+    def handle_connect():
+        logger.info('客户端已连接')
+        emit('connected', {'message': '已连接到实时推送服务'})
+
+    @socketio.on('disconnect', namespace='/ws')
+    def handle_disconnect():
+        logger.info('客户端已断开')
+
+    @socketio.on('subscribe', namespace='/ws')
+    def handle_subscribe(data):
+        task_ids = data.get('task_ids', [])
+        logger.info('客户端订阅任务: %s', task_ids)
+        emit('subscribed', {'task_ids': task_ids})
+
+
+    # ========================================
+    # 统计 API
+    # ========================================
+
+    @app.route('/api/stats')
+    def get_stats():
+        tm = get_task_manager()
+        pm = get_process_manager()
+
+        all_tasks = tm.get_all_tasks()
+        running_tasks = [t for t in all_tasks if t.status == 'running']
+        running_process_ids = pm.get_running_tasks()
+
+        # 从数据库获取事件统计
+        total_events = tm.get_event_count()
 
         return jsonify({
-            'success': True,
-            'camera_id': camera_id,
-            'frame': frame_data.get('frame'),
-            'timestamp': frame_data.get('timestamp')
+            'total_tasks': len(all_tasks),
+            'running_tasks': len(running_tasks),
+            'running_processes': len(running_process_ids),
+            'stopped_tasks': len([t for t in all_tasks if t.status == 'stopped']),
+            'error_tasks': len([t for t in all_tasks if t.status == 'error']),
+            'total_events': total_events
         })
-
-    except Exception as e:
-        logger.error(f"获取 AI 视频帧失败: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-# ========================================
-# WebSocket 事件处理
-# ========================================
-
-@socketio.on('connect', namespace='/ws')
-def handle_connect():
-    logger.info('客户端已连接')
-    emit('connected', {'message': '已连接到实时推送服务'})
-
-@socketio.on('disconnect', namespace='/ws')
-def handle_disconnect():
-    logger.info('客户端已断开')
-
-@socketio.on('subscribe', namespace='/ws')
-def handle_subscribe(data):
-    task_ids = data.get('task_ids', [])
-    logger.info('客户端订阅任务: %s', task_ids)
-    emit('subscribed', {'task_ids': task_ids})
-
-
-# ========================================
-# 统计 API
-# ========================================
-
-@app.route('/api/stats')
-def get_stats():
-    tm = get_task_manager()
-    pm = get_process_manager()
-    
-    all_tasks = tm.get_all_tasks()
-    running_tasks = [t for t in all_tasks if t.status == 'running']
-    running_process_ids = pm.get_running_tasks()
-    
-    # 从数据库获取事件统计
-    total_events = tm.get_event_count()
-    
-    return jsonify({
-        'total_tasks': len(all_tasks),
-        'running_tasks': len(running_tasks),
-        'running_processes': len(running_process_ids),
-        'stopped_tasks': len([t for t in all_tasks if t.status == 'stopped']),
-        'error_tasks': len([t for t in all_tasks if t.status == 'error']),
-        'total_events': total_events
-    })
 
 
 # ========================================

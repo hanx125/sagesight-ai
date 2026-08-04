@@ -7,6 +7,7 @@ MinIO 输出器
 from typing import Dict
 from minio import Minio
 from datetime import timedelta
+from urllib.parse import urlparse, unquote
 import io
 import logging
 import urllib3
@@ -36,9 +37,13 @@ class MinIOOutputter:
         self.connect_timeout = config.get('connect_timeout', 3)
         self.read_timeout = config.get('read_timeout', 10)
         max_retries = config.get('max_retries', 2)
+        # 连接池大小：多相机并发上传 GIF/图片时需要足够连接槽位
+        # urllib3 默认 maxsize=1，并发请求会导致连接被频繁丢弃重建
+        pool_maxsize = config.get('pool_maxsize', 20)
 
         # 构造带超时的 urllib3 连接池交给 MinIO 客户端
         http_client = urllib3.PoolManager(
+            maxsize=pool_maxsize,
             timeout=urllib3.Timeout(
                 connect=self.connect_timeout,
                 read=self.read_timeout,
@@ -106,6 +111,44 @@ class MinIOOutputter:
         logger.debug(f"[MinIOOutputter] 图片已上传: {object_name}")
         return url
     
+    def delete(self, url: str) -> bool:
+        """
+        从 MinIO 删除对象
+
+        支持两种输入：
+        - 完整 presigned URL（http://endpoint/{bucket}/{object_name}?X-Amz-...）
+        - 纯 object_name（如 "event_id.jpg"，使用配置的 bucket）
+
+        Args:
+            url: presigned URL 或 object_name
+
+        Returns:
+            bool: 是否删除成功（对象不存在视为已删除）
+        """
+        try:
+            # 解析 URL 提取 bucket 和 object_name
+            if url.startswith('http'):
+                parsed = urlparse(url)
+                # path 格式: /{bucket}/{object_name}
+                path = unquote(parsed.path).lstrip('/')
+                parts = path.split('/', 1)
+                if len(parts) < 2 or not parts[0] or not parts[1]:
+                    logger.warning(f"[MinIOOutputter] 无法从URL解析bucket和object_name: {url}")
+                    return False
+                bucket = parts[0]
+                object_name = parts[1]
+            else:
+                # 纯 object_name，使用配置的 bucket
+                bucket = self.bucket
+                object_name = url
+
+            self.client.remove_object(bucket, object_name)
+            logger.debug(f"[MinIOOutputter] 已删除对象: {bucket}/{object_name}")
+            return True
+        except Exception as e:
+            logger.warning(f"[MinIOOutputter] 删除对象失败 url={url}: {e}")
+            return False
+
     def close(self):
         """关闭连接（MinIO 客户端不需要显式关闭）"""
         logger.debug(f"[MinIOOutputter] 已关闭")

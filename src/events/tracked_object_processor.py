@@ -45,7 +45,7 @@ import signal
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -71,6 +71,7 @@ class TrackedObjectProcessor(mp.Process):
         ai_stream_config: Optional[dict] = None,
         ai_stream_enabled_state: Optional[dict] = None,
         ptz_metrics: Optional[dict] = None,
+        ready_event: Optional[mp.Event] = None,
     ):
         """
         Args:
@@ -101,12 +102,17 @@ class TrackedObjectProcessor(mp.Process):
                 本进程通过 "autotrack" 回调写入目标位置和跟踪激活状态,
                 实际 PTZ ONVIF 控制由独立 PTZ 控制进程基于
                 src/cameras/ptz_service.py 的 PTZController 完成。
+            ready_event: 就绪事件（可选）
+                子进程完成初始化（CameraState/EventOutput/FrameCache/线程池创建完毕）
+                进入主循环前 set，主进程等待此事件后再启动 CameraWorker，
+                避免 CameraWorker 投递的帧在 processor 就绪前填满队列。
         """
         super().__init__(name="TrackedObjectProcessor")
 
         self.camera_configs = camera_configs
         self.detected_objects_queue = detected_objects_queue
         self.stop_event = stop_event
+        self.ready_event = ready_event
         self.ai_stream_config = ai_stream_config or {}
         # 显示配置（框颜色、线宽、是否显示检测框/跟踪框/轨迹等）
         self.display_config = self.ai_stream_config.get('display_config', {})
@@ -128,6 +134,16 @@ class TrackedObjectProcessor(mp.Process):
         self.frame_caches: dict[str, object] = {}  # {camera_id: FrameCache}
         self.active_events: dict[str, dict] = {}  # {camera_id: {obj_id: event_info}}
 
+        # 事件层合并：宽限期内待结束的事件
+        # 解决跟踪 ID switch 导致的重复事件：目标消失时不立即结束事件，
+        # 移入 pending_end_events 等待宽限期。若宽限期内有同 label+bbox 相近的新目标出现，
+        # 认为是同一目标的 ID 切换，复用原 event_id 延续事件；超时则真正结束。
+        # {camera_id: {track_id: {event_id, label, bbox, end_frame_time, end_wall_time, obj_dict, active_event}}}
+        self.pending_end_events: dict[str, dict[str, dict]] = {}
+        # 宽限期（秒）：目标消失后多久才真正结束事件
+        # 配合 max_age=45（约1.5秒），总容忍时间约 4.5 秒，覆盖大多数短时遮挡场景
+        self.event_grace_period = 3.0
+
         # GIF 生成线程池（耗时IO操作）
         self.gif_executor: Optional[ThreadPoolExecutor] = None
 
@@ -139,6 +155,8 @@ class TrackedObjectProcessor(mp.Process):
 
         # 当前帧（主循环读一次 shm，回调/frame_cache/AI流共用，避免重复读 shm）
         self._current_frame: Optional[np.ndarray] = None
+        # 当前帧是否与检测框对齐（True=帧序号匹配，False=降级使用最新帧）
+        self._current_frame_aligned: bool = True
 
         # AI 流 per-camera 背压锁（防止线程池积压，丢旧帧）
         self.ai_stream_inflight_locks: dict[str, threading.Lock] = {}
@@ -155,6 +173,15 @@ class TrackedObjectProcessor(mp.Process):
 
     def run(self):
         """进程主函数"""
+        # 子进程日志配置：用 QueueHandler 把日志发到主进程，避免多进程写同一文件
+        # Windows spawn 模式下子进程会继承主进程的 RotatingFileHandler，多进程同时
+        # 写同一日志文件会触发 PermissionError [WinError 32]（文件锁冲突）
+        try:
+            from src.utils.log_manager import LogManager
+            LogManager.get_instance().setup_worker_process()
+        except Exception:
+            pass
+
         proc_logger = logging.getLogger("tracked_object_processor")
         proc_logger.info(f"事件处理进程启动: pid={os.getpid()}")
 
@@ -182,6 +209,13 @@ class TrackedObjectProcessor(mp.Process):
             max_workers=6, thread_name_prefix="AI-Stream"
         )
 
+        # FrameCache 异步写入线程池（JPEG 编码 ~2-5ms 移出主循环）
+        # per-camera 背压锁防止积压：上一帧编码中则丢弃本帧
+        self.frame_cache_executor = ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="FrameCache"
+        )
+        self.frame_cache_inflight_locks: dict[str, threading.Lock] = {}
+
         # AI 视频流配置
         ai_stream_interval = self.ai_stream_config.get("interval", 10)
 
@@ -190,6 +224,11 @@ class TrackedObjectProcessor(mp.Process):
             f"camera_states={len(self.camera_states)}, "
             f"ai_stream_interval={ai_stream_interval}"
         )
+
+        # 通知主进程：初始化完成，可以启动 CameraWorker 投递数据
+        # 主进程在 start() 中等待此事件，避免队列在 processor 就绪前被填满
+        if self.ready_event is not None:
+            self.ready_event.set()
 
         # 主循环
         processed_count = 0
@@ -205,6 +244,7 @@ class TrackedObjectProcessor(mp.Process):
         # 诊断计数器：统计 shm 帧回读和 FrameCache 写入成功率
         self._shm_read_total = 0       # _read_frame_from_shm 调用总次数
         self._shm_read_success = 0     # 成功返回非 None 的次数
+        self._shm_read_misaligned = 0  # 降级使用最新帧的次数（帧序号不匹配，帧与框可能错位）
         self._frame_cache_push_total = 0   # frame_cache.push 调用次数
         self._frame_cache_push_success = 0  # 实际写入缓存次数（采样通过+编码成功）
         self._max_queue_size = 0       # 队列最大积压深度
@@ -235,9 +275,12 @@ class TrackedObjectProcessor(mp.Process):
                         sum(self._event_durations) / len(self._event_durations)
                         if self._event_durations else 0
                     )
-                    # 诊断：shm 回读成功率与 FrameCache 写入成功率
+                    # 诊断：shm 回读成功率、对齐率与 FrameCache 写入成功率
                     shm_rate = (
                         self._shm_read_success / max(1, self._shm_read_total) * 100
+                    )
+                    misalign_rate = (
+                        self._shm_read_misaligned / max(1, self._shm_read_success) * 100
                     )
                     cache_rate = (
                         self._frame_cache_push_success / max(1, self._frame_cache_push_total) * 100
@@ -250,6 +293,7 @@ class TrackedObjectProcessor(mp.Process):
                         f"end触发: {self._end_triggered_count}, "
                         f"平均事件持续: {avg_dur:.2f}s, "
                         f"shm回读成功率: {shm_rate:.1f}% ({self._shm_read_success}/{self._shm_read_total}), "
+                        f"帧未对齐率: {misalign_rate:.1f}% ({self._shm_read_misaligned}/{self._shm_read_success}), "
                         f"缓存写入成功率: {cache_rate:.1f}% ({self._frame_cache_push_success}/{self._frame_cache_push_total}), "
                         f"队列最大积压: {self._max_queue_size}"
                     )
@@ -265,6 +309,10 @@ class TrackedObjectProcessor(mp.Process):
         if self.gif_executor:
             self.gif_executor.shutdown(wait=False)
 
+        # 关闭 FrameCache 异步写入线程池
+        if self.frame_cache_executor:
+            self.frame_cache_executor.shutdown(wait=False)
+
         # 关闭 AI 流推送线程池
         if self.ai_stream_executor:
             self.ai_stream_executor.shutdown(wait=False)
@@ -276,6 +324,17 @@ class TrackedObjectProcessor(mp.Process):
         """初始化 CameraState、EventOutput 和 FrameCache"""
         from src.events.event_output import EventOutput
         from src.events.frame_cache import FrameCache
+        from src.system.system_config_loader import (
+            load_system_config, get_storage_config, get_mqtt_config
+        )
+
+        _init_start = time.time()
+        proc_logger.info(f"开始初始化 {len(self.camera_configs)} 个相机的组件...")
+
+        # 系统配置只加载一次（避免每个相机重复读文件）
+        _storage_config = get_storage_config()
+        _mqtt_config = get_mqtt_config()
+        _system_config = load_system_config()
 
         for cam_id, config in self.camera_configs.items():
             # 创建 CameraState
@@ -293,17 +352,17 @@ class TrackedObjectProcessor(mp.Process):
             event_config["task_id"] = config.get("task_id")
             event_config["algorithm"] = config.get("algorithm", "yolov11")
 
-            # 注入全局系统配置（storage/mqtt/web_server 属系统配置，从 system_config.yaml 读取，
-            # 不存任务表）。若不注入，EventOutput 读不到 FTP/MinIO 全局开关和 MQTT 配置，
-            # 导致即使任务开关和系统全局开关都打开也不会上传、不发送 MQTT 事件元数据。
-            from src.system.system_config_loader import (
-                load_system_config, get_storage_config, get_mqtt_config
-            )
-            event_config["storage"] = get_storage_config()
-            event_config["mqtt"] = get_mqtt_config()
-            event_config["system_config"] = load_system_config()
+            # 注入全局系统配置（复用已加载的配置，避免重复读文件）
+            event_config["storage"] = _storage_config
+            event_config["mqtt"] = _mqtt_config
+            event_config["system_config"] = _system_config
             event_config.setdefault("enabled", True)
             event_config.setdefault("save_to_db", True)
+
+            # 注入 display_config 到 gif 配置，使 GIF 绘制（检测框/轨迹颜色）与
+            # AI 视频流、事件图片保持一致的颜色来源（单一真相源）
+            if self.display_config:
+                event_config.setdefault("gif", {})["display_config"] = self.display_config
 
             # 必需区域：从 zones_config 的 required 标志派生（单一真相源）
             # 任一区域 required=true 时，目标必须进入必需区域才产生事件（延迟创建）
@@ -353,6 +412,11 @@ class TrackedObjectProcessor(mp.Process):
                     else ""
                 )
             )
+
+        proc_logger.info(
+            f"所有 {len(self.camera_configs)} 个相机组件初始化完成，"
+            f"总耗时 {time.time()-_init_start:.2f}s"
+        )
 
     def _register_callbacks(self, cam_id: str):
         """为相机注册事件回调"""
@@ -427,12 +491,17 @@ class TrackedObjectProcessor(mp.Process):
         # 跟不上生产端，事件队列积压丢弃数据
         frame_cache = self.frame_caches.get(camera_id)
         need_frame = frame_cache is not None
-        self._current_frame = self._read_frame_from_shm(camera_id) if need_frame else None
-        # 诊断：统计 shm 回读成功率
+        # _read_frame_from_shm 返回 (frame, aligned)，aligned=False 表示降级使用最新帧
+        self._current_frame, self._current_frame_aligned = (
+            self._read_frame_from_shm(camera_id) if need_frame else (None, True)
+        )
+        # 诊断：统计 shm 回读成功率与对齐情况
         if need_frame:
             self._shm_read_total += 1
             if self._current_frame is not None:
                 self._shm_read_success += 1
+                if not self._current_frame_aligned:
+                    self._shm_read_misaligned += 1
 
         # 更新 CameraState（触发事件回调，回调复用 self._current_frame）
         self.camera_states[camera_id].update(
@@ -442,11 +511,17 @@ class TrackedObjectProcessor(mp.Process):
             regions=regions,
         )
 
-        # 帧缓存：复用已读帧写入 FrameCache（用于 GIF 帧回放）
+        # 事件层合并：清理超宽限期的 pending_end 事件（每帧检查，开销可忽略）
+        # _on_object_end 时事件进入宽限期，超时则在此处真正结束
+        # 注意：必须在 CameraState.update 之后调用，确保本帧的 end 回调已先入 pending
+        if self.pending_end_events:
+            self._cleanup_expired_pending_ends(frame_time)
+
+        # 帧缓存：异步写入（JPEG 编码 ~2-5ms 移出主循环）
+        # 主循环只做采样判断 + per-camera 背压锁检查 + submit，
+        # JPEG 编码和 deque.append 在 frame_cache_executor 线程池异步执行
         if frame_cache is not None and self._current_frame is not None:
-            self._frame_cache_push_total += 1
-            if frame_cache.push(frame_time, self._current_frame):
-                self._frame_cache_push_success += 1
+            self._async_push_frame_cache(camera_id, frame_cache, frame_time, self._current_frame)
 
         # AI 视频流推送（复用已读帧）
         self._maybe_push_ai_stream(
@@ -457,6 +532,7 @@ class TrackedObjectProcessor(mp.Process):
 
         # 清理当前帧引用
         self._current_frame = None
+        self._current_frame_aligned = True
 
     def _emit_tracking_start(self, camera_id: str, obj_dict: dict, wall_time: float) -> Optional[str]:
         """创建跟踪事件（type=tracking, status=tracking_start）并返回 event_id
@@ -479,9 +555,17 @@ class TrackedObjectProcessor(mp.Process):
         image = None
         if event_output.capture_save_full_on_start:
             image = self._current_frame
+            image_aligned = self._current_frame_aligned
             if image is None:
-                image = self._read_frame_from_shm(camera_id)
+                # 兜底读 shm，返回 (frame, aligned)
+                image, image_aligned = self._read_frame_from_shm(camera_id)
             if image is not None:
+                if not image_aligned:
+                    logger.warning(
+                        f"[{camera_id}] 事件开始快照帧未对齐(降级使用最新帧): "
+                        f"track_id={obj_dict.get('id')}, "
+                        f"检测框可能滞后于画面"
+                    )
                 image = self._prepare_event_image(camera_id, image)
 
         track_id = obj_dict.get("id", "")
@@ -524,9 +608,10 @@ class TrackedObjectProcessor(mp.Process):
     def _on_object_start(self, camera_id: str, obj_dict: dict, frame_time: float):
         """新目标出现回调 - 创建跟踪事件（type=tracking, status=tracking_start）
 
-        配置了必需区域时延迟创建：start 阶段仅标记 pending，等 _on_object_update 确认
-        目标进入必需区域后再创建事件。目标从未进入必需区域则不产生任何事件。
-        无必需区域时立即创建（行为不变）。
+        事件层合并：先检查 pending_end_events 是否有匹配项（同 label+bbox 相近），
+        匹配则认为是 ID switch，复用原 event_id 延续事件；无匹配才创建新事件。
+
+        必需区域过滤：延迟创建到目标首次进入必需区域（start 阶段 entered_zones 为空无法判定）。
         """
         # 诊断：统计 start 回调触发次数（无论后续是否被过滤）
         self._start_triggered_count = getattr(self, "_start_triggered_count", 0) + 1
@@ -539,6 +624,34 @@ class TrackedObjectProcessor(mp.Process):
         class_name = obj_dict.get("label", "unknown")
         confidence = obj_dict.get("score", 0.0)
         bbox = obj_dict.get("box", [0, 0, 0, 0])
+
+        # ========================================
+        # 事件层合并：检查是否为 ID switch（匹配 pending_end 中的事件）
+        # ========================================
+        matched_pending_id = self._match_pending_end_event(camera_id, class_name, bbox)
+        if matched_pending_id is not None:
+            pending_info = self.pending_end_events[camera_id].pop(matched_pending_id)
+            # 复用原 event_id 和 start 时间，事件延续
+            self.active_events[camera_id][track_id] = {
+                "event_id": pending_info.get("event_id", ""),
+                "start_time": pending_info.get("active_event", {}).get("start_time", frame_time),
+                "start_wall_time": pending_info.get("active_event", {}).get("start_wall_time", time.time()),
+                "class_name": class_name,
+                "bbox": bbox,
+                # ID switch 合并标记（避免宽限期内的 end_image 被误用）
+                "merged_from": matched_pending_id,
+            }
+            logger.info(
+                f"[{camera_id}] 跟踪事件合并(ID switch): "
+                f"old_id={matched_pending_id} → new_id={track_id}, "
+                f"label={class_name}, event_id={pending_info.get('event_id', '')[:8]}, "
+                f"score={confidence:.3f}"
+            )
+            return
+
+        # ========================================
+        # 无匹配：创建新事件
+        # ========================================
 
         # 必需区域过滤：延迟事件创建到目标首次进入必需区域
         # start 阶段 entered_zones 必为空（目标刚出现，尚未确认进入任何区域），无法判定
@@ -621,8 +734,16 @@ class TrackedObjectProcessor(mp.Process):
         image = None
         if obj_dict.get("snapshot") is not None:
             image = self._current_frame
+            image_aligned = self._current_frame_aligned
             if image is None:
-                image = self._read_frame_from_shm(camera_id)
+                # 兜底读 shm，返回 (frame, aligned)
+                image, image_aligned = self._read_frame_from_shm(camera_id)
+            if image is not None and not image_aligned:
+                logger.warning(
+                    f"[{camera_id}] 事件更新缩略图帧未对齐(降级使用最新帧): "
+                    f"event_id={event_id}, track_id={obj_dict.get('id')}, "
+                    f"检测框可能滞后于画面"
+                )
             # 绘制检测框（与 AI 视频流保持一致，best_thumbnail 也带检测框）
             image = self._prepare_event_image(camera_id, image)
 
@@ -662,10 +783,15 @@ class TrackedObjectProcessor(mp.Process):
         )
 
     def _on_object_end(self, camera_id: str, obj_dict: dict, frame_time: float):
-        """目标消失回调 - 保存置信度最高的图片 + 推送 event_update 到前端
+        """目标消失回调 - 移入 pending_end_events 等待宽限期（事件层合并去重）
 
-        单一事件模型：end 阶段保存 best_thumbnail（置信度最高）到存储，
-        并推送 event_update（status=ended）让前端更新卡片状态。
+        事件层合并策略：
+        - 目标消失时不立即结束事件，移入 pending_end_events 等待宽限期
+        - 宽限期内若有同 label+bbox 相近的新目标出现，认为是 ID switch，复用原 event_id
+        - 宽限期超时仍无匹配，才真正结束事件（_finalize_event_end）
+
+        特殊处理：
+        - pending_required_zones 事件（目标从未进入必需区域）：直接丢弃，不进宽限期
         """
         # 诊断：统计 end 回调触发次数
         self._end_triggered_count = getattr(self, "_end_triggered_count", 0) + 1
@@ -681,16 +807,8 @@ class TrackedObjectProcessor(mp.Process):
         if active_event is None:
             return
 
-        # 诊断：记录事件持续时间（视频相对时间差）
-        start_frame_time = active_event.get("start_time", frame_time)
-        self._event_durations = getattr(self, "_event_durations", [])
-        self._event_durations.append(frame_time - start_frame_time)
-        # 只保留最近 100 个，避免内存增长
-        if len(self._event_durations) > 100:
-            self._event_durations = self._event_durations[-100:]
-
         # 必需区域过滤：pending 事件（目标从未进入必需区域）直接丢弃，不产生任何事件
-        # 不 emit、不保存图片/GIF、不推送前端、不写数据库
+        # 不进宽限期（这类事件本就未真正创建）
         if active_event.get("pending_required_zones") and active_event.get("event_id") is None:
             del self.active_events[camera_id][track_id]
             logger.debug(
@@ -702,152 +820,55 @@ class TrackedObjectProcessor(mp.Process):
             return
 
         event_id = active_event.get("event_id", "")
-        event_start_time = active_event.get("start_wall_time", time.time())  # 系统 Unix 时间戳（用于数据库）
-        event_start_frame_time = active_event.get("start_time", frame_time)  # 视频相对时间（用于 GIF 帧回取）
-
-        # 构建更新数据
         class_name = obj_dict.get("label", "unknown")
-        confidence = obj_dict.get("score", 0.0)
         bbox = obj_dict.get("box", [0, 0, 0, 0])
 
-        update_data = {
-            "confidence": confidence,
-            "bbox": bbox,
-            "class_name": class_name,
-            "end_time": time.time(),         # 系统 Unix 时间戳
-            "start_time": event_start_time,  # 系统 Unix 时间戳（来自 start 阶段）
-            "current_zones": obj_dict.get("current_zones", []),
-            "entered_zones": obj_dict.get("entered_zones", []),
-            "pending_loitering": obj_dict.get("pending_loitering", []),
-            "loitered_zones": obj_dict.get("loitered_zones", []),
-        }
-
-        # required_zones 过滤：未进入过任何必需区域的目标，不保存图片和 GIF
+        # 获取结束快照（目标消失时的帧，复用主循环已读帧）
+        # 宽限期后 _current_frame 已变，所以现在保存
         entered_zones = obj_dict.get("entered_zones", []) or []
         passes_zones = event_output.passes_required_zones(entered_zones)
-
-        # 获取置信度最高的缩略图作为结束事件图片
-        best_thumbnail = event_output.get_best_thumbnail(event_id)
-        best_image = None
-        if passes_zones and best_thumbnail and best_thumbnail.get("image") is not None:
-            best_image = best_thumbnail["image"]
-
-        # 根据 capture.save_full_on_end 配置决定是否生成结束快照（复用主循环已读帧）
         end_image = None
         if passes_zones and event_output.capture_save_full_on_end:
             end_image = self._current_frame
+            end_image_aligned = self._current_frame_aligned
             if end_image is None:
-                end_image = self._read_frame_from_shm(camera_id)
-            # 绘制检测框（与 AI 视频流保持一致，结束快照也带检测框）
-            end_image = self._prepare_event_image(camera_id, end_image)
-
-        # 选择最终图片：优先使用置信度最高的缩略图，其次使用结束帧
-        final_image = best_image if best_image is not None else end_image
-
-        # 诊断：标明 final_image 的来源，便于定位图片不产生的原因
-        if passes_zones:
-            source = (
-                "best_image" if best_image is not None
-                else "end_image" if end_image is not None
-                else "none"
-            )
-            has_thumb = best_thumbnail is not None
-            logger.warning(
-                f"[{camera_id}] 事件结束诊断: event_id={event_id[:8]}, "
-                f"passes_zones={passes_zones}, "
-                f"best_thumbnail存在={has_thumb}, "
-                f"best_image={'有' if best_image is not None else '无'}, "
-                f"end_image={'有' if end_image is not None else '无'}, "
-                f"final_image来源={source}, "
-                f"duration={frame_time - active_event.get('start_time', frame_time):.2f}s"
-            )
-
-        # ✅ 更新事件：保存置信度最高的图片 + 推送 event_update（status=tracking_end）
-        # required_zones 未通过时 image=None，仅更新状态（zone 轨迹仍在 update_data 中落库）
-        # 事件类型按完整 metadata 最终确定（目标可能在跟踪过程中才进入区域或徘徊）
-        event_output.update_event(
-            event_id,
-            status="tracking_end",
-            data=update_data,
-            image=final_image,
-            push_websocket=True,
-            event_type=self._derive_event_type(obj_dict),
-        )
-
-        # 异步生成 GIF（从 FrameCache 按时间窗口回取帧，GIF生成后自动回填到事件）
-        # required_zones 未通过则跳过 GIF 生成
-        if passes_zones and event_output.gif_enabled and self.gif_executor:
-            frame_cache = self.frame_caches.get(camera_id)
-            if frame_cache is not None:
-                # 按 pre_seconds / post_seconds 确定时间窗口
-                gif_cfg = event_output.gif_cfg
-                pre_seconds = gif_cfg.get('pre_seconds', 5.0)
-                post_seconds = gif_cfg.get('post_seconds', 5.0)
-                max_frames = gif_cfg.get('max_frames', 60)
-
-                # 时间窗口：[事件开始前 pre_seconds, 当前帧]
-                # 注意：使用视频相对时间（frame_time），与 FrameCache 的 key 一致
-                retrieval_start = event_start_frame_time - pre_seconds
-                retrieval_end = frame_time
-
-                cached_frames = frame_cache.get_frames(
-                    retrieval_start, retrieval_end, max_frames=max_frames
-                )
-
-                if cached_frames and len(cached_frames) >= 2:
-                    # 提取纯帧序列
-                    frames = [img for _, img in cached_frames]
-                    # 获取轨迹点（用于 GIF 绘制轨迹）
-                    trajectory_points = obj_dict.get("trajectory", [])
-
-                    logger.info(
-                        f"[{camera_id}] GIF 帧回取成功: {len(frames)}帧, "
-                        f"时间窗口=[{retrieval_start:.1f}, {retrieval_end:.1f}], "
-                        f"post_seconds={post_seconds}"
-                    )
-
-                    if post_seconds > 0:
-                        # 需要等待 post_seconds 后再生成 GIF（补充消失后帧）
-                        self._schedule_delayed_gif(
-                            event_output, event_id, camera_id,
-                            frames, bbox, trajectory_points,
-                            frame_time, post_seconds, max_frames
-                        )
-                    else:
-                        # 无需等待，立即生成
-                        self.gif_executor.submit(
-                            self._async_generate_gif,
-                            event_output, event_id,
-                            frames=frames, camera_id=camera_id,
-                            bbox=bbox, trajectory_points=trajectory_points,
-                        )
-                else:
-                    frame_count = len(cached_frames) if cached_frames else 0
+                # 兜底读 shm，返回 (frame, aligned)
+                end_image, end_image_aligned = self._read_frame_from_shm(camera_id)
+            if end_image is not None:
+                if not end_image_aligned:
                     logger.warning(
-                        f"[{camera_id}] GIF 帧不足: {frame_count}帧, "
-                        f"时间窗口=[{retrieval_start:.1f}, {retrieval_end:.1f}], "
-                        f"需要>=2帧"
+                        f"[{camera_id}] 事件结束快照帧未对齐(降级使用最新帧): "
+                        f"event_id={event_id}, track_id={obj_dict.get('id')}, "
+                        f"检测框可能滞后于画面"
                     )
-            else:
-                logger.warning(f"[{camera_id}] FrameCache 不存在, 跳过 GIF 生成")
-        elif not passes_zones:
-            logger.debug(f"[{camera_id}] 未通过 required_zones 过滤, 跳过 GIF 生成")
-        elif not event_output.gif_enabled:
-            logger.debug(f"[{camera_id}] GIF 未启用, 跳过 GIF 生成")
+                end_image = self._prepare_event_image(camera_id, end_image)
 
-        # 清理缩略图
-        event_output.clear_thumbnail(event_id)
+        # 移入 pending_end_events，等待宽限期
+        # 宽限期内若有新目标匹配，复用 event_id 延续事件；超时则 _finalize_event_end
+        if camera_id not in self.pending_end_events:
+            self.pending_end_events[camera_id] = {}
+        self.pending_end_events[camera_id][track_id] = {
+            "event_id": event_id,
+            "label": class_name,
+            "bbox": bbox,
+            "end_frame_time": frame_time,
+            "end_wall_time": time.time(),
+            "obj_dict": obj_dict,
+            "active_event": active_event,
+            "end_image": end_image,
+        }
 
-        # 从活跃事件中移除
+        # 从活跃事件中移除（track_id 已消失，不能再被 update 回调访问）
         del self.active_events[camera_id][track_id]
 
-        # 如果消失的是当前 PTZ 跟踪目标,清除 PTZ 跟踪状态
+        # PTZ 跟踪目标消失：立即清除（PTZ 不能等待宽限期，否则会跟踪已消失的目标）
         if self.ptz_tracked_object.get(camera_id) == track_id:
             self._clear_ptz_tracking(camera_id, frame_time)
 
-        logger.info(
-            f"[{camera_id}] 跟踪事件结束: id={track_id}, event_id={event_id[:8] if event_id else ''}, "
-            f"label={class_name}, duration={frame_time - active_event['start_time']:.1f}s"
+        logger.debug(
+            f"[{camera_id}] 跟踪事件进入宽限期: id={track_id}, "
+            f"event_id={event_id[:8] if event_id else ''}, label={class_name}, "
+            f"grace_period={self.event_grace_period}s"
         )
 
     def _on_object_autotrack(
@@ -925,26 +946,28 @@ class TrackedObjectProcessor(mp.Process):
         self.ptz_tracked_object[camera_id] = None
         logger.info(f"[{camera_id}] PTZ 跟踪已清除")
 
-    def _read_frame_from_shm(self, camera_id: str) -> Optional[np.ndarray]:
+    def _read_frame_from_shm(self, camera_id: str) -> Tuple[Optional[np.ndarray], bool]:
         """
         从共享内存回读帧
 
         使用当前帧的 shm_block_id 和 shm_name 回读 YUV 帧,转换为 RGB。
-        同时传入 frame_seq 校验块是否已被环形缓冲区覆盖（避免帧与框错位）。
+        同时传入 frame_seq 校验块是否已被环形缓冲区覆盖。
 
         Returns:
-            RGB 帧 (height, width, 3),失败返回 None
+            (rgb_frame, aligned): rgb_frame 为 RGB 帧或 None；
+                aligned 为 True 表示帧序号匹配（帧与检测框对齐），
+                False 表示降级使用最新帧（帧与检测框可能错位，需记录告警）
         """
         shm_info = getattr(self, "_current_shm_info", None)
         if shm_info is None:
-            return None
+            return None, False
 
         shm_block_id = shm_info.get("shm_block_id")
         shm_name = shm_info.get("shm_name")
         frame_seq = shm_info.get("frame_seq")
 
         if shm_block_id is None or shm_name is None:
-            return None
+            return None, False
 
         # 获取帧形状
         config = self.camera_configs.get(camera_id, {})
@@ -953,16 +976,17 @@ class TrackedObjectProcessor(mp.Process):
         try:
             from src.utils.shared_memory import read_frame_from_shared_memory
 
-            rgb_frame = read_frame_from_shared_memory(
+            rgb_frame, aligned = read_frame_from_shared_memory(
                 shm_name=shm_name,
                 shm_block_id=shm_block_id,
                 frame_shape=frame_shape,
                 expected_frame_seq=frame_seq,
+                return_aligned=True,
             )
-            return rgb_frame
+            return rgb_frame, aligned
         except Exception as e:
             logger.debug(f"[{camera_id}] 回读帧失败: {e}")
-            return None
+            return None, False
 
     def _is_ai_stream_enabled(self, camera_id: str) -> bool:
         """检查摄像机是否启用 AI 流推送。
@@ -987,6 +1011,341 @@ class TrackedObjectProcessor(mp.Process):
             return bool(self.ai_stream_enabled_state.get(camera_id, False))
 
         return False
+
+    def _async_push_frame_cache(
+        self,
+        camera_id: str,
+        frame_cache,
+        frame_time: float,
+        frame: np.ndarray,
+    ):
+        """FrameCache 异步写入（JPEG 编码 ~2-5ms 移出主循环）
+
+        流程：
+        1. per-camera 背压锁：该 camera 上一帧还在编码中则丢弃本帧，避免积压
+        2. submit 到 frame_cache_executor：JPEG 编码 + deque.append 全部异步
+        3. 诊断计数在主循环外更新（push 返回值在 finally 中统计）
+
+        说明：
+        - FrameCache.push 内部已加锁保护 _last_sample_time 和 _frames，
+          多线程并发调用安全
+        - 背压丢弃是正常现象（cache_fps 采样率远低于视频帧率，大部分帧
+          本就会被采样过滤，丢一两帧不影响 GIF 质量）
+        """
+        # per-camera 背压锁：上一帧编码中则丢弃
+        camera_lock = self.frame_cache_inflight_locks.get(camera_id)
+        if camera_lock is None:
+            camera_lock = threading.Lock()
+            self.frame_cache_inflight_locks[camera_id] = camera_lock
+        if not camera_lock.acquire(blocking=False):
+            # 背压丢弃，不计入 _frame_cache_push_total（未实际调用 push）
+            return
+
+        if not self.frame_cache_executor:
+            camera_lock.release()
+            return
+
+        # submit：采样判断 + JPEG 编码 + append 全部在线程池异步执行
+        # frame.copy() 防御性拷贝（主循环下一帧可能覆写 self._current_frame）
+        self.frame_cache_executor.submit(
+            self._async_push_frame_cache_task,
+            camera_id,
+            frame_cache,
+            frame_time,
+            frame.copy(),
+            camera_lock,
+        )
+
+    def _async_push_frame_cache_task(
+        self,
+        camera_id: str,
+        frame_cache,
+        frame_time: float,
+        frame: np.ndarray,
+        camera_lock: threading.Lock,
+    ):
+        """线程池任务：调用 FrameCache.push（采样+JPEG编码+append），finally 释放背压锁"""
+        try:
+            self._frame_cache_push_total += 1
+            if frame_cache.push(frame_time, frame):
+                self._frame_cache_push_success += 1
+        except Exception as e:
+            logger.debug(f"[{camera_id}] FrameCache 异步写入异常: {e}")
+        finally:
+            try:
+                camera_lock.release()
+            except RuntimeError:
+                pass
+
+    # ========================================
+    # 事件层合并：跟踪 ID switch 去重
+    # ========================================
+
+    @staticmethod
+    def _bbox_iou(box_a: list, box_b: list) -> float:
+        """计算两个 bbox 的 IoU
+
+        Args:
+            box_a, box_b: [x1, y1, x2, y2]
+
+        Returns:
+            IoU 值 [0, 1]
+        """
+        if not box_a or not box_b or len(box_a) < 4 or len(box_b) < 4:
+            return 0.0
+        x1 = max(box_a[0], box_b[0])
+        y1 = max(box_a[1], box_b[1])
+        x2 = min(box_a[2], box_b[2])
+        y2 = min(box_a[3], box_b[3])
+        inter_w = max(0, x2 - x1)
+        inter_h = max(0, y2 - y1)
+        inter = inter_w * inter_h
+        area_a = max(0, box_a[2] - box_a[0]) * max(0, box_a[3] - box_a[1])
+        area_b = max(0, box_b[2] - box_b[0]) * max(0, box_b[3] - box_b[1])
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+
+    @staticmethod
+    def _bbox_center_distance(box_a: list, box_b: list) -> float:
+        """计算两个 bbox 中心点的欧氏距离
+
+        Args:
+            box_a, box_b: [x1, y1, x2, y2]
+
+        Returns:
+            中心点距离（像素）
+        """
+        if not box_a or not box_b or len(box_a) < 4 or len(box_b) < 4:
+            return float('inf')
+        cx_a = (box_a[0] + box_a[2]) / 2
+        cy_a = (box_a[1] + box_a[3]) / 2
+        cx_b = (box_b[0] + box_b[2]) / 2
+        cy_b = (box_b[1] + box_b[3]) / 2
+        return ((cx_a - cx_b) ** 2 + (cy_a - cy_b) ** 2) ** 0.5
+
+    @staticmethod
+    def _bbox_avg_size(box: list) -> float:
+        """计算 bbox 的平均边长（用于中心点距离归一化）
+
+        Args:
+            box: [x1, y1, x2, y2]
+
+        Returns:
+            平均边长（像素）
+        """
+        if not box or len(box) < 4:
+            return 1.0
+        w = max(0, box[2] - box[0])
+        h = max(0, box[3] - box[1])
+        return (w + h) / 2 if (w + h) > 0 else 1.0
+
+    def _match_pending_end_event(self, camera_id: str, label: str, bbox: list) -> Optional[str]:
+        """在 pending_end_events 中查找与新目标匹配的事件（用于 ID switch 合并）
+
+        匹配条件（满足任一）：
+        1. 同 label 且 bbox IoU > 0.3
+        2. 同 label 且中心点距离 < 平均尺寸 × 0.5（目标可能移动了一段距离）
+
+        Args:
+            camera_id: 摄像机ID
+            label: 新目标的类别标签
+            bbox: 新目标的 bbox [x1, y1, x2, y2]
+
+        Returns:
+            匹配的 pending track_id，无匹配返回 None
+        """
+        cam_pending = self.pending_end_events.get(camera_id, {})
+        if not cam_pending:
+            return None
+
+        best_match = None
+        best_score = 0.0
+
+        for pending_track_id, pending_info in cam_pending.items():
+            # 同 label 才匹配
+            if pending_info.get("label") != label:
+                continue
+
+            pending_bbox = pending_info.get("bbox", [])
+            if not pending_bbox:
+                continue
+
+            # 条件1：IoU > 0.3
+            iou = self._bbox_iou(bbox, pending_bbox)
+            if iou > 0.3 and iou > best_score:
+                best_score = iou
+                best_match = pending_track_id
+                continue
+
+            # 条件2：中心点距离 < 平均尺寸 × 0.5
+            dist = self._bbox_center_distance(bbox, pending_bbox)
+            avg_size = (self._bbox_avg_size(bbox) + self._bbox_avg_size(pending_bbox)) / 2
+            if dist < avg_size * 0.5:
+                # 用距离归一化后的得分（越小越好，转为 0-1 越大越好）
+                score = 1.0 - min(1.0, dist / (avg_size * 0.5))
+                if score > best_score:
+                    best_score = score
+                    best_match = pending_track_id
+
+        return best_match
+
+    def _cleanup_expired_pending_ends(self, current_frame_time: float):
+        """清理超宽限期的 pending_end 事件，真正结束它们
+
+        在主循环每次迭代调用，检查所有 camera 的 pending_end_events，
+        将超过 event_grace_period 的事件真正结束。
+
+        Args:
+            current_frame_time: 当前帧的视频相对时间（用于宽限期判断）
+        """
+        for camera_id in list(self.pending_end_events.keys()):
+            cam_pending = self.pending_end_events[camera_id]
+            if not cam_pending:
+                continue
+
+            for pending_track_id in list(cam_pending.keys()):
+                pending_info = cam_pending[pending_track_id]
+                end_frame_time = pending_info.get("end_frame_time", 0)
+                elapsed = current_frame_time - end_frame_time
+
+                if elapsed >= self.event_grace_period:
+                    # 超过宽限期，真正结束事件
+                    self._finalize_event_end(camera_id, pending_track_id, pending_info)
+
+    def _finalize_event_end(self, camera_id: str, pending_track_id: str, pending_info: dict):
+        """真正结束一个事件（从 pending_end 移出，执行原 _on_object_end 的结束逻辑）
+
+        Args:
+            camera_id: 摄像机ID
+            pending_track_id: pending_end_events 中的 key（原 track_id）
+            pending_info: pending_end_events 中保存的事件信息
+        """
+        event_output = self.event_outputs.get(camera_id)
+        if event_output is None:
+            self.pending_end_events.get(camera_id, {}).pop(pending_track_id, None)
+            return
+
+        obj_dict = pending_info.get("obj_dict", {})
+        active_event = pending_info.get("active_event", {})
+        frame_time = pending_info.get("end_frame_time", 0)
+
+        event_id = active_event.get("event_id", "")
+        event_start_time = active_event.get("start_wall_time", time.time())
+        event_start_frame_time = active_event.get("start_time", frame_time)
+
+        # 诊断：记录事件持续时间
+        self._event_durations = getattr(self, "_event_durations", [])
+        self._event_durations.append(frame_time - event_start_frame_time)
+        if len(self._event_durations) > 100:
+            self._event_durations = self._event_durations[-100:]
+
+        # 构建更新数据
+        class_name = obj_dict.get("label", "unknown")
+        confidence = obj_dict.get("score", 0.0)
+        bbox = obj_dict.get("box", [0, 0, 0, 0])
+
+        update_data = {
+            "confidence": confidence,
+            "bbox": bbox,
+            "class_name": class_name,
+            "end_time": time.time(),
+            "start_time": event_start_time,
+            "current_zones": obj_dict.get("current_zones", []),
+            "entered_zones": obj_dict.get("entered_zones", []),
+            "pending_loitering": obj_dict.get("pending_loitering", []),
+            "loitered_zones": obj_dict.get("loitered_zones", []),
+        }
+
+        # required_zones 过滤
+        entered_zones = obj_dict.get("entered_zones", []) or []
+        passes_zones = event_output.passes_required_zones(entered_zones)
+
+        # 获取置信度最高的缩略图
+        best_thumbnail = event_output.get_best_thumbnail(event_id)
+        best_image = None
+        if passes_zones and best_thumbnail and best_thumbnail.get("image") is not None:
+            best_image = best_thumbnail["image"]
+
+        # 结束快照：使用 pending 时保存的 end_image（目标消失时的帧）
+        end_image = pending_info.get("end_image")
+
+        final_image = best_image if best_image is not None else end_image
+
+        if passes_zones:
+            source = (
+                "best_image" if best_image is not None
+                else "end_image" if end_image is not None
+                else "none"
+            )
+            logger.debug(
+                f"[{camera_id}] 事件结束(宽限期超时): event_id={event_id[:8] if event_id else ''}, "
+                f"label={class_name}, final_image来源={source}, "
+                f"duration={frame_time - event_start_frame_time:.2f}s"
+            )
+
+        # 更新事件状态 + 推送前端
+        event_output.update_event(
+            event_id,
+            status="tracking_end",
+            data=update_data,
+            image=final_image,
+            push_websocket=True,
+            event_type=self._derive_event_type(obj_dict),
+        )
+
+        # 异步生成 GIF
+        if passes_zones and event_output.gif_enabled and self.gif_executor:
+            frame_cache = self.frame_caches.get(camera_id)
+            if frame_cache is not None:
+                gif_cfg = event_output.gif_cfg
+                pre_seconds = gif_cfg.get('pre_seconds', 5.0)
+                post_seconds = gif_cfg.get('post_seconds', 0.0)
+                max_frames = gif_cfg.get('max_frames', 60)
+
+                retrieval_start = event_start_frame_time - pre_seconds
+                retrieval_end = frame_time
+
+                cached_frames = frame_cache.get_frames(
+                    retrieval_start, retrieval_end, max_frames=max_frames
+                )
+
+                if cached_frames and len(cached_frames) >= 2:
+                    frames = [img for _, img in cached_frames]
+                    trajectory_points = obj_dict.get("trajectory", [])
+
+                    logger.debug(
+                        f"[{camera_id}] GIF 帧回取成功(宽限期超时): {len(frames)}帧"
+                    )
+
+                    if post_seconds > 0:
+                        self._schedule_delayed_gif(
+                            event_output, event_id, camera_id,
+                            frames, bbox, trajectory_points,
+                            frame_time, post_seconds, max_frames
+                        )
+                    else:
+                        self.gif_executor.submit(
+                            self._async_generate_gif,
+                            event_output, event_id,
+                            frames=frames, camera_id=camera_id,
+                            bbox=bbox, trajectory_points=trajectory_points,
+                        )
+
+        # 清理缩略图
+        event_output.clear_thumbnail(event_id)
+
+        # 从 pending_end_events 移除
+        self.pending_end_events.get(camera_id, {}).pop(pending_track_id, None)
+
+        # PTZ 跟踪清理
+        if self.ptz_tracked_object.get(camera_id) == pending_track_id:
+            self._clear_ptz_tracking(camera_id, frame_time)
+
+        logger.info(
+            f"[{camera_id}] 跟踪事件结束(宽限期超时): track_id={pending_track_id}, "
+            f"event_id={event_id[:8] if event_id else ''}, label={class_name}, "
+            f"duration={frame_time - event_start_frame_time:.1f}s"
+        )
 
     def _maybe_push_ai_stream(
         self, camera_id: str, frame_time: float, tracked_objects: dict,
@@ -1025,12 +1384,19 @@ class TrackedObjectProcessor(mp.Process):
             return
 
         # 复用主循环已读帧，None 时兜底读 shm
+        frame_aligned = True
         if frame is None:
-            frame = self._read_frame_from_shm(camera_id)
+            # 兜底读 shm，返回 (frame, aligned)
+            frame, frame_aligned = self._read_frame_from_shm(camera_id)
         if frame is None:
-            # 帧序号校验丢弃（块已被覆盖）或其他读取失败，属正常背压情况，降为 DEBUG 避免刷屏
+            # 读取失败，属正常背压情况，降为 DEBUG 避免刷屏
             logger.debug(f"[{camera_id}] AI流：回读帧失败，跳过推送 (frame_seq={frame_seq})")
             return
+        if not frame_aligned:
+            logger.warning(
+                f"[{camera_id}] AI流帧未对齐(降级使用最新帧): "
+                f"frame_seq={frame_seq}, 检测框可能滞后于画面"
+            )
 
         # per-camera 背压锁：该 camera 上一帧还在编码中则丢弃本帧，避免积压
         camera_lock = self.ai_stream_inflight_locks.get(camera_id)
@@ -1102,10 +1468,10 @@ class TrackedObjectProcessor(mp.Process):
                 frame_with_boxes = cv2.resize(frame_with_boxes, (640, int(h * scale)))
 
             # 3. JPEG编码（质量70）+ base64
-            _, jpeg_buffer = cv2.imencode(
-                '.jpg', frame_with_boxes, [cv2.IMWRITE_JPEG_QUALITY, 70]
-            )
-            frame_base64 = base64.b64encode(jpeg_buffer).decode('utf-8')
+            #    帧为 RGB 格式，使用 PIL 编码避免 cv2 的 BGR 假设，无需通道转换
+            from src.utils.image import encode_jpeg
+            jpeg_bytes = encode_jpeg(frame_with_boxes, quality=70)
+            frame_base64 = base64.b64encode(jpeg_bytes).decode('utf-8')
 
             # 4. HTTP 推送（服务端已改为入队即返回，正常 < 50ms；
             #    timeout=2.0 仅防御偶发调度抖动/GIL 竞争，单帧超时可接受）
@@ -1177,6 +1543,8 @@ class TrackedObjectProcessor(mp.Process):
         trajectory_cfg = cfg.get('trajectory', {})
         motion_cfg = cfg.get('motion_region', {})
 
+        # 帧为 RGB 格式（来自 YUV→RGB 转换），display_config 中颜色也为 RGB 格式
+        # 直接使用配置颜色，无需通道翻转
         show_zones = display_cfg.get('show_zones', True)
         show_detection = display_cfg.get('show_detection_boxes', True)
         show_track = display_cfg.get('show_track_boxes', True)
@@ -1213,9 +1581,8 @@ class TrackedObjectProcessor(mp.Process):
                             [int(p[0]), int(p[1])]
                             for p in polygon_raw
                         ], dtype=np.int32)
-                    # 颜色（配置中为RGB格式，OpenCV使用BGR，需要转换）
-                    zone_color_rgb = zone_cfg.get('color', [255, 0, 0])
-                    zone_color = tuple(reversed(zone_color_rgb))
+                    # 颜色（zones_config 中为 RGB 格式，帧也是 RGB，直接使用）
+                    zone_color = tuple(zone_cfg.get('color', [255, 0, 0]))
                     # 半透明填充
                     overlay = frame_copy.copy()
                     cv2.fillPoly(overlay, [pts], zone_color)
@@ -1240,10 +1607,10 @@ class TrackedObjectProcessor(mp.Process):
         # 1. 绘制运动区域（受 show_motion_regions 管控）
         # ========================================
         if show_motion and motion_boxes:
-            motion_color = tuple(motion_cfg.get('color', [255, 255, 0]))
+            motion_color = tuple(motion_cfg.get('color', [0, 255, 255]))
             motion_thickness = motion_cfg.get('thickness', 1)
             fill_alpha = motion_cfg.get('fill_alpha', 50)
-            fill_color = tuple(motion_cfg.get('fill_color', [255, 255, 0]))
+            fill_color = tuple(motion_cfg.get('fill_color', [0, 255, 255]))
 
             for mbox in motion_boxes:
                 if len(mbox) >= 4:
@@ -1275,10 +1642,9 @@ class TrackedObjectProcessor(mp.Process):
                 # 检测框标签（支持中文）
                 label_y = max(y1 - 20, 2)
                 if _has_chinese_font:
-                    # display_config 中 label_color 为 BGR，draw_utf8_label_on_rgb 需要 RGB，需反转
-                    label_rgb = tuple(reversed(det_label_color))
+                    # det_label_color 为 RGB，可直接传给 draw_utf8_label_on_rgb
                     draw_utf8_label_on_rgb(frame_copy, text, (x1, label_y),
-                                           font_size=14, text_color_rgb=label_rgb)
+                                           font_size=14, text_color_rgb=det_label_color)
                 else:
                     cv2.putText(frame_copy, text, (x1, y1 - 10),
                                cv2.FONT_HERSHEY_SIMPLEX, det_font_scale, det_label_color, 1)
@@ -1288,12 +1654,12 @@ class TrackedObjectProcessor(mp.Process):
         #    来自 tracked_objects：已进入跟踪的目标（持续≥min_initialized帧）
         # ========================================
         if show_track and tracked_objects:
-            track_color = tuple(track_box_cfg.get('color', [255, 0, 0]))
+            track_color = tuple(track_box_cfg.get('color', [0, 0, 255]))
             track_thickness = track_box_cfg.get('thickness', 2)
             track_font_scale = track_box_cfg.get('font_scale', 0.5)
-            track_label_color = tuple(track_box_cfg.get('label_color', [255, 0, 0]))
+            track_label_color = tuple(track_box_cfg.get('label_color', [0, 0, 255]))
             # 徘徊告警高亮配置（达到 loitering 阈值的目标边框变红+闪烁）
-            loitering_color = tuple(track_box_cfg.get('loitering_color', [0, 0, 255]))
+            loitering_color = tuple(track_box_cfg.get('loitering_color', [255, 0, 0]))
             loitering_thickness = track_box_cfg.get('loitering_thickness', 3)
             loitering_blink = track_box_cfg.get('loitering_blink', True)
             # 闪烁：基于系统时间 0.5 秒交替，所有目标同步明灭
@@ -1326,10 +1692,9 @@ class TrackedObjectProcessor(mp.Process):
                 track_text = " | ".join(parts)
                 # 跟踪框标签（支持中文）
                 if _has_chinese_font:
-                    # display_config 中 label_color 为 BGR，draw_utf8_label_on_rgb 需要 RGB，需反转
-                    track_label_rgb = tuple(reversed(track_label_color))
+                    # track_label_color 为 RGB，可直接传给 draw_utf8_label_on_rgb
                     draw_utf8_label_on_rgb(frame_copy, track_text, (x1, y2 + 5),
-                                           font_size=14, text_color_rgb=track_label_rgb)
+                                           font_size=14, text_color_rgb=track_label_color)
                 else:
                     cv2.putText(frame_copy, track_text, (x1, y2 + 20),
                                cv2.FONT_HERSHEY_SIMPLEX, track_font_scale, track_label_color, 1)
@@ -1339,10 +1704,10 @@ class TrackedObjectProcessor(mp.Process):
         #    来自 tracked_objects 的轨迹历史
         # ========================================
         if show_trajectories and tracked_objects:
-            traj_color = tuple(trajectory_cfg.get('color', [0, 255, 255]))
+            traj_color = tuple(trajectory_cfg.get('color', [255, 255, 0]))
             traj_thickness = trajectory_cfg.get('thickness', 1)
             point_size = trajectory_cfg.get('point_size', 2)
-            point_color = tuple(trajectory_cfg.get('point_color', [0, 0, 255]))
+            point_color = tuple(trajectory_cfg.get('point_color', [255, 0, 0]))
 
             for obj_id, obj_dict in tracked_objects.items():
                 trajectory = obj_dict.get("trajectory", [])
@@ -1457,6 +1822,23 @@ class TrackedObjectProcessor(mp.Process):
         if self.gif_executor:
             self.gif_executor.shutdown(wait=False)
 
+        # 事件层合并：进程退出时强制结束所有 pending_end 事件
+        # 避免宽限期内的事件丢失（未调用 _finalize_event_end 导致事件状态残留）
+        if self.pending_end_events:
+            proc_logger.info(
+                f"清理 {sum(len(v) for v in self.pending_end_events.values())} 个 pending_end 事件"
+            )
+            for camera_id in list(self.pending_end_events.keys()):
+                for pending_track_id in list(self.pending_end_events[camera_id].keys()):
+                    try:
+                        pending_info = self.pending_end_events[camera_id][pending_track_id]
+                        # 使用 end_frame_time 作为当前时间（进程退出时无新帧）
+                        self._finalize_event_end(camera_id, pending_track_id, pending_info)
+                    except Exception as e:
+                        proc_logger.error(
+                            f"[{camera_id}] 清理 pending_end 事件失败: track_id={pending_track_id}, {e}"
+                        )
+
         # 关闭 EventOutput
         for cam_id, event_output in self.event_outputs.items():
             try:
@@ -1465,3 +1847,195 @@ class TrackedObjectProcessor(mp.Process):
                 proc_logger.error(f"[{cam_id}] 关闭 EventOutput 失败: {e}")
 
         proc_logger.info("资源清理完成")
+
+
+class TrackedObjectProcessorPool:
+    """
+    多进程事件处理器池
+
+    将相机分配到 N 个 TrackedObjectProcessor worker 进程并行处理，
+    通过分发线程按 camera_id 路由数据到对应 worker 队列。
+
+    解决单进程处理多相机高帧率时的吞吐量瓶颈：
+    16 路 × 6fps = 96 帧/秒，单进程的 shm 回读 + JPEG 编码 + AI 流推送跟不上。
+
+    架构:
+        CameraWorker(×16) → detected_objects_queue(共享)
+                                  ↓
+                          分发线程（主进程内）
+                                ↓ 按 camera_id 路由
+                     ┌──────────┬──────────┐
+                     ↓          ↓          ↓
+               worker_queue[0] worker_queue[1] worker_queue[N]
+                     ↓          ↓          ↓
+               Processor(0)  Processor(1)  Processor(N)
+               (4个相机)    (4个相机)    (4个相机)
+
+    每个 worker 是独立的 TrackedObjectProcessor 进程，拥有独立的
+    CameraState/EventOutput/FrameCache/线程池，互不干扰。
+    """
+
+    def __init__(
+        self,
+        camera_configs: dict,
+        detected_objects_queue: mp.Queue,
+        stop_event: mp.Event,
+        ai_stream_config: Optional[dict] = None,
+        ai_stream_enabled_state: Optional[dict] = None,
+        ptz_metrics: Optional[dict] = None,
+        num_workers: Optional[int] = None,
+    ):
+        """
+        Args:
+            camera_configs: 全部相机配置 {camera_id: {...}}
+            detected_objects_queue: CameraWorker 投递的共享队列
+            stop_event: 停止事件
+            ai_stream_config: AI 流配置
+            ai_stream_enabled_state: AI 流启用状态（Manager dict 代理）
+            ptz_metrics: PTZ 共享状态
+            num_workers: worker 进程数（默认自动：每 4 相机 1 个，最少 1 最多 8）
+        """
+        if num_workers is None:
+            num_workers = min(8, max(1, len(camera_configs) // 4))
+        self.num_workers = num_workers
+
+        self.workers: list[TrackedObjectProcessor] = []
+        self.worker_queues: list[mp.Queue] = []
+        self.worker_ready_events: list[mp.Event] = []
+        self.camera_to_worker: dict[str, int] = {}
+
+        # 均匀分配相机到 worker（round-robin）
+        for i, cam_id in enumerate(camera_configs.keys()):
+            self.camera_to_worker[cam_id] = i % num_workers
+
+        # 为每个 worker 创建子配置、专属队列和进程
+        for w in range(num_workers):
+            worker_cameras = {
+                cam_id: cfg
+                for cam_id, cfg in camera_configs.items()
+                if self.camera_to_worker[cam_id] == w
+            }
+            worker_queue = mp.Queue(maxsize=500)
+            ready_event = mp.Event()
+
+            worker = TrackedObjectProcessor(
+                camera_configs=worker_cameras,
+                detected_objects_queue=worker_queue,
+                stop_event=stop_event,
+                ai_stream_config=ai_stream_config,
+                ai_stream_enabled_state=ai_stream_enabled_state,
+                ptz_metrics=ptz_metrics,
+                ready_event=ready_event,
+            )
+            worker.name = f"TrackedObjectProcessor-{w}"
+
+            self.workers.append(worker)
+            self.worker_queues.append(worker_queue)
+            self.worker_ready_events.append(ready_event)
+
+        self.detected_objects_queue = detected_objects_queue
+        self.stop_event = stop_event
+        self._dispatch_thread: Optional[threading.Thread] = None
+        self._dispatch_stop = threading.Event()
+
+        logger.info(
+            f"[TrackedObjectProcessorPool] 初始化: "
+            f"workers={num_workers}, cameras={len(camera_configs)}"
+        )
+
+    def start(self):
+        """启动所有 worker 进程和分发线程"""
+        for i, worker in enumerate(self.workers):
+            worker.start()
+            logger.info(
+                f"[TrackedObjectProcessorPool] worker-{i} 启动 "
+                f"(pid={worker.pid}, cameras={len(worker.camera_configs)})"
+            )
+
+        self._dispatch_thread = threading.Thread(
+            target=self._dispatch_loop,
+            name="ProcessorDispatcher",
+            daemon=True,
+        )
+        self._dispatch_thread.start()
+
+    def wait_ready(self, timeout: float = 60) -> bool:
+        """等待所有 worker 就绪"""
+        deadline = time.time() + timeout
+        for i, evt in enumerate(self.worker_ready_events):
+            remaining = max(0.1, deadline - time.time())
+            if not evt.wait(timeout=remaining):
+                logger.warning(
+                    f"[TrackedObjectProcessorPool] worker-{i} 就绪超时"
+                )
+                return False
+        logger.info(
+            f"[TrackedObjectProcessorPool] 所有 {self.num_workers} 个 worker 已就绪"
+        )
+        return True
+
+    def _dispatch_loop(self):
+        """
+        分发线程：从主队列读取，按 camera_id 路由到 worker 队列
+
+        分发逻辑非常轻量（dict 查找 + put），不会成为瓶颈。
+        worker 队列满时丢弃本帧（背压），避免阻塞分发线程影响其他相机。
+        """
+        dispatch_count = 0
+        drop_count = 0
+        last_stats_time = time.time()
+
+        while not self.stop_event.is_set() and not self._dispatch_stop.is_set():
+            try:
+                data = self.detected_objects_queue.get(timeout=1)
+            except Exception:
+                continue
+
+            if not data:
+                continue
+
+            camera_id = data[0]
+            worker_idx = self.camera_to_worker.get(camera_id)
+            if worker_idx is None:
+                continue
+
+            try:
+                self.worker_queues[worker_idx].put(data, timeout=0.05)
+                dispatch_count += 1
+            except Exception:
+                drop_count += 1
+
+            # 每 60 秒统计
+            now = time.time()
+            if now - last_stats_time > 60:
+                logger.info(
+                    f"[ProcessorDispatcher] 近60s: "
+                    f"分发 {dispatch_count} 帧, 丢弃 {drop_count} 帧"
+                )
+                last_stats_time = now
+                dispatch_count = 0
+                drop_count = 0
+
+        logger.info("[ProcessorDispatcher] 分发线程退出")
+
+    def is_alive(self) -> bool:
+        """检查是否有任一 worker 存活"""
+        return any(w.is_alive() for w in self.workers)
+
+    @property
+    def pid(self):
+        """返回第一个 worker 的 pid（用于日志）"""
+        return self.workers[0].pid if self.workers else None
+
+    def join(self, timeout=None):
+        """等待所有 worker 退出"""
+        self._dispatch_stop.set()
+        for w in self.workers:
+            w.join(timeout=timeout)
+
+    def terminate(self):
+        """终止所有 worker"""
+        self._dispatch_stop.set()
+        for w in self.workers:
+            if w.is_alive():
+                w.terminate()

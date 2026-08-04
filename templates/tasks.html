@@ -351,11 +351,6 @@
                             <input type="number" id="decoderFps" name="decoder_fps" placeholder="30">
                             <small style="color: #888; font-size: 12px;">推荐：30</small>
                         </div>
-                        <div class="form-group">
-                            <label for="decoderRingBufferBlockCount">环形缓冲区块数</label>
-                            <input type="number" id="decoderRingBufferBlockCount" name="decoder_ring_buffer_block_count" placeholder="10">
-                            <small style="color: #888; font-size: 12px;">推荐：10</small>
-                        </div>
                     </div>
                     
                     <!-- 硬件加速配置 -->
@@ -421,8 +416,8 @@
                     <div class="form-row">
                         <div class="form-group">
                             <label for="decoderRingBufferBlockCount">环形缓冲区块数</label>
-                            <input type="number" id="decoderRingBufferBlockCount" name="decoder_ring_buffer_block_count" placeholder="10">
-                            <small style="color: #888; font-size: 12px;">推荐：10-15块</small>
+                            <input type="number" id="decoderRingBufferBlockCount" name="decoder_ring_buffer_block_count" placeholder="40">
+                            <small style="color: #888; font-size: 12px;">推荐：40块（覆盖事件回读延迟，避免帧被覆盖）</small>
                         </div>
                         <div class="form-group">
                             <label for="decoderIndexQueueSize">索引队列大小</label>
@@ -546,7 +541,9 @@
                             <small style="color: #888; font-size: 12px;">多设备时指定（可选）</small>
                         </div>
                         <div class="form-group">
-                            <!-- 占位 -->
+                            <label for="detectorNumDetectors">检测器进程数</label>
+                            <input type="number" id="detectorNumDetectors" name="detector_num_detectors" placeholder="自动" min="1" max="32">
+                            <small style="color: #888; font-size: 12px;">留空则按摄像机数自动计算（每4路1个）</small>
                         </div>
                     </div>
                 </div>
@@ -890,42 +887,66 @@
                     <h5 class="form-subsection-title">颜色管理器</h5>
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="displayBoxColor">检测框颜色(BGR)</label>
-                            <input type="text" id="displayBoxColor" name="display_box_color" placeholder="0,255,0">
+                            <label for="displayBoxColor">检测框颜色</label>
+                            <div class="color-picker-wrapper">
+                                <input type="color" id="displayBoxColor" name="display_box_color" class="color-picker-input" value="#00ff00">
+                                <span class="color-value-display" id="displayBoxColorValue">0,255,0</span>
+                            </div>
                         </div>
                         <div class="form-group">
-                            <label for="displayBoxLabelColor">检测框标签颜色(BGR)</label>
-                            <input type="text" id="displayBoxLabelColor" name="display_box_label_color" placeholder="0,255,0">
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="displayTrackColor">跟踪框颜色(BGR)</label>
-                            <input type="text" id="displayTrackColor" name="display_track_color" placeholder="255,0,0">
-                        </div>
-                        <div class="form-group">
-                            <label for="displayTrackLabelColor">跟踪框标签颜色(BGR)</label>
-                            <input type="text" id="displayTrackLabelColor" name="display_track_label_color" placeholder="255,0,0">
+                            <label for="displayBoxLabelColor">检测框标签颜色</label>
+                            <div class="color-picker-wrapper">
+                                <input type="color" id="displayBoxLabelColor" name="display_box_label_color" class="color-picker-input" value="#00ff00">
+                                <span class="color-value-display" id="displayBoxLabelColorValue">0,255,0</span>
+                            </div>
                         </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="displayTrajectoryColor">轨迹颜色(BGR)</label>
-                            <input type="text" id="displayTrajectoryColor" name="display_trajectory_color" placeholder="0,255,255">
+                            <label for="displayTrackColor">跟踪框颜色</label>
+                            <div class="color-picker-wrapper">
+                                <input type="color" id="displayTrackColor" name="display_track_color" class="color-picker-input" value="#0000ff">
+                                <span class="color-value-display" id="displayTrackColorValue">0,0,255</span>
+                            </div>
                         </div>
                         <div class="form-group">
-                            <label for="displayTrajectoryPointColor">轨迹点颜色(BGR)</label>
-                            <input type="text" id="displayTrajectoryPointColor" name="display_trajectory_point_color" placeholder="0,0,255">
+                            <label for="displayTrackLabelColor">跟踪框标签颜色</label>
+                            <div class="color-picker-wrapper">
+                                <input type="color" id="displayTrackLabelColor" name="display_track_label_color" class="color-picker-input" value="#0000ff">
+                                <span class="color-value-display" id="displayTrackLabelColorValue">0,0,255</span>
+                            </div>
                         </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="displayMotionRegionColor">区域边界颜色(BGR)</label>
-                            <input type="text" id="displayMotionRegionColor" name="display_motion_region_color" placeholder="255,255,0">
+                            <label for="displayTrajectoryColor">轨迹颜色</label>
+                            <div class="color-picker-wrapper">
+                                <input type="color" id="displayTrajectoryColor" name="display_trajectory_color" class="color-picker-input" value="#ffff00">
+                                <span class="color-value-display" id="displayTrajectoryColorValue">255,255,0</span>
+                            </div>
                         </div>
                         <div class="form-group">
-                            <label for="displayMotionRegionFillColor">区域填充颜色(BGR)</label>
-                            <input type="text" id="displayMotionRegionFillColor" name="display_motion_region_fill_color" placeholder="255,255,0">
+                            <label for="displayTrajectoryPointColor">轨迹点颜色</label>
+                            <div class="color-picker-wrapper">
+                                <input type="color" id="displayTrajectoryPointColor" name="display_trajectory_point_color" class="color-picker-input" value="#ff0000">
+                                <span class="color-value-display" id="displayTrajectoryPointColorValue">255,0,0</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="displayMotionRegionColor">区域边界颜色</label>
+                            <div class="color-picker-wrapper">
+                                <input type="color" id="displayMotionRegionColor" name="display_motion_region_color" class="color-picker-input" value="#00ffff">
+                                <span class="color-value-display" id="displayMotionRegionColorValue">0,255,255</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="displayMotionRegionFillColor">区域填充颜色</label>
+                            <div class="color-picker-wrapper">
+                                <input type="color" id="displayMotionRegionFillColor" name="display_motion_region_fill_color" class="color-picker-input" value="#00ffff">
+                                <span class="color-value-display" id="displayMotionRegionFillColorValue">0,255,255</span>
+                            </div>
                         </div>
                     </div>
 
@@ -1296,11 +1317,44 @@
         opacity: 0.5;
         cursor: not-allowed;
     }
+    /* 颜色管理器组件样式 */
+    .color-picker-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .color-picker-input {
+        width: 48px;
+        height: 32px;
+        padding: 0;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        cursor: pointer;
+        background: transparent;
+        flex-shrink: 0;
+    }
+    .color-picker-input::-webkit-color-swatch-wrapper {
+        padding: 2px;
+    }
+    .color-picker-input::-webkit-color-swatch {
+        border: none;
+        border-radius: 3px;
+    }
+    .color-picker-input::-moz-color-swatch {
+        border: none;
+        border-radius: 3px;
+    }
+    .color-value-display {
+        font-size: 12px;
+        color: var(--text-secondary);
+        font-family: 'Consolas', 'Monaco', monospace;
+        user-select: text;
+    }
 </style>
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{{ url_for('static', filename='js/tasks.js') }}?v=20260802"></script>
+<script src="{{ url_for('static', filename='js/tasks.js') }}?v=20260804b"></script>
 <script src="{{ url_for('static', filename='js/config_modal.js') }}"></script>
 <script src="{{ url_for('static', filename='js/zone_canvas_editor.js') }}?v=20260801a"></script>
 <script src="{{ url_for('static', filename='js/channel_zone_config.js') }}?v=20260801a"></script>

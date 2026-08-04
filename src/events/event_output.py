@@ -85,9 +85,9 @@ class EventOutput:
         # 创建本地保存目录（强制创建，无论配置如何）
         os.makedirs(self.local_output_dir, exist_ok=True)
 
-        # 启动时清理一次（如果启用自动清理）
+        # 启动时清理一次（异步执行，避免阻塞 TrackedObjectProcessor 初始化）
         if self.auto_cleanup:
-            self._cleanup_old_images()
+            self._io_executor.submit(self._cleanup_old_images)
 
         # 图片压缩配置
         self.compression_cfg = config.get('compression', {})
@@ -241,7 +241,7 @@ class EventOutput:
 
         Args:
             event_id: 事件 ID
-            image: 图片数据（OpenCV BGR 格式）
+            image: 图片数据（RGB 格式，与项目统一语义一致）
             score: 检测分数（computed_score）
             bbox: 边界框 (x1, y1, x2, y2)
 
@@ -356,32 +356,30 @@ class EventOutput:
     
     def _compress_image(self, image: np.ndarray) -> bytes:
         """
-        压缩图片
-        
+        压缩图片（RGB 格式，PIL 编码无需 BGR 转换）
+
         Args:
-            image: OpenCV 格式的图片 (BGR)
-        
+            image: RGB 格式的图片 (numpy 数组)
+
         Returns:
             压缩后的 JPEG 字节数据
         """
+        from src.utils.image import encode_jpeg
+
         if not self.compression_cfg.get('enabled', True):
-            _, buffer = cv2.imencode('.jpg', image)
-            return buffer.tobytes()
-        
+            return encode_jpeg(image, quality=80)
+
         quality = self.compression_cfg.get('quality', 80)
         max_width = self.compression_cfg.get('max_width', 640)
         max_height = self.compression_cfg.get('max_height', 480)
-        
-        # 缩放图片
+
+        # 缩放图片（cv2.resize 不关心通道顺序，无需转换）
         h, w = image.shape[:2]
         if w > max_width or h > max_height:
             scale = min(max_width / w, max_height / h)
             image = cv2.resize(image, None, fx=scale, fy=scale)
-        
-        # 压缩为 JPEG
-        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
-        _, buffer = cv2.imencode('.jpg', image, encode_param)
-        return buffer.tobytes()
+
+        return encode_jpeg(image, quality=quality)
     
     def should_send(self, class_name: str, confidence: float) -> bool:
         """
@@ -514,7 +512,7 @@ class EventOutput:
         Args:
             event_type: 事件类型 (detection, track_start, track_end, track_update)
             data: 事件数据字典，包含 track_id, class_name, confidence, bbox 等
-            image: 可选的图片数据 (OpenCV BGR 格式)
+            image: 可选的图片数据 (RGB 格式 numpy 数组)
             frame_id: 当前帧 ID
             task_id: 关联的任务 ID（可选）
             algorithm: 使用的算法（可选）
@@ -820,7 +818,7 @@ class EventOutput:
             event_id: 事件 UUID
             status: 事件状态（tracking_start / tracking_update / tracking_end / gif_ready），写入独立 status 列
             data: 更新数据字典（可能包含 start_time, end_time, bbox 等）
-            image: 可选的图片数据（OpenCV BGR 格式）
+            image: 可选的图片数据（RGB 格式 numpy 数组）
             push_websocket: 是否推送 event_update 到前端（end 时为 True）
             event_type: 事件类型（非 None 时更新 type 列）
 
@@ -1001,7 +999,7 @@ class EventOutput:
 
         Args:
             event_id: 事件 UUID
-            frames: 帧图像列表（numpy 数组，BGR 格式）
+            frames: 帧图像列表（RGB 格式 numpy 数组）
             bbox: 目标边界框 (x1, y1, x2, y2)
             trajectory_points: 轨迹点列表（当前由 GIFGenerator 内部根据 bbox 生成）
 
