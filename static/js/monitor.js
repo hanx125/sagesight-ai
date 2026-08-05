@@ -801,6 +801,7 @@ function playOnScreen(screenIndex, cameraId, useAIMode = false) {
 
 var webrtcPlayers = {}; // WebRTC播放器实例
 var jessibucaPlayers = {}; // Jessibuca播放器实例（备用）
+var flvPlayers = {}; // flv.js播放器实例（WebRTC降级使用）
 
 function playStream(containerId, camera) {
     console.log(`播放摄像机: ${camera.id}, rtc_stream=${camera.rtc_stream}, http_stream=${camera.http_stream}`);
@@ -848,8 +849,8 @@ function playWithWebRTC(containerId, camera) {
         loadZLMRTCClient().then(() => {
             playWithWebRTC(containerId, camera);
         }).catch(err => {
-            console.error('ZLMRTCClient 加载失败，降级到Jessibuca:', err);
-            playWithJessibuca(containerId, camera);
+            console.error('ZLMRTCClient 加载失败，降级到flv.js:', err);
+            playWithFlvJs(containerId, camera);
         });
         return;
     }
@@ -858,8 +859,8 @@ function playWithWebRTC(containerId, camera) {
     const rtcUrl = camera.rtc_stream || camera.rtcs_stream;
     
     if (!rtcUrl) {
-        console.warn('没有RTC流地址，降级到Jessibuca');
-        playWithJessibuca(containerId, camera);
+        console.warn('没有RTC流地址，降级到flv.js');
+        playWithFlvJs(containerId, camera);
         return;
     }
 
@@ -870,9 +871,9 @@ function playWithWebRTC(containerId, camera) {
     const fallbackToFlv = (reason) => {
         if (hasFallenBack) return;
         hasFallenBack = true;
-        console.warn(`WebRTC降级到WS-FLV: ${reason}`);
+        console.warn(`WebRTC降级到HTTP-FLV: ${reason}`);
         stopStream(containerId);
-        playWithJessibuca(containerId, camera);
+        playWithFlvJs(containerId, camera);
     };
 
     try {
@@ -937,7 +938,7 @@ function playWithWebRTC(containerId, camera) {
 
     } catch (error) {
         console.error('WebRTC播放器创建失败:', error);
-        playWithJessibuca(containerId, camera);
+        playWithFlvJs(containerId, camera);
     }
 }
 
@@ -957,6 +958,28 @@ function loadZLMRTCClient() {
         };
         script.onerror = (e) => {
             console.error('ZLMRTCClient 加载失败:', e);
+            reject(e);
+        };
+        document.head.appendChild(script);
+    });
+}
+
+// 动态加载flv.js（WebRTC降级时使用）
+function loadFlvJs() {
+    return new Promise((resolve, reject) => {
+        if (window.flvjs) {
+            resolve();
+            return;
+        }
+
+        const script = document.createElement('script');
+        script.src = '/static/js/flv.min.js';
+        script.onload = () => {
+            console.log('flv.js 加载成功');
+            resolve();
+        };
+        script.onerror = (e) => {
+            console.error('flv.js 加载失败:', e);
             reject(e);
         };
         document.head.appendChild(script);
@@ -998,6 +1021,114 @@ async function checkAndStartStream(cameraId) {
     } catch (error) {
         console.error('流检查/启动失败:', error);
         throw error;
+    }
+}
+
+// ========================================
+// flv.js 播放器（WebRTC降级播放器，播放HTTP-FLV）
+// ========================================
+
+function playWithFlvJs(containerId, camera) {
+    const container = document.getElementById(containerId);
+    if (!container) {
+        console.error(`找不到播放容器: ${containerId}`);
+        return;
+    }
+
+    // 检查 flv.js 是否已加载
+    if (typeof window.flvjs === 'undefined') {
+        console.warn('flv.js 未加载，尝试动态加载...');
+        loadFlvJs().then(() => {
+            playWithFlvJs(containerId, camera);
+        }).catch(err => {
+            console.error('flv.js 加载失败:', err);
+            showNotification('flv.js 加载失败，请检查静态资源', 'error');
+        });
+        return;
+    }
+
+    // 检查浏览器是否支持 flv.js
+    if (!window.flvjs.isSupported()) {
+        console.error('浏览器不支持flv.js（需要MediaSource Extensions）');
+        showNotification('当前浏览器不支持flv.js播放', 'error');
+        return;
+    }
+
+    // 优先使用 HTTP-FLV，备用 WS-FLV
+    const flvUrl = camera.http_stream || camera.ws_stream;
+    if (!flvUrl) {
+        console.error('没有可用的FLV流地址');
+        showNotification('没有可用的FLV流地址', 'error');
+        return;
+    }
+
+    // 清空容器，创建video元素
+    container.innerHTML = `
+        <video id="flvVideo${containerId}"
+               autoplay
+               playsinline
+               style="width:100%;height:100%;background-color:#000;object-fit:contain;">
+        </video>
+    `;
+
+    const videoElement = document.getElementById(`flvVideo${containerId}`);
+
+    try {
+        // 销毁已有实例
+        if (flvPlayers[containerId]) {
+            try {
+                flvPlayers[containerId].destroy();
+            } catch (e) {
+                console.warn('销毁旧flv.js实例失败:', e);
+            }
+            flvPlayers[containerId] = null;
+        }
+
+        // 创建 flv.js 播放器
+        const player = window.flvjs.createPlayer({
+            type: 'flv',
+            url: flvUrl,
+            isLive: true,
+            hasAudio: true,
+            hasVideo: true
+        }, {
+            enableWorker: false,
+            enableStashBuffer: false,  // 关闭缓冲，降低延迟
+            stashInitialSize: 128,     // 初始缓冲128字节
+            autoCleanupSourceBuffer: true,
+            liveBufferLatencyChasing: true,  // 追帧，避免延迟累积
+            liveBufferLatencyMaxLatency: 1.5,  // 最大延迟1.5秒
+            liveBufferLatencyMinRemain: 0.2,   // 最小剩余0.2秒
+        });
+
+        player.attachMediaElement(videoElement);
+        player.load();
+        player.play();
+
+        flvPlayers[containerId] = player;
+
+        console.log(`flv.js HTTP-FLV播放: ${flvUrl}`);
+
+        // 监听错误事件
+        player.on(window.flvjs.Events.ERROR, (errorType, errorDetail, errorInfo) => {
+            console.error('flv.js播放错误:', errorType, errorDetail, errorInfo);
+            if (errorType === window.flvjs.ErrorTypes.NETWORK_ERROR) {
+                showNotification('FLV流网络错误，请检查流状态', 'error');
+            }
+        });
+
+        // 监听播放成功
+        player.on(window.flvjs.Events.PLAYING, () => {
+            console.log('flv.js播放成功');
+        });
+
+    } catch (error) {
+        console.error('flv.js播放器创建失败:', error);
+        if (flvPlayers[containerId]) {
+            try { flvPlayers[containerId].destroy(); } catch (e) {}
+            delete flvPlayers[containerId];
+        }
+        showNotification('flv.js播放器创建失败', 'error');
     }
 }
 
@@ -1075,6 +1206,21 @@ function stopStream(containerId) {
         }
         delete webrtcPlayers[containerId];
         console.log(`WebRTC播放器已停止: ${containerId}`);
+    }
+
+    // 关闭 flv.js 播放器
+    const flvPlayer = flvPlayers[containerId];
+    if (flvPlayer) {
+        try {
+            flvPlayer.pause();
+            flvPlayer.unload();
+            flvPlayer.detachMediaElement();
+            flvPlayer.destroy();
+        } catch (e) {
+            console.warn('flv.js释放失败:', e);
+        }
+        delete flvPlayers[containerId];
+        console.log(`flv.js播放器已停止: ${containerId}`);
     }
 
     // 关闭 Jessibuca 播放器
@@ -1890,6 +2036,26 @@ async function updateStreamStatus(containerId) {
             }
         } catch (error) {
             console.warn('获取WebRTC状态失败:', error);
+            statusElement.textContent = '状态: 获取失败';
+            bitrateElement.textContent = '码率: -- kbps';
+        }
+        return;
+    }
+
+    // 检查flv.js播放器
+    const flvPlayer = flvPlayers[containerId];
+    if (flvPlayer) {
+        try {
+            const buffered = flvPlayer.buffered;
+            if (buffered.length > 0) {
+                statusElement.textContent = '状态: 播放中';
+                bitrateElement.textContent = `码率: -- kbps';
+            } else {
+                statusElement.textContent = '状态: 缓冲中';
+                bitrateElement.textContent = '码率: -- kbps';
+            }
+        } catch (error) {
+            console.warn('获取flv.js状态失败:', error);
             statusElement.textContent = '状态: 获取失败';
             bitrateElement.textContent = '码率: -- kbps';
         }

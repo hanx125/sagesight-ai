@@ -213,3 +213,180 @@ ps -T -p $(pgrep MediaServer) | wc -l
 若 CPU 过高或内存增长，检查：
 - 并发流数量是否超出盒子处理能力（RK3588 建议并发转码流 < 8 路）
 - `config.ini` 的 `[general]` 段 `mergeWriteMS`（合并写性能优化）和 `enableFFmpeg`（是否启用 FFmpeg 转码）
+
+## 八、config.ini 配置说明
+
+配置文件路径：`/root/ZLMediaKit/release/linux/Debug/config.ini`
+
+查看完整配置：
+
+```bash
+cat /root/ZLMediaKit/release/linux/Debug/config.ini
+```
+
+### 典型配置内容（关键字段）
+
+以下为与本平台播放链路相关的核心配置段，修改后需重启 ZLMediaKit 生效：
+
+```ini
+# 通用配置
+[general]
+# 媒体流无人观看时自动关闭的延时（毫秒），0 表示不自动关闭
+# 注意：若设为非0，前端停止播放后流会被关闭，再次播放需重新触发 addStreamProxy
+streamNoneReaderDelayMS=0
+# 是否启用 FFmpeg 转码
+enableFFmpeg=0
+# 流无人观看时合并写优化
+mergeWriteMS=0
+# 日志级别（0=TRACE 1=DEBUG 2=INFO 3=WARN 4=ERROR）
+logLevel=2
+# 日志文件路径
+logFilePath=./log
+
+# API 配置
+[api]
+# API 调试模式（打印每次 API 请求/响应，排查问题时设 1，生产环境设 0）
+apiDebug=1
+# API 默认密钥（与本平台 streaming_servers 表的 secret 字段一致）
+secret=QeYjJSfbaub0QkTACpqmmbSqz6ma1V2S
+# 是否允许跨域
+defaultSnap=./www/snapshot/
+
+# 协议开关配置（关键！控制流注册到哪些协议模块）
+# 若某协议设为0，对应协议播放会报 stream not found
+[protocol]
+# 自动关闭无人观看的流（0=不自动关闭 1=自动关闭）
+auto_close_stream=0
+# 按需拉流：流无消费者时是否关闭源（0=保持拉流 1=无消费者时关闭）
+stream_none_reader_close_ms=0
+# RTSP 协议开关（AI任务 FFmpeg 拉流依赖此项）
+enable_rtsp=1
+# RTMP 协议开关
+enable_rtmp=1
+# HLS 协议开关
+enable_hls=1
+# TS 协议开关
+enable_ts=1
+# fMP4 协议开关（HTTP-FLV / WS-FLV 依赖此项，必须为1）
+enable_fmp4=1
+# 是否启用 MP4 录制
+enable_mp4=0
+
+# RTSP 服务配置
+[rtsp]
+# RTSP 监听端口
+port=554
+# SSL/TLS 端口（RTSPS）
+sslport=322
+# 流是否延迟发布（0=立即发布 1=等首帧到达后发布）
+delay=false
+# RTSP 拉流认证超时
+directProxy=1
+# 是否启用 RTP over TCP
+rtpTransportType=tcp
+
+# RTMP 服务配置
+[rtmp]
+# RTMP 监听端口
+port=1935
+# SSL/TLS 端口（RTMPS）
+sslport=19350
+
+# HTTP 服务配置（WebRTC 信令 / HTTP-FLV / HLS 都走此端口）
+[http]
+# HTTP 监听端口（本平台 streaming_servers.http_port 字段）
+port=80
+# HTTPS 监听端口
+sslport=443
+# 是否允许跨域
+dirMenu=1
+# 静态文件目录
+dir=./www
+# 心跳保活时间（秒）
+keepAliveSecond=30
+# 是否启用 WS-FLV（必须为1，前端降级播放依赖此项）
+enable_ws_flv=1
+
+# WebRTC 配置（前端 WebRTC 播放依赖此段）
+[rtc]
+# WebRTC UDP 端口
+port=8000
+# 外网 IP 候选地址（NAT 环境必填，纯内网可留空）
+externIP=
+# 是否自动探测外网 IP
+detectExternalIP=1
+# 最大比特率（0=不限）
+maxBitrate=0
+# NACK 重传间隔（毫秒）
+nackIntervalMs=20
+# 是否启用 TWCC 拥塞控制
+twccRtcpInterval=0
+
+# HLS 配置
+[hls]
+# HLS 分片时长（秒）
+segDur=2
+# HLS 分片数量
+segNum=3
+# HLS 清理过期分片
+segRetain=5
+# HLS 文件存放目录
+fileBufSize=65536
+# HLS 生成 TS 文件的存放目录
+filePath=./www
+
+# RTP 配置
+[rtp]
+# RTP 端口范围起止
+port_range=30000-35000
+# RTP 超时时间（秒）
+rtpMaxSize=10
+
+# RTP 推流配置
+[rtp_proxy]
+# RTP 推流监听端口
+port=10000
+# 推流超时时间（秒）
+timeoutSec=15
+```
+
+### 关键配置项说明
+
+| 配置项 | 作用 | 异常影响 |
+|---|---|---|
+| `[protocol].enable_fmp4` | HTTP-FLV / WS-FLV 协议开关 | 设为0时 WS-FLV 报 `WebSocket closed before established` |
+| `[protocol].enable_rtsp` | RTSP 协议开关 | 设为0时 AI 任务 FFmpeg 拉流失败 |
+| `[protocol].auto_close_stream` | 流自动关闭 | 设为1时前端停止播放后流即被关闭 |
+| `[protocol].stream_none_reader_close_ms` | 无观看者延时关闭流 | 非零时注册流后无人观看会自动关闭 |
+| `[http].port` | HTTP/WS-FLV 端口 | 与本平台 `streaming_servers.http_port` 必须一致 |
+| `[http].enable_ws_flv` | WS-FLV 开关 | 设为0时前端无法降级到 WS-FLV 播放 |
+| `[rtc].port` | WebRTC UDP 端口 | 防火墙需放行此 UDP 端口 |
+| `[rtc].externIP` | 外网 IP 候选 | NAT 环境未配置时 WebRTC ICE 协商失败 |
+| `[api].secret` | API 密钥 | 必须与本平台数据库 `streaming_servers.secret` 一致 |
+
+### 修改配置后的操作
+
+```bash
+# 1. 编辑配置文件
+sudo nano /root/ZLMediaKit/release/linux/Debug/config.ini
+
+# 2. 重启 ZLMediaKit 使配置生效
+sudo systemctl restart zlmediakit
+
+# 3. 确认服务运行正常
+sudo systemctl status zlmediakit
+
+# 4. 验证端口监听
+ss -tlnp | grep -E "554|1935|80|443"
+ss -ulnp | grep 8000   # WebRTC UDP 端口
+```
+
+### 常见播放问题排查对照表
+
+| 现象 | 可能原因 | 检查项 |
+|---|---|---|
+| WebRTC 报 `stream not found` | `[protocol]` 段禁用了对应协议，或 `auto_close_stream=1` | `grep -A 10 "\[protocol\]" config.ini` |
+| WS-FLV 报 `WebSocket closed before established` | `enable_fmp4=0` 或 `enable_ws_flv=0` | `grep -E "enable_fmp4\|enable_ws_flv" config.ini` |
+| AI 任务拉流失败 | `enable_rtsp=0` 或 RTSP 端口错误 | `grep -A 5 "\[rtsp\]" config.ini` |
+| 流播放一会就断 | `auto_close_stream=1` 或 `stream_none_reader_close_ms` 非零 | `grep -E "auto_close\|stream_none_reader" config.ini` |
+| API 调用返回 401 | `secret` 与本平台数据库不一致 | `grep "secret" config.ini` |
