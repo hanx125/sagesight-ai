@@ -419,7 +419,10 @@ class VideoDecoder:
             self.ffmpeg_args.extend(['-i', self.config.rtsp_url])
 
         # ========== 输出格式（固定使用I420） ==========
-        # ✅ 优化：使用I420格式（Y+U+V分离），预处理性能提升60%
+        # ✅ 使用 yuv420p（I420格式），Y+U+V分离，预处理性能提升60%
+        # 注意：yuvj420p 会导致 scale_rkrga 失效（RGA不识别该格式名），
+        # 且 -pix_fmt yuvj420p 与滤镜链 format=yuv420p 不一致会触发额外 CPU 转换。
+        # Range 问题由读取端（shared_memory.py）的转换公式处理。
         pix_fmt = 'yuv420p'  # I420格式
         logger.info(f"[VideoDecoder] 输出格式：{pix_fmt} (I420)")
 
@@ -579,18 +582,36 @@ class VideoDecoder:
         logger.debug("[VideoDecoder] 已停止")
     
     def _decode_loop(self):
-        """解码主循环"""
+        """
+        解码主循环（优化版）
+
+        ✅ 优化点（针对 RK3588 等嵌入式平台 CPU 占用高的问题）：
+        1. 使用 readinto + 预分配 bytearray 替代 read(4096) + bytes 拼接
+           - 系统调用次数：从 ~150 次/帧（614KB / 4KB）降到 1-2 次/帧
+           - 内存拷贝：消除 buffer += chunk 和 buffer[total_size:] 的 O(n²) 拷贝
+        2. 使用 numpy.frombuffer 零拷贝引用 frame_buffer
+           - ring_buffer 写入时通过 tobytes() 拷贝，引用安全
+        3. memoryview 切片避免缓冲区拷贝
+        """
         # ========== 读取帧数据（固定I420格式） ==========
         # 计算I420格式帧大小
         frame_size = self.config.width * self.config.height
         y_size = frame_size
         u_size = frame_size // 4
         v_size = frame_size // 4
-        total_size = y_size + u_size + v_size
+        total_size = y_size + u_size + v_size  # 一帧总字节数
 
-        buffer = b''
+        # ✅ 预分配整帧缓冲区（避免每帧重新分配和 bytes 拼接拷贝）
+        # bytearray 支持 buffer 协议，可被 readinto 直接写入
+        frame_buffer = bytearray(total_size)
+        frame_view = memoryview(frame_buffer)
+
+        # 残余数据缓冲区（保存跨帧边界的多读数据，避免丢失）
+        # 通常 readinto 一次最多读 total_size 字节，但为健壮性保留处理逻辑
+        leftover = bytearray()
+
         error_count = 0
-        
+
         while self.is_running:
             try:
                 # 检查 FFmpeg 进程状态
@@ -612,68 +633,80 @@ class VideoDecoder:
                         time.sleep(self.config.reconnect_delay)
                         self.stats['reconnect_count'] += 1
                         self._restart_ffmpeg()
+                        # 重置残余数据，避免跨连接的数据混淆
+                        leftover = bytearray()
                     else:
                         break
                     continue
-                
-                # 从 FFmpeg stdout 读取数据（非阻塞）
-                try:
-                    # 设置超时（Windows 下使用 select 不可用，直接读取）
-                    chunk = self.process.stdout.read(4096)
-                    
-                    if not chunk:
-                        # 没有数据可读，可能是 FFmpeg 还未开始输出
-                        time.sleep(0.1)
-                        continue
-                except Exception as e:
-                    # 读取错误，等待后重试
-                    logger.debug(f"[VideoDecoder] 读取错误：{e}")
-                    time.sleep(0.1)
+
+                # ✅ 优化：凑齐一帧数据，优先使用上次的残余数据
+                bytes_filled = 0
+
+                if leftover:
+                    use_len = min(len(leftover), total_size)
+                    frame_view[:use_len] = leftover[:use_len]
+                    bytes_filled = use_len
+                    # 保留未使用的部分（理论上不会发生，但保险起见）
+                    if use_len < len(leftover):
+                        leftover = leftover[use_len:]
+                    else:
+                        leftover = bytearray()
+
+                # 读取剩余字节凑齐一帧
+                while bytes_filled < total_size:
+                    try:
+                        n = self.process.stdout.readinto(frame_view[bytes_filled:total_size])
+                    except Exception as e:
+                        logger.debug(f"[VideoDecoder] readinto 错误：{e}")
+                        n = 0
+
+                    if not n:
+                        # EOF 或暂时无数据
+                        if bytes_filled > 0:
+                            # 保留已读部分作为残余，下次继续
+                            leftover = bytearray(frame_view[:bytes_filled])
+                        if bytes_filled == 0:
+                            # 完全没数据，短暂休眠避免空转
+                            time.sleep(0.001)
+                        break
+                    bytes_filled += n
+
+                if bytes_filled < total_size:
+                    # 未凑齐一帧，继续等待数据
                     continue
-                
-                buffer += chunk
-                
-                # 当缓冲区有足够数据时，提取帧
-                while len(buffer) >= total_size:
-                    # 提取一帧数据
-                    frame_data = buffer[:total_size]
-                    buffer = buffer[total_size:]
 
-                    # ✅ I420 格式解析（YUV420p）
-                    # I420: Y 平面 + U 平面 + V 平面（分开存储）
-                    y_size = self.config.height * self.config.width
-                    u_size = (self.config.height // 2) * (self.config.width // 2)
+                # ✅ 使用 numpy.frombuffer 零拷贝引用 frame_buffer
+                # 注意：ring_buffer 写入时会调用 tobytes() 拷贝数据，因此引用安全
+                # frame_buffer 在下一帧会被覆盖，但本帧已通过 tobytes() 拷贝到共享内存
+                y = np.frombuffer(frame_buffer, dtype=np.uint8, count=y_size, offset=0).reshape(
+                    (self.config.height, self.config.width))
+                u = np.frombuffer(frame_buffer, dtype=np.uint8, count=u_size, offset=y_size).reshape(
+                    (self.config.height // 2, self.config.width // 2))
+                v = np.frombuffer(frame_buffer, dtype=np.uint8, count=v_size, offset=y_size + u_size).reshape(
+                    (self.config.height // 2, self.config.width // 2))
 
-                    y_data = frame_data[:y_size]
-                    u_data = frame_data[y_size:y_size + u_size]
-                    v_data = frame_data[y_size + u_size:y_size + u_size * 2]
+                # 调试输出
+                if self.stats['frames_decoded'] < 3:
+                    logger.debug(f"[VideoDecoder] I420 帧 {self.stats['frames_decoded']}: "
+                                 f"Y shape={y.shape}, U shape={u.shape}, V shape={v.shape}")
 
-                    # 转换为 numpy 数组
-                    y = np.frombuffer(y_data, dtype=np.uint8).reshape((self.config.height, self.config.width))
-                    u = np.frombuffer(u_data, dtype=np.uint8).reshape((self.config.height // 2, self.config.width // 2))
-                    v = np.frombuffer(v_data, dtype=np.uint8).reshape((self.config.height // 2, self.config.width // 2))
+                # 写入环形缓冲区（I420 格式）
+                # ✅ 使用真实PTS时间戳，而不是系统时间
+                pts_timestamp_ns = self._get_pts_for_frame(self.stats['frames_decoded'])
 
-                    # 调试输出
-                    if self.stats['frames_decoded'] < 3:
-                        logger.debug(f"[VideoDecoder] I420 帧 {self.stats['frames_decoded']}: Y shape={y.shape}, U shape={u.shape}, V shape={v.shape}")
+                self._write_frame_to_ring_buffer(
+                    frame_seq=self.stats['frames_decoded'],
+                    timestamp_ns=pts_timestamp_ns,
+                    y=y,
+                    u=u,
+                    v=v,
+                    camera_id=self.config.camera_id,
+                    task_id=getattr(self.config, 'task_id', '')
+                )
 
-                    # 写入环形缓冲区（I420 格式）
-                    # ✅ 修改：使用真实PTS时间戳，而不是系统时间
-                    pts_timestamp_ns = self._get_pts_for_frame(self.stats['frames_decoded'])
-
-                    self._write_frame_to_ring_buffer(
-                        frame_seq=self.stats['frames_decoded'],
-                        timestamp_ns=pts_timestamp_ns,  # ✅ 修改：使用PTS时间戳
-                        y=y,
-                        u=u,
-                        v=v,
-                        camera_id=self.config.camera_id,
-                        task_id=getattr(self.config, 'task_id', '')  # 从配置获取task_id
-                    )
-
-                    # 更新统计
-                    self.stats['frames_decoded'] += 1
-                    self.stats['last_frame_time'] = time.time()
+                # 更新统计
+                self.stats['frames_decoded'] += 1
+                self.stats['last_frame_time'] = time.time()
 
             except Exception as e:
                 self.stats['decode_errors'] += 1
@@ -681,6 +714,7 @@ class VideoDecoder:
                 if self.config.reconnect:
                     time.sleep(self.config.reconnect_delay)
                     self._restart_ffmpeg()
+                    leftover = bytearray()
                 else:
                     break
 

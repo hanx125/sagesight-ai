@@ -1291,6 +1291,17 @@ async function openEditModal(taskId, event) {
         // 暂时保存到临时变量，等算法类别加载完成后再设置
         window.currentTaskTargetClasses = task.target_classes;
 
+        // 回填已选目标类别到输入框（保存提交用 + 显示用）
+        const targetClassesArr = Array.isArray(task.target_classes) ? task.target_classes : [];
+        const targetClassesInput = document.getElementById('targetClassesInput');
+        const targetClassesHidden = document.getElementById('targetClassesHidden');
+        if (targetClassesInput) {
+            targetClassesInput.value = targetClassesArr.join(', ');
+        }
+        if (targetClassesHidden) {
+            targetClassesHidden.value = targetClassesArr.join(',');
+        }
+
         // 设置已选通道（从device_channel_pool加载）
         selectedChannels = task.channels ? task.channels.map(ch => ch.id) : [];
         renderChannelPool();

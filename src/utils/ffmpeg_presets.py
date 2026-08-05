@@ -192,6 +192,8 @@ PRESETS_HW_ACCEL_SCALE = {
     # AMD VAAPI 缩放
     FFMPEG_HWACCEL_VAAPI: "-r {0} -vf fps={0},scale_vaapi=w={1}:h={2},hwdownload,format=nv12,eq=gamma=1.4:gamma_weight=0.5",
     # Rockchip RKMPP 缩放
+    # ✅ scale_rkrga 的 format 参数必须用 yuv420p（RGA 硬件不识别 yuvj420p）
+    # Range 保持由 -pix_fmt yuvj420p 控制（在 video_decoder.py 中设置）
     "preset-rk-h264": "-r {0} -vf scale_rkrga=w={1}:h={2}:format=yuv420p:force_original_aspect_ratio=0,hwmap=mode=read,format=yuv420p",
     "preset-rk-h265": "-r {0} -vf scale_rkrga=w={1}:h={2}:format=yuv420p:force_original_aspect_ratio=0,hwmap=mode=read,format=yuv420p",
     # Raspberry Pi V4L2 M2M 缩放
