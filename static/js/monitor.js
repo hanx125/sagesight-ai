@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SageSight AI - 监控墙页面 JavaScript
  */
 window.Monitor = (function() {
@@ -2049,7 +2049,7 @@ async function updateStreamStatus(containerId) {
             const buffered = flvPlayer.buffered;
             if (buffered.length > 0) {
                 statusElement.textContent = '状态: 播放中';
-                bitrateElement.textContent = `码率: -- kbps';
+                bitrateElement.textContent = `码率: -- kbps`;
             } else {
                 statusElement.textContent = '状态: 缓冲中';
                 bitrateElement.textContent = '码率: -- kbps';
