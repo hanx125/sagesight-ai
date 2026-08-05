@@ -865,6 +865,16 @@ function playWithWebRTC(containerId, camera) {
 
     console.log('WebRTC播放地址:', rtcUrl);
 
+    // 降级标志：避免重复降级
+    let hasFallenBack = false;
+    const fallbackToFlv = (reason) => {
+        if (hasFallenBack) return;
+        hasFallenBack = true;
+        console.warn(`WebRTC降级到WS-FLV: ${reason}`);
+        stopStream(containerId);
+        playWithJessibuca(containerId, camera);
+    };
+
     try {
         // 销毁已有实例
         if (webrtcPlayers[containerId]) {
@@ -889,34 +899,41 @@ function playWithWebRTC(containerId, camera) {
 
         webrtcPlayers[containerId] = player;
 
-        // 播放成功回调
+        // 播放成功回调：收到远端流后清除超时
         player.on(window.ZLMRTCClient.Events.WEBRTC_ON_REMOTE_STREAMS, (e) => {
             console.log('WebRTC播放成功', e.streams);
         });
 
-        // ICE协商出错
+        // ICE协商出错（不立即降级，等协商失败事件触发；仅警告）
         player.on(window.ZLMRTCClient.Events.WEBRTC_ICE_CANDIDATE_ERROR, (e) => {
             console.error('WebRTC ICE协商出错:', e);
         });
 
-        // offer/answer交换失败
+        // offer/answer交换失败：任何错误都降级到 WS-FLV
+        // 旧版 ZLM 返回 {code:-400, msg:'流不存在'}，新版返回 {code:-400, msg:'stream not found'}
         player.on(window.ZLMRTCClient.Events.WEBRTC_OFFER_ANWSER_EXCHANGE_FAILED, (e) => {
             console.error('WebRTC offer/answer交换失败:', e);
-            // 如果是流不存在，降级到Jessibuca
-            if (e.code === -400 && e.msg === '流不存在') {
-                console.warn('流不存在，降级到Jessibuca');
-                stopStream(containerId);
-                playWithJessibuca(containerId, camera);
-            }
+            fallbackToFlv(`SDP交换失败 code=${e.code} msg=${e.msg}`);
         });
 
-        // 连接状态变化
+        // 连接状态变化：失败/断开时降级
         player.on(window.ZLMRTCClient.Events.WEBRTC_ON_CONNECTION_STATE_CHANGE, (state) => {
             console.log('WebRTC连接状态:', state);
             if (state === 'failed' || state === 'disconnected') {
                 console.warn('WebRTC连接断开');
+                fallbackToFlv(`连接状态=${state}`);
             }
         });
+
+        // 超时保护：5秒内未收到远端流，认为WebRTC不可用，降级到 WS-FLV
+        setTimeout(() => {
+            if (!hasFallenBack && webrtcPlayers[containerId] === player) {
+                // 检查 video 元素是否已收到远端流
+                if (!videoElement.srcObject || videoElement.srcObject.getVideoTracks().length === 0) {
+                    fallbackToFlv('5秒内未收到远端流');
+                }
+            }
+        }, 5000);
 
     } catch (error) {
         console.error('WebRTC播放器创建失败:', error);
