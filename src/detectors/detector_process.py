@@ -141,6 +141,8 @@ class LocalObjectDetector:
             f"[LocalObjectDetector] 创建检测器后端: "
             f"backend={backend_kwargs['backend']}, "
             f"model_type={backend_kwargs['model_type']}, "
+            f"model_path={backend_kwargs['model_path']}, "
+            f"class_names数量={len(class_names)}, "
             f"input={self.input_width}x{self.input_height}"
         )
 

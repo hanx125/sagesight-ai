@@ -586,10 +586,12 @@ class MultiCameraTaskExecutor:
             detector_config_block = self.task_config.get('detector_config', {})
 
             # ========================================
-            # 步骤2：合并配置（优先级：任务配置 > 算法库配置 > 默认值）
+            # 步骤2：合并配置
+            # 算法库为单一真相源：model_path 和 labels_file 优先从算法库读取
+            # 避免任务表中的旧路径在算法库更新后失效（如标签文件被重新上传）
             # ========================================
             detector_config = {
-                'model_path': self.task_config.get('model_path') or algorithm_config.get('model_path', 'models/detection/yolov11n.onnx'),
+                'model_path': algorithm_config.get('model_path') or self.task_config.get('model_path') or 'models/detection/yolov11n.onnx',
                 'target_classes': self.task_config.get('target_classes', []),  # 空列表表示不限制检测类别
                 'conf_threshold': detector_config_block.get('conf_threshold', 0.25),
                 'iou_threshold': detector_config_block.get('iou_threshold', 0.35),
@@ -604,10 +606,10 @@ class MultiCameraTaskExecutor:
                 'rknn_target': detector_config_block.get('rknn_target', 'rk3588'),
                 'rknn_device_id': detector_config_block.get('rknn_device_id', ''),
                 'rknn_core_mask': detector_config_block.get('rknn_core_mask', 0),
-                'labels_file': self.task_config.get('labels_file') or detector_config_block.get('labels_file') or algorithm_config.get('labels_file', '')
+                'labels_file': algorithm_config.get('labels_file') or self.task_config.get('labels_file') or detector_config_block.get('labels_file', '')
             }
 
-            logger.debug(f"[MultiCameraExecutor-{self.task_id}] 标签文件: {detector_config['labels_file'] or '未配置（使用 COCO 默认类别）'}")
+            logger.info(f"[MultiCameraExecutor-{self.task_id}] 算法={self.algorithm}, 模型路径={detector_config['model_path']}, 标签文件={detector_config['labels_file'] or '未配置'}")
 
             # ========================================
             # 步骤3：从标签文件加载类别名称
@@ -619,7 +621,7 @@ class MultiCameraTaskExecutor:
                 try:
                     with open(labels_file, 'r', encoding='utf-8') as f:
                         class_names = [line.strip() for line in f if line.strip()]
-                    logger.debug(f"[MultiCameraExecutor-{self.task_id}] 从标签文件加载类别: {len(class_names)} 个类别")
+                    logger.info(f"[MultiCameraExecutor-{self.task_id}] 从标签文件加载类别: {len(class_names)} 个类别, 前5个: {class_names[:5]}")
                     if class_names:
                         logger.debug(f"[MultiCameraExecutor-{self.task_id}]   前5个类别: {class_names[:5]}")
                 except Exception as e:
