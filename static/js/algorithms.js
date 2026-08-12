@@ -717,7 +717,11 @@ async function saveAlgorithm() {
         try {
             const uploadFormData = new FormData();
             uploadFormData.append('file', selectedLabelsFile);
-            
+            // 传入 algorithm_id 确保文件名唯一，避免不同算法同名标签文件互相覆盖
+            if (algorithmId) {
+                uploadFormData.append('algorithm_id', algorithmId);
+            }
+
             const uploadResponse = await fetch('/api/labels/upload', {
                 method: 'POST',
                 body: uploadFormData

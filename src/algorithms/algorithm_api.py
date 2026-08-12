@@ -234,15 +234,21 @@ def upload_labels():
     if not file.filename.endswith('.txt'):
         return jsonify({'error': '标签文件必须是.txt格式'}), 400
     
-    # 获取算法ID（可选）
+    # 获取算法ID（可选，但强烈建议传入以确保文件名唯一）
     algorithm_id = request.form.get('algorithm_id')
-    
+
     # 标签文件目录
     labels_dir = 'models/labels'
     os.makedirs(labels_dir, exist_ok=True)
-    
-    # 生成文件名
-    filename = file.filename
+
+    # 生成唯一文件名，避免不同算法上传同名文件时互相覆盖
+    # 格式：algo_{algorithm_id}_{原始文件名}（编辑模式）或 algo_{时间戳}_{原始文件名}（新建模式）
+    original_name = file.filename
+    if algorithm_id:
+        filename = f"algo_{algorithm_id}_{original_name}"
+    else:
+        import time as _time
+        filename = f"algo_{int(_time.time())}_{original_name}"
     filepath = os.path.join(labels_dir, filename)
     
     try:
