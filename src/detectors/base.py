@@ -256,18 +256,22 @@ class BaseDetector:
         import cv2
         
         # 解析模型输出
-        # ONNX 导出的 YOLOv8n/YOLO11n 输出格式可能是：
-        # - (1, 84, 8400): 需要转置为 (8400, 84)
-        # - (1, 8400, 84): 直接取 output[0]
-        
-        # 根据形状自动处理
+        # YOLOv8/YOLO11 ONNX 导出格式（C = 类别数）：
+        #   - 原始格式：(1, C+4, N)，特征维在前，需转置
+        #   - 转置格式：(1, N, C+4)，锚点维在前，直接取 output[0]
+        # 注意：不能硬编码 84（COCO 80 类），单类别模型 C+4=5
+        expected_feature_dim = len(class_names) + 4
+
         if output.ndim == 3:
-            if output.shape[1] == 84 and output.shape[2] == 8400:
-                # 格式 (1, 84, 8400) → 转置为 (8400, 84)
+            if output.shape[1] == expected_feature_dim:
+                # 格式 (1, C+4, N) → 转置为 (N, C+4)
                 output = np.transpose(output[0], (1, 0))
-            else:
-                # 格式 (1, 8400, 84) → 直接取 output[0]
+            elif output.shape[2] == expected_feature_dim:
+                # 格式 (1, N, C+4) → 直接取 output[0]
                 output = output[0]
+            else:
+                # 形状不匹配，无法安全解析
+                return []
         elif output.ndim != 2:
             # 不支持的输出维度
             return []
