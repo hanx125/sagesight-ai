@@ -556,14 +556,24 @@ class PTZServiceManager:
     
     def remove_ptz_controller(self, camera_key: str):
         """
-        移除PTZ控制器
-        
+        移除PTZ控制器（含停止移动 + 释放 ONVIF 连接）
+
         Args:
             camera_key: 摄像机标识
         """
-        if camera_key in self._ptz_controllers:
-            del self._ptz_controllers[camera_key]
+        controller = self._ptz_controllers.pop(camera_key, None)
+        if controller is not None:
+            try:
+                controller.stop()
+            except Exception as e:
+                logger.debug(f"停止 PTZ 控制器失败({camera_key}): {e}")
             logger.info(f"PTZ controller removed: {camera_key}")
+
+    def remove_all_ptz_controllers(self):
+        """移除所有PTZ控制器（任务停止时调用，避免控制器累积）"""
+        for camera_key in list(self._ptz_controllers.keys()):
+            self.remove_ptz_controller(camera_key)
+        logger.info(f"已清理所有 PTZ 控制器")
 
 
 # ========================================

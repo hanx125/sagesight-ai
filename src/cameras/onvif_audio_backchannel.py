@@ -810,11 +810,11 @@ class ONVIFAudioBackchannel:
         try:
             # 创建RTP socket
             rtp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            
+
             # 构建RTP包
             # RTP Header格式：
             # V=2, P=0, X=0, CC=0, M=0, PT=8 (PCMA), SeqNum, Timestamp, SSRC
-            
+
             rtp_version = 2
             rtp_padding = 0
             rtp_extension = 0
@@ -824,7 +824,7 @@ class ONVIFAudioBackchannel:
             rtp_seq = 1
             rtp_timestamp = 0
             rtp_ssrc = 12345678
-            
+
             # 构建RTP头部（12字节）
             rtp_header = struct.pack(
                 '!BBHII',
@@ -834,10 +834,10 @@ class ONVIFAudioBackchannel:
                 rtp_timestamp,
                 rtp_ssrc
             )
-            
+
             # 组合RTP包
             rtp_packet = rtp_header + audio_data
-            
+
             # 发送到摄像机的RTP端口
             if self.audio_rtp_port:
                 rtp_socket.sendto(rtp_packet, (self.camera_ip, self.audio_rtp_port))
@@ -846,10 +846,16 @@ class ONVIFAudioBackchannel:
             else:
                 logger.error("[ERROR] 未知的摄像机RTP端口")
                 return False
-            
+
         except Exception as e:
             logger.error(f"[ERROR] 发送音频数据失败: {e}")
             return False
+        finally:
+            # ✅ 修复：确保每次创建的 socket 都被关闭，避免 FD 泄漏
+            try:
+                rtp_socket.close()
+            except Exception:
+                pass
     
     def teardown(self) -> bool:
         """

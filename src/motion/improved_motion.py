@@ -130,7 +130,8 @@ class ImprovedMotionDetector:
         import time
         motion_boxes = []
 
-        # ✅ 性能分析：每个步骤的耗时
+        # ✅ 性能分析：每个步骤的耗时（有界，防止内存泄漏）
+        _PERF_MAX_SAMPLES = 100  # 只保留最近100帧的耗时样本
         if not hasattr(self, '_perf_step_times'):
             self._perf_step_times = {
                 'cvtColor': [],
@@ -141,10 +142,17 @@ class ImprovedMotionDetector:
                 'threshold': [],
                 'dilate': [],
                 'findContours': [],
-                'contourProcess': [],  # 新增：轮廓处理（boundingRect等）
-                'accumulateWeighted': []  # 新增：背景更新（关键瓶颈）
+                'contourProcess': [],
+                'accumulateWeighted': []
             }
         self._perf_frame_count = getattr(self, '_perf_frame_count', 0) + 1
+
+        def _record_perf(key, elapsed_ms):
+            """记录耗时样本（有界，超过上限丢弃最旧的）"""
+            buf = self._perf_step_times[key]
+            buf.append(elapsed_ms)
+            if len(buf) > _PERF_MAX_SAMPLES:
+                del buf[:len(buf) - _PERF_MAX_SAMPLES]
 
         # 转换为灰度图（如果是 RGB）
         t1 = time.time()
@@ -152,7 +160,7 @@ class ImprovedMotionDetector:
             gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         else:
             gray = frame
-        self._perf_step_times['cvtColor'].append((time.time() - t1) * 1000)
+        _record_perf('cvtColor', (time.time() - t1) * 1000)
 
         # 降采样（关键优化：减少5倍计算量）
         t2 = time.time()
@@ -161,7 +169,7 @@ class ImprovedMotionDetector:
             dsize=(self.motion_frame_size[1], self.motion_frame_size[0]),
             interpolation=cv2.INTER_NEAREST
         )
-        self._perf_step_times['resize'].append((time.time() - t2) * 1000)
+        _record_perf('resize', (time.time() - t2) * 1000)
 
         # 对比度增强（适应光照变化）- 默认禁用以提升性能
         # ⚠️ 性能瓶颈：np.percentile耗时10ms+，建议仅在光照剧烈变化场景启用
@@ -187,7 +195,7 @@ class ImprovedMotionDetector:
                 resized_frame = resized_frame.astype(np.float32)
                 resized_frame = (resized_frame - avg_min) / (avg_max - avg_min) * 255
                 resized_frame = np.clip(resized_frame, 0, 255).astype(np.uint8)
-        self._perf_step_times['contrast'].append((time.time() - t3) * 1000)
+        _record_perf('contrast', (time.time() - t3) * 1000)
 
         # 应用掩码（如果有的话）
         if self.mask is not None:
@@ -198,7 +206,7 @@ class ImprovedMotionDetector:
         if self.blur_radius > 0:
             # ✅ 性能优化：使用OpenCV的GaussianBlur（比scipy快50%）
             resized_frame = cv2.GaussianBlur(resized_frame, (self.blur_radius * 2 + 1, self.blur_radius * 2 + 1), 0)
-        self._perf_step_times['blur'].append((time.time() - t4) * 1000)
+        _record_perf('blur', (time.time() - t4) * 1000)
 
         # 帧计数
         self.frame_counter += 1
@@ -212,7 +220,7 @@ class ImprovedMotionDetector:
         # 计算帧差（当前帧 - 背景帧）
         t5 = time.time()
         frameDelta = cv2.absdiff(resized_frame, cv2.convertScaleAbs(self.avg_frame))
-        self._perf_step_times['absdiff'].append((time.time() - t5) * 1000)
+        _record_perf('absdiff', (time.time() - t5) * 1000)
 
         # 阈值化
         t6 = time.time()
@@ -222,7 +230,7 @@ class ImprovedMotionDetector:
             255,
             cv2.THRESH_BINARY
         )[1]
-        self._perf_step_times['threshold'].append((time.time() - t6) * 1000)
+        _record_perf('threshold', (time.time() - t6) * 1000)
 
         # 膨胀（填充空洞）- 增强形态学操作，减少噪声轮廓
         t7 = time.time()
@@ -231,7 +239,7 @@ class ImprovedMotionDetector:
         thresh_dilated = cv2.dilate(thresh, kernel, iterations=2)
         # ✅ 额外添加开运算（先腐蚀后膨胀），去除小噪声点
         thresh_dilated = cv2.morphologyEx(thresh_dilated, cv2.MORPH_OPEN, kernel)
-        self._perf_step_times['dilate'].append((time.time() - t7) * 1000)
+        _record_perf('dilate', (time.time() - t7) * 1000)
 
         # 查找轮廓
         t8 = time.time()
@@ -242,7 +250,7 @@ class ImprovedMotionDetector:
         )
         contours = contours[0] if len(contours) == 2 else contours[1]
         findContours_time = (time.time() - t8) * 1000
-        self._perf_step_times['findContours'].append(findContours_time)
+        _record_perf('findContours', findContours_time)
 
        
 
@@ -277,7 +285,7 @@ class ImprovedMotionDetector:
                     center=(cx, cy),
                     intensity=intensity
                 ))
-        self._perf_step_times['contourProcess'].append((time.time() - t9) * 1000)
+        _record_perf('contourProcess', (time.time() - t9) * 1000)
 
         # 计算运动占比
         pct_motion = total_contour_area / (self.motion_frame_size[0] * self.motion_frame_size[1])
@@ -310,7 +318,7 @@ class ImprovedMotionDetector:
                 0.2 if self.calibrating else self.frame_alpha
             )
             self.motion_frame_count = 0
-        self._perf_step_times['accumulateWeighted'].append((time.time() - t10) * 1000)
+        _record_perf('accumulateWeighted', (time.time() - t10) * 1000)
 
         # 更新运动历史
         self.motion_history.extend(motion_boxes)

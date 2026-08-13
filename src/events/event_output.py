@@ -1169,7 +1169,8 @@ class EventOutput:
                 logger.debug(f"[EventOutput] 关闭 MQTT 输出器失败: {e}")
 
         # 关闭 WebSocket 输出器
-        if self.websocket_outputter:
+        # ✅ 修复：使用 getattr 避免未初始化属性导致 AttributeError，使后续清理被跳过
+        if getattr(self, 'websocket_outputter', None):
             try:
                 self.websocket_outputter.close()
             except Exception as e:
@@ -1181,9 +1182,15 @@ class EventOutput:
                 outputter.close()
             except Exception as e:
                 logger.debug(f"[EventOutput] 关闭图片输出器失败 ({outputter.__class__.__name__}): {e}")
-        
+
+        # ✅ 修复：关闭异步 I/O 线程池，避免线程泄漏
+        try:
+            self._io_executor.shutdown(wait=False)
+        except Exception as e:
+            logger.debug(f"[EventOutput] 关闭 IO 线程池失败: {e}")
+
         # 最后一次清理本地图片
         if self.auto_cleanup:
             self._cleanup_old_images()
-        
+
         logger.debug("[EventOutput] 已关闭所有输出器")

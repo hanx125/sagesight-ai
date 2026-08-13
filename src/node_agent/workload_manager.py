@@ -34,6 +34,13 @@ class WorkloadManager:
 
     def list_workloads(self) -> List[Dict[str, Any]]:
         with self._lock:
+            # ✅ 修复：清理已死进程的记录，避免 _workloads 字典持续增长
+            dead_keys = [k for k, rec in self._workloads.items()
+                         if rec.process.poll() is not None]
+            for k in dead_keys:
+                logger.info('清理已退出工作负载记录: %s', k)
+                self._workloads.pop(k, None)
+
             result = []
             for rec in self._workloads.values():
                 running = rec.process.poll() is None
