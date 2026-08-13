@@ -231,10 +231,10 @@ class TrackedObjectProcessor(mp.Process):
         self.frame_cache_inflight_locks: dict[str, threading.Lock] = {}
 
         # ✅ 初始化复用的 HTTP Session（避免每次 requests.post 创建新 PoolManager）
-        import requests as _requests
-        self._http_session = _requests.Session()
-        # 配置连接池：每主机最多10个连接，默认足够覆盖AI流推送
-        adapter = _requests.HTTPAdapter(
+        from requests import Session
+        from requests.adapters import HTTPAdapter
+        self._http_session = Session()
+        adapter = HTTPAdapter(
             pool_connections=10, pool_maxsize=20, max_retries=0
         )
         self._http_session.mount('http://', adapter)
