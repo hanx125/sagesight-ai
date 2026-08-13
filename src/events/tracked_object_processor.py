@@ -171,6 +171,10 @@ class TrackedObjectProcessor(mp.Process):
         # AI 流 per-camera 背压锁（防止线程池积压，丢旧帧）
         self.ai_stream_inflight_locks: dict[str, threading.Lock] = {}
 
+        # ✅ 复用 HTTP 连接池：AI 流每帧推送（6fps×N相机），不复用 Session 会导致
+        # urllib3 PoolManager/HTTPAdapter 反复创建销毁，内存碎片持续增长（~6MB/min）
+        self._http_session: Optional[Any] = None  # requests.Session，在 run() 中初始化
+
         # PTZ 自动跟踪:每个相机当前跟踪的目标 obj_id（None 表示无跟踪目标）
         self.ptz_tracked_object: dict[str, Optional[str]] = {}
 
@@ -225,6 +229,16 @@ class TrackedObjectProcessor(mp.Process):
             max_workers=4, thread_name_prefix="FrameCache"
         )
         self.frame_cache_inflight_locks: dict[str, threading.Lock] = {}
+
+        # ✅ 初始化复用的 HTTP Session（避免每次 requests.post 创建新 PoolManager）
+        import requests as _requests
+        self._http_session = _requests.Session()
+        # 配置连接池：每主机最多10个连接，默认足够覆盖AI流推送
+        adapter = _requests.HTTPAdapter(
+            pool_connections=10, pool_maxsize=20, max_retries=0
+        )
+        self._http_session.mount('http://', adapter)
+        self._http_session.mount('https://', adapter)
 
         # AI 视频流配置
         ai_stream_interval = self.ai_stream_config.get("interval", 10)
@@ -348,6 +362,13 @@ class TrackedObjectProcessor(mp.Process):
         # 关闭 AI 流推送线程池
         if self.ai_stream_executor:
             self.ai_stream_executor.shutdown(wait=False)
+
+        # ✅ 关闭 HTTP Session（释放连接池）
+        if self._http_session is not None:
+            try:
+                self._http_session.close()
+            except Exception:
+                pass
 
         self._cleanup(proc_logger)
         proc_logger.info(f"事件处理进程已退出 (共处理 {processed_count} 帧)")
@@ -1514,17 +1535,31 @@ class TrackedObjectProcessor(mp.Process):
 
             # 4. HTTP 推送（服务端已改为入队即返回，正常 < 50ms；
             #    timeout=2.0 仅防御偶发调度抖动/GIL 竞争，单帧超时可接受）
-            import requests
-            response = requests.post(
-                api_url,
-                json={
-                    "task_id": task_id,
-                    "camera_id": camera_id,
-                    "frame_seq": frame_seq,
-                    "frame_base64": frame_base64,
-                },
-                timeout=2.0,
-            )
+            # ✅ 使用复用的 Session（避免每次 requests.post 创建新 PoolManager 导致内存泄漏）
+            if self._http_session is not None:
+                response = self._http_session.post(
+                    api_url,
+                    json={
+                        "task_id": task_id,
+                        "camera_id": camera_id,
+                        "frame_seq": frame_seq,
+                        "frame_base64": frame_base64,
+                    },
+                    timeout=2.0,
+                )
+            else:
+                # fallback：Session 不可用时退回直接调用
+                import requests
+                response = requests.post(
+                    api_url,
+                    json={
+                        "task_id": task_id,
+                        "camera_id": camera_id,
+                        "frame_seq": frame_seq,
+                        "frame_base64": frame_base64,
+                    },
+                    timeout=2.0,
+                )
             if response.status_code == 200:
                 logger.debug(f"[{camera_id}] AI帧推送成功: frame_seq={frame_seq}")
             else:
