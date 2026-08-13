@@ -1792,8 +1792,11 @@ class TrackedObjectProcessor(mp.Process):
         """
         延迟生成 GIF（等待 post_seconds 后补充消失后帧再生成）
 
-        使用定时线程等待 post_seconds，然后从 FrameCache 补充 post 阶段帧，
-        合并 pre 阶段帧后提交 GIF 生成任务。
+        使用 threading.Timer 在独立线程中等待 post_seconds（不占用 gif_executor worker），
+        然后从 FrameCache 补充 post 阶段帧，合并后提交 GIF 生成任务。
+
+        ⚠️ 内存注意：pre_frames 在 Timer 等待期间被闭包持有。若事件极频繁且 post_seconds 较大，
+        可考虑先将 pre_frames 压缩为 JPEG 字节再持有（当前未做此优化，因事件频率一般可控）。
 
         Args:
             event_output: EventOutput 实例
@@ -1807,10 +1810,8 @@ class TrackedObjectProcessor(mp.Process):
             max_frames: 最大帧数
         """
         def _delayed_task():
+            """Timer 回调：补充 post 帧后提交 GIF 生成"""
             try:
-                # 等待 post_seconds 秒
-                time.sleep(post_seconds)
-
                 # 从 FrameCache 补充 post 阶段帧
                 frame_cache = self.frame_caches.get(camera_id)
                 post_frames = []
@@ -1837,8 +1838,11 @@ class TrackedObjectProcessor(mp.Process):
             except Exception as e:
                 logger.error(f"[{camera_id}] 延迟 GIF 生成失败: {e}")
 
-        # 在 GIF 线程池中启动延迟任务
-        self.gif_executor.submit(_delayed_task)
+        # ✅ 修复：用 threading.Timer 替代 gif_executor.submit(sleep)，
+        # 避免 sleep 占用 GIF worker 导致 pre_frames 引用在队列中积压（内存爆炸根因）
+        timer = threading.Timer(post_seconds, _delayed_task)
+        timer.daemon = True
+        timer.start()
 
     def _async_generate_gif(self, event_output, event_id: str,
                             frames: list, camera_id: str,
