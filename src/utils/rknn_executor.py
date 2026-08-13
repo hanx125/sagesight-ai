@@ -161,7 +161,17 @@ class RKNNExecutor:
             inputs = [inputs]
 
         # 执行推理（rknnlite 与 rknn 均提供 inference 方法）
+        # 注意：inputs 不能 copy，RKNNLite 要求传入连续内存的 ndarray
         result = self.rknn.inference(inputs=inputs)
+
+        # 强制 copy 输出张量，断开 RKNNLite C 层内存引用
+        # RKNNLite.inference() 返回的 ndarray 可能是 C 层 malloc 内存的 view，
+        # Python GC 回收 numpy 对象时 C 层缓冲区不一定被释放，长期运行导致
+        # 匿名内存（Anonymous）持续增长。copy 后返回纯 Python 堆数组，
+        # 原始 C 内存引用立即断开，可被 RKNNLite 内部复用或释放。
+        if result is not None:
+            result = [np.ascontiguousarray(t) for t in result]
+
         return result
 
     def release(self):
