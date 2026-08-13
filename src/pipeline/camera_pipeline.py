@@ -45,6 +45,21 @@ logger = logging.getLogger(__name__)
 MAX_REGIONS = 20
 
 
+def _malloc_trim():
+    """调用 glibc malloc_trim(0) 强制归还空闲堆内存给操作系统
+
+    CameraWorker 每帧分配/释放 YUV 平面、region 张量、检测结果等 numpy 数组，
+    glibc arena 会保留空闲 chunk 导致 RSS 缓慢增长。
+    malloc_trim(0) 让 glibc 将 free'd chunk 还给内核（munmap/sbrk）。
+    仅 Linux 有效，其他平台静默跳过。
+    """
+    try:
+        import ctypes
+        ctypes.CDLL('libc.so.6').malloc_trim(0)
+    except Exception:
+        pass
+
+
 def run_pipeline(
     camera_id: str,
     task_id: str,
@@ -355,6 +370,8 @@ def run_pipeline(
                     f"detections={avg(perf_stats['detections']):.1f}, "
                     f"tracked={avg(perf_stats['tracked']):.1f}"
                 )
+                # 归还 glibc 堆碎片，防止 CameraWorker 进程 RSS 缓慢增长
+                _malloc_trim()
 
         except KeyboardInterrupt:
             proc_logger.info("收到键盘中断,退出")

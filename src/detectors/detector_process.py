@@ -47,6 +47,45 @@ MAX_DETECTIONS = 20
 OUTPUT_FIELDS = 6
 
 
+def _malloc_trim():
+    """调用 glibc malloc_trim(0) 强制归还空闲堆内存给操作系统
+
+    检测器进程频繁分配/释放 numpy 数组（输入帧、推理张量），
+    glibc arena 会保留空闲 chunk 导致 RSS 持续增长。
+    malloc_trim(0) 让 glibc 将 free'd chunk 还给内核（munmap/sbrk）。
+    仅 Linux 有效，其他平台静默跳过。
+    """
+    try:
+        import ctypes
+        ctypes.CDLL('libc.so.6').malloc_trim(0)
+    except Exception:
+        pass
+
+
+# 系统内存使用率阈值（%）：超过此值时检测器进程主动退出，由 check_and_restart_dead 自动重启
+# 用于释放 RKNN C 层（rknn-toolkit-lite2）可能累积的内存，Python gc/malloc_trim 无法回收
+# 设 90%：给系统留 10% 余量，避免触发 OOM Killer
+_MEM_USAGE_LIMIT = 90
+
+
+def _get_process_rss_mb() -> float:
+    """获取当前进程 RSS 内存（MB），失败返回 0.0"""
+    try:
+        import psutil
+        return psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+    except Exception:
+        return 0.0
+
+
+def _get_system_mem_usage_percent() -> float:
+    """获取系统内存使用率（%），失败返回 0.0"""
+    try:
+        import psutil
+        return psutil.virtual_memory().percent
+    except Exception:
+        return 0.0
+
+
 def get_input_shm_name(model_type: str, camera_id: str, task_id: str = "") -> str:
     """输入共享内存名称
 
@@ -347,8 +386,24 @@ def run_detector(
             # 定期日志（每 100 次或每 60 秒）
             now = datetime.datetime.now()
             if detection_count % 100 == 0 or (now - last_log_time).total_seconds() > 60:
+                # 归还 glibc 堆碎片，防止检测器进程 RSS 缓慢增长
+                _malloc_trim()
+
+                # 系统内存监控：使用率超过阈值主动退出，由 check_and_restart_dead 自动重启
+                # 用于释放 RKNN C 层可能累积的内存（gc/malloc_trim 无法回收）
+                _mem_usage = _get_system_mem_usage_percent()
+                _rss = _get_process_rss_mb()
+                if _mem_usage > _MEM_USAGE_LIMIT:
+                    proc_logger.warning(
+                        f"系统内存使用率={_mem_usage:.1f}% 超过阈值 {_MEM_USAGE_LIMIT}%,"
+                        f"本进程RSS={_rss:.1f}MB,主动退出等待重启 "
+                        f"(已处理 {detection_count} 次检测, model_type={model_type})"
+                    )
+                    break
+
                 proc_logger.debug(
-                    f"已处理 {detection_count} 次检测 (model_type={model_type})"
+                    f"已处理 {detection_count} 次检测 (model_type={model_type}, "
+                    f"系统内存={_mem_usage:.1f}%, RSS={_rss:.1f}MB)"
                 )
                 last_log_time = now
 

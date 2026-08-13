@@ -65,6 +65,21 @@ def _get_process_rss_mb() -> float:
         return 0.0
 
 
+def _malloc_trim():
+    """调用 glibc malloc_trim(0) 强制归还空闲堆内存给操作系统
+
+    gc.collect() 只回收 Python 对象，不通知 glibc 归还碎片。
+    malloc_trim(0) 让 glibc 将 free'd chunk 还给内核（munmap/sbrk），
+    对频繁分配/释放 numpy 数组的进程效果显著。
+    仅 Linux 有效，其他平台静默跳过。
+    """
+    try:
+        import ctypes
+        ctypes.CDLL('libc.so.6').malloc_trim(0)
+    except Exception:
+        pass
+
+
 class TrackedObjectProcessor(mp.Process):
     """
     跟踪对象事件处理进程
@@ -336,6 +351,9 @@ class TrackedObjectProcessor(mp.Process):
                 # 长时间运行会导致 RSS 持续增长（即使对象已无引用）
                 if now - last_gc_time > _GC_INTERVAL:
                     collected = gc.collect()
+                    # gc 后调用 malloc_trim(0) 强制 glibc 归还碎片堆内存给内核
+                    # 仅回收 Python 对象不足以降低 RSS，glibc arena 会保留空闲 chunk
+                    _malloc_trim()
                     # 采集 gc 后的内存，便于对比回收效果
                     _post_gc_rss_mb = _get_process_rss_mb()
                     proc_logger.info(
