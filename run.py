@@ -13,7 +13,7 @@ import sys
 # 设为 2 显著降低内存碎片，对检测吞吐影响极小。
 # 必须在 import 任何 C 扩展（numpy/cv2）之前设置，且子进程会继承此环境变量。
 if sys.platform.startswith('linux'):
-    os.environ.setdefault('MALLOC_ARENA_MAX', '2')
+    os.environ.setdefault('MALLOC_ARENA_MAX', '4')
 
 # 抑制 eventlet hub 的连接异常打印（客户端断开/超时导致的 ConnectionAbortedError 等）
 try:
