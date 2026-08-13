@@ -7,6 +7,14 @@
 import os
 import sys
 
+# ✅ 内存优化：限制 glibc 内存池数量（仅 Linux 生效）
+# 默认值 8×CPU核心数会导致大量独立 arena，每个 arena 保留空闲块不归还系统，
+# 多进程架构下 RSS 会持续增长且无法回落。
+# 设为 2 显著降低内存碎片，对检测吞吐影响极小。
+# 必须在 import 任何 C 扩展（numpy/cv2）之前设置，且子进程会继承此环境变量。
+if sys.platform.startswith('linux'):
+    os.environ.setdefault('MALLOC_ARENA_MAX', '2')
+
 # 抑制 eventlet hub 的连接异常打印（客户端断开/超时导致的 ConnectionAbortedError 等）
 try:
     import eventlet.debug

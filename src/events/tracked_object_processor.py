@@ -38,6 +38,7 @@
 """
 
 import base64
+import gc
 import logging
 import multiprocessing as mp
 import os
@@ -49,10 +50,19 @@ from typing import Optional, Tuple
 
 import cv2
 import numpy as np
+import psutil
 
 from src.events.camera_state import CameraState
 
 logger = logging.getLogger(__name__)
+
+
+def _get_process_rss_mb() -> float:
+    """获取当前进程 RSS 内存（MB），失败返回 0.0"""
+    try:
+        return psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+    except Exception:
+        return 0.0
 
 
 class TrackedObjectProcessor(mp.Process):
@@ -233,6 +243,11 @@ class TrackedObjectProcessor(mp.Process):
         # 主循环
         processed_count = 0
         last_stats_time = time.time()
+        # 内存管理：定期 gc.collect() 回收循环引用和大对象
+        # Python 默认的分代回收不够及时，长时间运行后图像数组碎片会持续推高 RSS
+        last_gc_time = time.time()
+        # gc.collect() 执行间隔（秒）：每 5 分钟强制回收一次
+        _GC_INTERVAL = 300
         # 诊断计数器：统计跟踪对象与事件生命周期
         # tracked_sum：累计接收到的 tracked_objects 数量（跨所有帧所有相机）
         # start_triggered / end_triggered：start/end 回调触发次数
@@ -285,6 +300,8 @@ class TrackedObjectProcessor(mp.Process):
                     cache_rate = (
                         self._frame_cache_push_success / max(1, self._frame_cache_push_total) * 100
                     )
+                    # 内存监控：采集当前进程 RSS（Resident Set Size）
+                    _current_rss_mb = _get_process_rss_mb()
                     proc_logger.info(
                         f"已处理 {processed_count} 帧检测数据, "
                         f"活跃事件: {sum(len(v) for v in self.active_events.values())}, "
@@ -295,9 +312,24 @@ class TrackedObjectProcessor(mp.Process):
                         f"shm回读成功率: {shm_rate:.1f}% ({self._shm_read_success}/{self._shm_read_total}), "
                         f"帧未对齐率: {misalign_rate:.1f}% ({self._shm_read_misaligned}/{self._shm_read_success}), "
                         f"缓存写入成功率: {cache_rate:.1f}% ({self._frame_cache_push_success}/{self._frame_cache_push_total}), "
-                        f"队列最大积压: {self._max_queue_size}"
+                        f"队列最大积压: {self._max_queue_size}, "
+                        f"内存RSS: {_current_rss_mb:.1f}MB"
                     )
                     last_stats_time = now
+
+                # 定期 gc.collect()：回收循环引用和滞留的图像数组
+                # Python 默认分代回收对大对象（numpy 数组）不够及时，
+                # 长时间运行会导致 RSS 持续增长（即使对象已无引用）
+                if now - last_gc_time > _GC_INTERVAL:
+                    collected = gc.collect()
+                    # 采集 gc 后的内存，便于对比回收效果
+                    _post_gc_rss_mb = _get_process_rss_mb()
+                    proc_logger.info(
+                        f"gc.collect() 回收对象: {collected}, "
+                        f"内存RSS: {_post_gc_rss_mb:.1f}MB "
+                        f"(gc前: {_current_rss_mb:.1f}MB, 差值: {_current_rss_mb - _post_gc_rss_mb:+.1f}MB)"
+                    )
+                    last_gc_time = now
 
             except Exception as e:
                 proc_logger.error(f"处理检测数据失败: {e}", exc_info=True)
