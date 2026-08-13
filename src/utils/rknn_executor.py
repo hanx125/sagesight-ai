@@ -17,6 +17,8 @@ import ctypes
 import logging
 import os
 
+import numpy as np
+
 from src.utils.platform_utils import get_rk_lib_path, is_rk3588
 
 logger = logging.getLogger(__name__)
