@@ -556,34 +556,15 @@ def read_frame_from_shared_memory(
                     )
 
                 # ✅ 解析帧数据(I420 -> RGB)
-                # I420格式：Y平面 + U平面 + V平面（分离存储）
-                # 跳过头部，从 HEADER_SIZE 开始读取 YUV 数据
-                yuv_data = full_data[HEADER_SIZE:]
-                u_size = (height // 2) * (width // 2)
-                v_size = u_size
-
-                y_data = np.frombuffer(yuv_data[:y_size], dtype=np.uint8).copy()
-                u_data = np.frombuffer(yuv_data[y_size:y_size+u_size], dtype=np.uint8).copy()
-                v_data = np.frombuffer(yuv_data[y_size+u_size:y_size+u_size+v_size], dtype=np.uint8).copy()
-
-                # reshape
-                y = y_data.reshape((height, width))
-                u = u_data.reshape((height // 2, width // 2))
-                v = v_data.reshape((height // 2, width // 2))
-
-                # I420 -> RGB（使用OpenCV）
-                import cv2
-
-                # FFmpeg -pix_fmt yuv420p 输出标准 I420 (Y-U-V 顺序)，
-                # 直接拼接后用 COLOR_YUV2RGB_I420 转换即可，无需交换 U/V
-                i420_data = np.concatenate([
-                    y.flatten(),
-                    u.flatten(),
-                    v.flatten()
-                ])
-
-                # reshape为I420格式（height×1.5, width）
-                i420_frame = i420_data.reshape((height + height // 2, width))
+                # 优化：从 full_data 直接构建 I420 数组，避免多次 copy/flatten/concatenate
+                # 原实现：6+ 次临时分配（y/u/v copy + flatten×3 + concatenate ≈ 2.4MB 碎片/帧）
+                # 新实现：1 次 frombuffer（只读视图）+ 1 次 copy（可写）= 仅 1 次分配
+                yuv_total = y_size + u_size + v_size  # I420 总字节数
+                i420_array = np.frombuffer(
+                    full_data, dtype=np.uint8,
+                    offset=HEADER_SIZE, count=yuv_total
+                ).copy()  # copy 使数组可写（cv2.cvtColor 需要）
+                i420_frame = i420_array.reshape((height + height // 2, width))
 
                 # I420 -> RGB
                 rgb_frame = cv2.cvtColor(i420_frame, cv2.COLOR_YUV2RGB_I420)
