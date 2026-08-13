@@ -567,6 +567,7 @@ def read_frame_from_shared_memory(
                 i420_frame = i420_array.reshape((height + height // 2, width))
 
                 # I420 -> RGB
+                import cv2
                 rgb_frame = cv2.cvtColor(i420_frame, cv2.COLOR_YUV2RGB_I420)
 
         except Exception as e:
