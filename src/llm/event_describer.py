@@ -61,6 +61,12 @@ class EventDescriber:
         Returns:
             事件描述文本，失败返回 None
         """
+        # 全局总开关：关闭时不调用大模型（运行时立即生效，防止 token 费用）
+        from src.system.system_manager import get_system_manager
+        if not get_system_manager().is_llm_enabled():
+            logger.debug("[EventDescriber] 大模型功能总开关已关闭，跳过描述生成")
+            return None
+
         prompt = self._build_prompt(event_info)
 
         try:

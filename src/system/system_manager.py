@@ -99,10 +99,9 @@ class LLMConfig:
     model: str = ''                     # 模型名（如 gpt-4o, claude-3-5-sonnet-20241022）
     temperature: float = 0.3            # 温度参数
     max_tokens: int = 500               # 最大输出 token
+    support_images: bool = True         # 模型是否支持图片输入（多模态），关闭时降级为纯文本
     enable_description: bool = True     # 启用事件描述
-    enable_dedup: bool = True           # 启用语义去重
-    dedup_window_seconds: int = 300     # 去重时间窗口（秒）
-    dedup_iou_threshold: float = 0.3    # 规则层去重 IoU 阈值
+    enable_dedup: bool = True           # 启用语义去重（大模型对比快照；规则去重属事件管理）
     is_default: bool = False            # 是否默认
     enabled: bool = True                # 是否启用
     description: str = ''               # 描述
@@ -130,10 +129,9 @@ class LLMConfig:
             'model': self.model,
             'temperature': self.temperature,
             'max_tokens': self.max_tokens,
+            'support_images': self.support_images,
             'enable_description': self.enable_description,
             'enable_dedup': self.enable_dedup,
-            'dedup_window_seconds': self.dedup_window_seconds,
-            'dedup_iou_threshold': self.dedup_iou_threshold,
             'is_default': self.is_default,
             'enabled': self.enabled,
             'description': self.description,
@@ -301,12 +299,33 @@ class SystemManager:
                 enabled INTEGER DEFAULT 1,
                 description TEXT DEFAULT '',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                support_images INTEGER DEFAULT 1
+            )
+        ''')
+        # 旧库迁移：已有 llm_config 表时补充缺失列（追加在末尾，保持列顺序兼容）
+        llm_columns = [col[1] for col in cursor.execute('PRAGMA table_info(llm_config)').fetchall()]
+        if 'support_images' not in llm_columns:
+            cursor.execute('ALTER TABLE llm_config ADD COLUMN support_images INTEGER DEFAULT 1')
+            logger.info("llm_config 表已迁移：新增 support_images 列")
+        conn.commit()
+        logger.info("大模型 API 配置表已初始化")
+
+        # 创建系统全局设置表（key-value，单一真相源）
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS system_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT DEFAULT '',
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        # 大模型总开关默认开启（INSERT OR IGNORE 保留已有设置）
+        cursor.execute(
+            "INSERT OR IGNORE INTO system_settings (key, value) VALUES ('llm_enabled', '1')"
+        )
         conn.commit()
         conn.close()
-        logger.info("大模型 API 配置表已初始化")
+        logger.info("系统全局设置表已初始化")
 
     # ========================================
     # 流媒体服务器 CRUD
@@ -536,15 +555,15 @@ class SystemManager:
             INSERT INTO llm_config (
                 name, provider, base_url, api_key, model,
                 temperature, max_tokens,
+                support_images,
                 enable_description, enable_dedup,
-                dedup_window_seconds, dedup_iou_threshold,
                 is_default, enabled, description
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             config.name, config.provider, config.base_url, config.api_key, config.model,
             config.temperature, config.max_tokens,
+            int(config.support_images),
             int(config.enable_description), int(config.enable_dedup),
-            config.dedup_window_seconds, config.dedup_iou_threshold,
             int(config.is_default), int(config.enabled), config.description
         ))
         conn.commit()
@@ -566,16 +585,16 @@ class SystemManager:
                 UPDATE llm_config SET
                     name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
                     temperature = ?, max_tokens = ?,
+                    support_images = ?,
                     enable_description = ?, enable_dedup = ?,
-                    dedup_window_seconds = ?, dedup_iou_threshold = ?,
                     is_default = ?, enabled = ?, description = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             ''', (
                 config.name, config.provider, config.base_url, config.api_key, config.model,
                 config.temperature, config.max_tokens,
+                int(config.support_images),
                 int(config.enable_description), int(config.enable_dedup),
-                config.dedup_window_seconds, config.dedup_iou_threshold,
                 int(config.is_default), int(config.enabled), config.description,
                 config_id
             ))
@@ -584,16 +603,16 @@ class SystemManager:
                 UPDATE llm_config SET
                     name = ?, provider = ?, base_url = ?, model = ?,
                     temperature = ?, max_tokens = ?,
+                    support_images = ?,
                     enable_description = ?, enable_dedup = ?,
-                    dedup_window_seconds = ?, dedup_iou_threshold = ?,
                     is_default = ?, enabled = ?, description = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             ''', (
                 config.name, config.provider, config.base_url, config.model,
                 config.temperature, config.max_tokens,
+                int(config.support_images),
                 int(config.enable_description), int(config.enable_dedup),
-                config.dedup_window_seconds, config.dedup_iou_threshold,
                 int(config.is_default), int(config.enabled), config.description,
                 config_id
             ))
@@ -624,6 +643,59 @@ class SystemManager:
         conn.close()
         return success
 
+    # ========================================
+    # 系统全局设置（key-value）
+    # ========================================
+
+    def get_setting(self, key: str, default: str = '') -> str:
+        """读取系统全局设置
+
+        Args:
+            key: 设置键名
+            default: 不存在时的默认值
+
+        Returns:
+            设置值（字符串）
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT value FROM system_settings WHERE key = ?', (key,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else default
+
+    def set_setting(self, key: str, value: str) -> bool:
+        """写入系统全局设置（存在则更新）
+
+        Args:
+            key: 设置键名
+            value: 设置值
+
+        Returns:
+            是否写入成功
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            '''INSERT INTO system_settings (key, value, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(key) DO UPDATE SET
+                   value = excluded.value, updated_at = CURRENT_TIMESTAMP''',
+            (key, value)
+        )
+        conn.commit()
+        success = cursor.rowcount > 0
+        conn.close()
+        return success
+
+    def is_llm_enabled(self) -> bool:
+        """大模型功能总开关：关闭时整个系统不调用大模型（防止 token 费用）"""
+        return self.get_setting('llm_enabled', '1') in ('1', 'true', 'True')
+
+    def set_llm_enabled(self, enabled: bool) -> bool:
+        """设置大模型功能总开关"""
+        return self.set_setting('llm_enabled', '1' if enabled else '0')
+
     def _row_to_llm_config(self, row: tuple) -> LLMConfig:
         """将数据库行转换为 LLMConfig 对象"""
         return LLMConfig(
@@ -637,13 +709,12 @@ class SystemManager:
             max_tokens=row[7] if row[7] is not None else 500,
             enable_description=bool(row[8]) if row[8] is not None else True,
             enable_dedup=bool(row[9]) if row[9] is not None else True,
-            dedup_window_seconds=row[10] if row[10] is not None else 300,
-            dedup_iou_threshold=row[11] if row[11] is not None else 0.3,
             is_default=bool(row[12]),
             enabled=bool(row[13]) if row[13] is not None else True,
             description=row[14] or '',
             created_at=row[15],
-            updated_at=row[16]
+            updated_at=row[16],
+            support_images=bool(row[17]) if row[17] is not None else True
         )
 
 

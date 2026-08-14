@@ -65,6 +65,9 @@ class LLMClient:
                         system_prompt: str = "") -> str:
         """单图多模态对话
 
+        当配置的模型不支持图片输入（support_images=false）时，
+        自动降级为纯文本请求（不带图片），避免部分纯文本模型返回 400。
+
         Args:
             image_bytes: JPEG/PNG 图片字节数据
             prompt: 用户提示词
@@ -73,6 +76,9 @@ class LLMClient:
         Returns:
             模型回复文本
         """
+        if not self.config.support_images:
+            logger.info("[LLMClient] 模型不支持图片输入(support_images=false)，降级为纯文本请求")
+            return self.chat_text(prompt, system_prompt)
         if self.provider == 'anthropic':
             return self._chat_anthropic_image(image_bytes, prompt, system_prompt)
         return self._chat_openai_image(image_bytes, prompt, system_prompt)
@@ -80,6 +86,9 @@ class LLMClient:
     def chat_with_images(self, images: List[bytes], prompt: str,
                          system_prompt: str = "") -> str:
         """多图多模态对话（用于语义去重对比）
+
+        当配置的模型不支持图片输入（support_images=false）时，
+        自动降级为纯文本请求（不带图片），避免部分纯文本模型返回 400。
 
         Args:
             images: 图片字节数据列表
@@ -89,6 +98,9 @@ class LLMClient:
         Returns:
             模型回复文本
         """
+        if not self.config.support_images:
+            logger.info("[LLMClient] 模型不支持图片输入(support_images=false)，降级为纯文本请求")
+            return self.chat_text(prompt, system_prompt)
         if self.provider == 'anthropic':
             return self._chat_anthropic_images(images, prompt, system_prompt)
         return self._chat_openai_images(images, prompt, system_prompt)

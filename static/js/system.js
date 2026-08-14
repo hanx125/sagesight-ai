@@ -1615,9 +1615,40 @@ async function loadLLMConfigs() {
         
         renderLLMConfigsList();
         
+        // 加载大模型功能总开关状态
+        try {
+            const swResp = await fetch('/api/system/llm-enabled');
+            const swData = await swResp.json();
+            const sw = document.getElementById('llmEnabledSwitch');
+            if (sw) sw.checked = swData.llm_enabled;
+        } catch (e) {
+            console.error('加载大模型总开关状态失败:', e);
+        }
+        
     } catch (error) {
         console.error('加载大模型配置失败:', error);
         showNotification('加载大模型配置失败', 'error');
+    }
+}
+
+async function toggleLLMEnabled(enabled) {
+    const sw = document.getElementById('llmEnabledSwitch');
+    try {
+        const response = await fetch('/api/system/llm-enabled', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ llm_enabled: enabled })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || '更新失败');
+        }
+        showNotification(data.message, 'success');
+    } catch (error) {
+        console.error('更新大模型总开关失败:', error);
+        showNotification('更新大模型总开关失败', 'error');
+        // 回滚开关状态
+        if (sw) sw.checked = !enabled;
     }
 }
 
@@ -1649,7 +1680,7 @@ function renderLLMConfigsList() {
     container.innerHTML = llmConfigs.map(config => {
         const enabledBadges = [];
         if (config.enable_description) enabledBadges.push('<span class="server-type">事件描述</span>');
-        if (config.enable_dedup) enabledBadges.push('<span class="server-type">事件去重</span>');
+        if (config.enable_dedup) enabledBadges.push('<span class="server-type">语义去重</span>');
         
         return `
             <div class="server-card ${config.is_default ? 'default' : ''} ${!config.enabled ? 'disabled' : ''}">
@@ -1685,14 +1716,6 @@ function renderLLMConfigsList() {
                     <div class="server-detail-row">
                         <span class="detail-label">最大 Tokens:</span>
                         <span class="detail-value">${config.max_tokens}</span>
-                    </div>
-                    <div class="server-detail-row">
-                        <span class="detail-label">去重窗口:</span>
-                        <span class="detail-value">${config.dedup_window_seconds} 秒</span>
-                    </div>
-                    <div class="server-detail-row">
-                        <span class="detail-label">IoU 阈值:</span>
-                        <span class="detail-value">${config.dedup_iou_threshold}</span>
                     </div>
                     ${config.description ? `
                     <div class="server-detail-row">
@@ -1748,8 +1771,6 @@ function openCreateLLMModal() {
     document.getElementById('llmMaxTokens').value = '';
     document.getElementById('llmEnableDescription').checked = true;
     document.getElementById('llmEnableDedup').checked = true;
-    document.getElementById('llmDedupWindow').value = '';
-    document.getElementById('llmDedupIou').value = '';
     document.getElementById('llmEnabled').checked = true;
     document.getElementById('llmDefault').checked = false;
     document.getElementById('llmModal').classList.add('show');
@@ -1771,8 +1792,7 @@ function openEditLLMModal(configId) {
     document.getElementById('llmMaxTokens').value = config.max_tokens;
     document.getElementById('llmEnableDescription').checked = config.enable_description;
     document.getElementById('llmEnableDedup').checked = config.enable_dedup;
-    document.getElementById('llmDedupWindow').value = config.dedup_window_seconds;
-    document.getElementById('llmDedupIou').value = config.dedup_iou_threshold;
+    document.getElementById('llmSupportImages').checked = config.support_images !== false;
     document.getElementById('llmDescription').value = config.description || '';
     document.getElementById('llmEnabled').checked = config.enabled;
     document.getElementById('llmDefault').checked = config.is_default;
@@ -1807,8 +1827,7 @@ async function saveLLMConfig() {
         max_tokens: parseInt(document.getElementById('llmMaxTokens').value) || 500,
         enable_description: document.getElementById('llmEnableDescription').checked,
         enable_dedup: document.getElementById('llmEnableDedup').checked,
-        dedup_window_seconds: parseInt(document.getElementById('llmDedupWindow').value) || 300,
-        dedup_iou_threshold: parseFloat(document.getElementById('llmDedupIou').value) || 0.3,
+        support_images: document.getElementById('llmSupportImages').checked,
         description: document.getElementById('llmDescription').value,
         enabled: document.getElementById('llmEnabled').checked,
         is_default: document.getElementById('llmDefault').checked
@@ -2005,7 +2024,8 @@ return {
     closeDeleteLLMModal: closeDeleteLLMModal,
     confirmDeleteLLMConfig: confirmDeleteLLMConfig,
     setDefaultLLMConfig: setDefaultLLMConfig,
-    testLLMConfig: testLLMConfig
+    testLLMConfig: testLLMConfig,
+    toggleLLMEnabled: toggleLLMEnabled
 };
 
 })();

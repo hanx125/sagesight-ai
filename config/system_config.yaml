@@ -73,6 +73,11 @@ events_cleanup:
   startup_delay_seconds: 120
   # 每批清理的事件数：分批删除 + 批间休眠，缩短单次写锁占用时间
   batch_size: 200
+# 事件规则去重（事件管理功能，独立于大模型，不消耗 token）
+event_dedup:
+  enabled: true
+  window_seconds: 300
+  iou_threshold: 0.3
 node_management:
   enabled: false
   node_id: ''

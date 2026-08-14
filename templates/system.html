@@ -597,6 +597,20 @@
                     </button>
                 </div>
 
+                <!-- 大模型功能总开关 -->
+                <div class="config-section">
+                    <div class="llm-master-switch">
+                        <div class="switch-text">
+                            <h4>大模型功能总开关</h4>
+                            <p>关闭后整个系统不再调用大模型（事件描述/语义去重均不执行），防止产生不必要的 token 费用；运行时切换立即生效</p>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="llmEnabledSwitch" checked onchange="System.toggleLLMEnabled(this.checked)">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+
                 <!-- 大模型配置列表 -->
                 <div class="servers-list" id="llmConfigsList">
                     <div class="loading-placeholder">加载中...</div>
@@ -785,22 +799,15 @@
                         </label>
                         <label class="checkbox-label">
                             <input type="checkbox" id="llmEnableDedup" checked>
-                            <span>启用事件去重</span>
+                            <span>启用语义去重（大模型）</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="llmSupportImages" checked>
+                            <span>支持图片输入</span>
                         </label>
                     </div>
+                    <p class="form-hint">语义去重依赖模型看图对比快照，需模型支持图片输入；规则去重（时间窗口+同类别+IoU 重叠）属于事件管理功能，在配置文件 event_dedup 段配置，不受大模型开关影响</p>
                 </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="llmDedupWindow">去重窗口（秒）</label>
-                        <input type="number" id="llmDedupWindow" min="10" placeholder="300">
-                    </div>
-                    <div class="form-group">
-                        <label for="llmDedupIou">去重 IoU 阈值</label>
-                        <input type="number" id="llmDedupIou" step="0.05" min="0" max="1" placeholder="0.3">
-                    </div>
-                </div>
-                <p class="form-hint" style="margin-top:-10px; margin-bottom:12px;">去重窗口：同相机同类别在窗口内检测到重叠目标则判为重复；IoU 阈值：目标框重叠度超过该值视为同一目标。</p>
 
                 <div class="form-group">
                     <label for="llmDescription">描述</label>
@@ -940,10 +947,58 @@
         from { opacity: 0; transform: translate(-50%, -8px); }
         to { opacity: 1; transform: translate(-50%, 0); }
     }
+    /* 大模型功能总开关 */
+    .llm-master-switch {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+    .llm-master-switch .switch-text h4 {
+        margin: 0 0 4px 0;
+        font-size: 15px;
+        color: var(--text-primary, #222);
+    }
+    .llm-master-switch .switch-text p {
+        margin: 0;
+        font-size: 12px;
+        color: var(--text-secondary, #888);
+    }
+    .switch {
+        position: relative;
+        display: inline-block;
+        width: 48px;
+        height: 26px;
+        flex-shrink: 0;
+    }
+    .switch input { display: none; }
+    .switch .slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: #ccc;
+        border-radius: 26px;
+        transition: 0.25s;
+    }
+    .switch .slider::before {
+        content: '';
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        left: 3px;
+        bottom: 3px;
+        background: #fff;
+        border-radius: 50%;
+        transition: 0.25s;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    }
+    .switch input:checked + .slider { background: #1677ff; }
+    .switch input:checked + .slider::before { transform: translateX(22px); }
 </style>
 {% endblock %}
 
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/chart.umd.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/system.js') }}?v=20260814"></script>
+<script src="{{ url_for('static', filename='js/system.js') }}?v=20260814d"></script>
 {% endblock %}

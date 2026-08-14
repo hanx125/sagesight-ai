@@ -176,6 +176,27 @@ def get_events_cleanup_config() -> Dict[str, Any]:
     }
 
 
+def get_event_dedup_config() -> Dict[str, Any]:
+    """获取事件规则去重配置（事件管理功能，独立于大模型，不消耗 token）
+
+    配置来源为 system_config.yaml 的 event_dedup 段（单一真相源）。
+    归一化字段，确保缺失时回退默认值。
+
+    Returns:
+        事件规则去重配置字典，包含：
+        - enabled: 是否启用规则去重（默认 True）
+        - window_seconds: 去重时间窗口秒数（默认 300）
+        - iou_threshold: 目标框 IoU 重叠阈值（默认 0.3）
+    """
+    config = load_system_config()
+    dedup_cfg = config.get('event_dedup', {})
+    return {
+        'enabled': dedup_cfg.get('enabled', True),
+        'window_seconds': dedup_cfg.get('window_seconds', 300),
+        'iou_threshold': dedup_cfg.get('iou_threshold', 0.3),
+    }
+
+
 def get_node_management_config() -> Dict[str, Any]:
     """获取节点管理配置（向边缘平台注册/上报心跳的客户端配置）
 

@@ -259,10 +259,9 @@ def create_llm_config():
         model=data['model'],
         temperature=float(data.get('temperature', 0.3)),
         max_tokens=int(data.get('max_tokens', 500)),
+        support_images=bool(data.get('support_images', True)),
         enable_description=bool(data.get('enable_description', True)),
         enable_dedup=bool(data.get('enable_dedup', True)),
-        dedup_window_seconds=int(data.get('dedup_window_seconds', 300)),
-        dedup_iou_threshold=float(data.get('dedup_iou_threshold', 0.3)),
         is_default=bool(data.get('is_default', False)),
         enabled=bool(data.get('enabled', True)),
         description=data.get('description', '')
@@ -305,10 +304,9 @@ def update_llm_config(config_id: int):
         model=data.get('model', existing.model),
         temperature=float(data.get('temperature', existing.temperature)),
         max_tokens=int(data.get('max_tokens', existing.max_tokens)),
+        support_images=bool(data.get('support_images', existing.support_images)),
         enable_description=bool(data.get('enable_description', existing.enable_description)),
         enable_dedup=bool(data.get('enable_dedup', existing.enable_dedup)),
-        dedup_window_seconds=int(data.get('dedup_window_seconds', existing.dedup_window_seconds)),
-        dedup_iou_threshold=float(data.get('dedup_iou_threshold', existing.dedup_iou_threshold)),
         is_default=bool(data.get('is_default', existing.is_default)),
         enabled=bool(data.get('enabled', existing.enabled)),
         description=data.get('description', existing.description)
@@ -373,6 +371,32 @@ def test_llm_config(config_id: int):
         return jsonify({'message': '连接成功', 'reply': reply})
     except Exception as e:
         return jsonify({'error': f'连接失败: {e}'}), 500
+
+
+@system_bp.route('/llm-enabled', methods=['GET'])
+def get_llm_enabled():
+    """获取大模型功能总开关状态
+
+    总开关关闭时，整个系统不再调用大模型（事件描述/语义去重均不执行），
+    避免产生不必要的 token 费用。
+    """
+    manager = get_system_manager()
+    return jsonify({'llm_enabled': manager.is_llm_enabled()})
+
+
+@system_bp.route('/llm-enabled', methods=['PUT'])
+def set_llm_enabled():
+    """设置大模型功能总开关"""
+    data = request.get_json() or {}
+    manager = get_system_manager()
+    enabled = bool(data.get('llm_enabled', True))
+    manager.set_llm_enabled(enabled)
+    if _socketio:
+        _socketio.emit('llm_enabled_updated', {'llm_enabled': enabled})
+    return jsonify({
+        'message': '大模型功能已' + ('启用' if enabled else '关闭'),
+        'llm_enabled': enabled
+    })
 
 
 # ========================================
