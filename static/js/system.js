@@ -12,6 +12,9 @@ var currentServerId = null;
 var deleteServerId = null;
 var users = [];
 var deleteUserUserId = null;
+var llmConfigs = [];
+var currentLLMId = null;
+var deleteLLMId = null;
 
 // 资源监控图表（CPU/内存/磁盘/加速器4条波浪线）
 var resourceChart = null;
@@ -33,6 +36,7 @@ var resourceHistory = {
 SageSight.registerPage('/system', function() {
     loadUsers();
     loadStreamingServers();
+    loadLLMConfigs();
     initWebSocket();
 });
 
@@ -55,6 +59,18 @@ function initWebSocket() {
         
         socket.on('streaming_server_deleted', function(data) {
             loadStreamingServers();
+        });
+        
+        socket.on('llm_config_created', function(data) {
+            loadLLMConfigs();
+        });
+        
+        socket.on('llm_config_updated', function(data) {
+            loadLLMConfigs();
+        });
+        
+        socket.on('llm_config_deleted', function(data) {
+            loadLLMConfigs();
         });
     }
 }
@@ -1148,6 +1164,10 @@ switchTab = function(tabId) {
     if (tabId === 'database') {
         loadDatabaseInfo();
     }
+    // 切换到大模型配置页时加载配置列表
+    if (tabId === 'llm') {
+        loadLLMConfigs();
+    }
 };
 
 // ========================================
@@ -1585,6 +1605,331 @@ async function deleteBackup(filename) {
 }
 
 // ========================================
+// 大模型配置管理（OpenAI/Anthropic 接入 + 事件描述/去重）
+// ========================================
+
+async function loadLLMConfigs() {
+    try {
+        const response = await fetch('/api/system/llm-configs');
+        llmConfigs = await response.json();
+        
+        renderLLMConfigsList();
+        
+    } catch (error) {
+        console.error('加载大模型配置失败:', error);
+        showNotification('加载大模型配置失败', 'error');
+    }
+}
+
+function getProviderLabel(provider) {
+    const labels = {
+        'openai': 'OpenAI 兼容',
+        'anthropic': 'Anthropic'
+    };
+    return labels[provider] || provider;
+}
+
+function renderLLMConfigsList() {
+    const container = document.getElementById('llmConfigsList');
+    if (!container) return;
+    
+    if (llmConfigs.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                </svg>
+                <p>暂无大模型配置</p>
+                <button class="btn btn-primary" onclick="System.openCreateLLMModal()">添加配置</button>
+            </div>
+        `;
+        return;
+    }
+    
+    container.innerHTML = llmConfigs.map(config => {
+        const enabledBadges = [];
+        if (config.enable_description) enabledBadges.push('<span class="server-type">事件描述</span>');
+        if (config.enable_dedup) enabledBadges.push('<span class="server-type">事件去重</span>');
+        
+        return `
+            <div class="server-card ${config.is_default ? 'default' : ''} ${!config.enabled ? 'disabled' : ''}">
+                <div class="server-card-header">
+                    <div class="server-icon">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                        </svg>
+                    </div>
+                    <div class="server-info">
+                        <h4 class="server-name">${escapeHtml(config.name)}</h4>
+                        <span class="server-type">${getProviderLabel(config.provider)} · ${escapeHtml(config.model)}</span>
+                    </div>
+                    <div class="server-info" style="margin-left: 12px;">
+                        ${enabledBadges.join('')}
+                    </div>
+                    ${config.is_default ? '<span class="default-badge">默认</span>' : ''}
+                </div>
+                
+                <div class="server-card-body">
+                    <div class="server-detail-row">
+                        <span class="detail-label">API 地址:</span>
+                        <span class="detail-value">${escapeHtml(config.base_url || (config.provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'))}</span>
+                    </div>
+                    <div class="server-detail-row">
+                        <span class="detail-label">API 密钥:</span>
+                        <span class="detail-value">${escapeHtml(config.api_key || '未设置')}</span>
+                    </div>
+                    <div class="server-detail-row">
+                        <span class="detail-label">温度:</span>
+                        <span class="detail-value">${config.temperature}</span>
+                    </div>
+                    <div class="server-detail-row">
+                        <span class="detail-label">最大 Tokens:</span>
+                        <span class="detail-value">${config.max_tokens}</span>
+                    </div>
+                    <div class="server-detail-row">
+                        <span class="detail-label">去重窗口:</span>
+                        <span class="detail-value">${config.dedup_window_seconds} 秒</span>
+                    </div>
+                    <div class="server-detail-row">
+                        <span class="detail-label">IoU 阈值:</span>
+                        <span class="detail-value">${config.dedup_iou_threshold}</span>
+                    </div>
+                    ${config.description ? `
+                    <div class="server-detail-row">
+                        <span class="detail-label">描述:</span>
+                        <span class="detail-value">${escapeHtml(config.description)}</span>
+                    </div>
+                    ` : ''}
+                </div>
+                
+                <div class="server-card-footer">
+                    <div class="server-actions">
+                        <button class="server-btn" onclick="System.testLLMConfig(${config.id})">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z"/>
+                            </svg>
+                            测试
+                        </button>
+                        ${!config.is_default ? `
+                        <button class="server-btn" onclick="System.setDefaultLLMConfig(${config.id})">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>
+                            </svg>
+                            设为默认
+                        </button>
+                        ` : ''}
+                        <button class="server-btn" onclick="System.openEditLLMModal(${config.id})">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+                            </svg>
+                            编辑
+                        </button>
+                        ${!config.is_default ? `
+                        <button class="server-btn danger" onclick="System.openDeleteLLMModal(${config.id}, '${escapeHtml(config.name)}')">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                            </svg>
+                            删除
+                        </button>
+                        ` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function openCreateLLMModal() {
+    currentLLMId = null;
+    document.getElementById('llmModalTitle').textContent = '添加大模型配置';
+    document.getElementById('llmForm').reset();
+    document.getElementById('llmProvider').value = 'openai';
+    document.getElementById('llmTemperature').value = '';
+    document.getElementById('llmMaxTokens').value = '';
+    document.getElementById('llmEnableDescription').checked = true;
+    document.getElementById('llmEnableDedup').checked = true;
+    document.getElementById('llmDedupWindow').value = '';
+    document.getElementById('llmDedupIou').value = '';
+    document.getElementById('llmEnabled').checked = true;
+    document.getElementById('llmDefault').checked = false;
+    document.getElementById('llmModal').classList.add('show');
+}
+
+function openEditLLMModal(configId) {
+    const config = llmConfigs.find(c => c.id === configId);
+    if (!config) return;
+    
+    currentLLMId = configId;
+    document.getElementById('llmModalTitle').textContent = '编辑大模型配置';
+    document.getElementById('llmId').value = configId;
+    document.getElementById('llmName').value = config.name;
+    document.getElementById('llmProvider').value = config.provider;
+    document.getElementById('llmModel').value = config.model;
+    document.getElementById('llmBaseUrl').value = config.base_url || '';
+    document.getElementById('llmApiKey').value = config.api_key || '';
+    document.getElementById('llmTemperature').value = config.temperature;
+    document.getElementById('llmMaxTokens').value = config.max_tokens;
+    document.getElementById('llmEnableDescription').checked = config.enable_description;
+    document.getElementById('llmEnableDedup').checked = config.enable_dedup;
+    document.getElementById('llmDedupWindow').value = config.dedup_window_seconds;
+    document.getElementById('llmDedupIou').value = config.dedup_iou_threshold;
+    document.getElementById('llmDescription').value = config.description || '';
+    document.getElementById('llmEnabled').checked = config.enabled;
+    document.getElementById('llmDefault').checked = config.is_default;
+    
+    document.getElementById('llmModal').classList.add('show');
+}
+
+function closeLLMModal() {
+    document.getElementById('llmModal').classList.remove('show');
+}
+
+async function saveLLMConfig() {
+    const name = document.getElementById('llmName').value.trim();
+    const model = document.getElementById('llmModel').value.trim();
+    
+    if (!name) {
+        showNotification('请输入配置名称', 'error');
+        return;
+    }
+    if (!model) {
+        showNotification('请输入模型名称', 'error');
+        return;
+    }
+    
+    const apiKey = document.getElementById('llmApiKey').value;
+    const llmData = {
+        name: name,
+        provider: document.getElementById('llmProvider').value,
+        base_url: document.getElementById('llmBaseUrl').value.trim(),
+        model: model,
+        temperature: parseFloat(document.getElementById('llmTemperature').value) || 0.3,
+        max_tokens: parseInt(document.getElementById('llmMaxTokens').value) || 500,
+        enable_description: document.getElementById('llmEnableDescription').checked,
+        enable_dedup: document.getElementById('llmEnableDedup').checked,
+        dedup_window_seconds: parseInt(document.getElementById('llmDedupWindow').value) || 300,
+        dedup_iou_threshold: parseFloat(document.getElementById('llmDedupIou').value) || 0.3,
+        description: document.getElementById('llmDescription').value,
+        enabled: document.getElementById('llmEnabled').checked,
+        is_default: document.getElementById('llmDefault').checked
+    };
+    // 编辑时空值表示保留原密钥，不提交 api_key 字段
+    if (apiKey) {
+        llmData.api_key = apiKey;
+    }
+    
+    try {
+        let response;
+        
+        if (currentLLMId) {
+            response = await fetch(`/api/system/llm-configs/${currentLLMId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(llmData)
+            });
+        } else {
+            response = await fetch('/api/system/llm-configs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(llmData)
+            });
+        }
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            showNotification(currentLLMId ? '大模型配置更新成功' : '大模型配置创建成功', 'success');
+            closeLLMModal();
+            loadLLMConfigs();
+        } else {
+            showNotification(result.error || '保存失败', 'error');
+        }
+        
+    } catch (error) {
+        console.error('保存大模型配置失败:', error);
+        showNotification('保存大模型配置失败', 'error');
+    }
+}
+
+function openDeleteLLMModal(configId, configName) {
+    deleteLLMId = configId;
+    document.getElementById('deleteLLMName').textContent = configName;
+    document.getElementById('deleteLLMModal').classList.add('show');
+}
+
+function closeDeleteLLMModal() {
+    document.getElementById('deleteLLMModal').classList.remove('show');
+    deleteLLMId = null;
+}
+
+async function confirmDeleteLLMConfig() {
+    if (!deleteLLMId) return;
+    
+    try {
+        const response = await fetch(`/api/system/llm-configs/${deleteLLMId}`, {
+            method: 'DELETE'
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            showNotification('大模型配置删除成功', 'success');
+            closeDeleteLLMModal();
+            loadLLMConfigs();
+        } else {
+            showNotification(result.error || '删除失败', 'error');
+        }
+        
+    } catch (error) {
+        console.error('删除大模型配置失败:', error);
+        showNotification('删除大模型配置失败', 'error');
+    }
+}
+
+async function setDefaultLLMConfig(configId) {
+    try {
+        const response = await fetch(`/api/system/llm-configs/${configId}/set-default`, {
+            method: 'POST'
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            showNotification('已设置为默认大模型配置', 'success');
+            loadLLMConfigs();
+        } else {
+            showNotification(result.error || '设置失败', 'error');
+        }
+        
+    } catch (error) {
+        console.error('设置默认大模型配置失败:', error);
+        showNotification('设置默认大模型配置失败', 'error');
+    }
+}
+
+async function testLLMConfig(configId) {
+    showNotification('正在测试大模型连接...', 'info');
+    
+    try {
+        const response = await fetch(`/api/system/llm-configs/${configId}/test`, {
+            method: 'POST'
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            showNotification(`连接成功: ${result.reply || ''}`, 'success');
+        } else {
+            showNotification(result.error || '连接失败', 'error');
+        }
+        
+    } catch (error) {
+        console.error('测试大模型连接失败:', error);
+        showNotification('测试大模型连接失败', 'error');
+    }
+}
+
+// ========================================
 // 暴露命名空间：供 HTML onclick/onchange 调用
 // ========================================
 return {
@@ -1615,7 +1960,16 @@ return {
     backupDatabase: backupDatabase,
     restoreDatabase: restoreDatabase,
     saveDatabasePath: saveDatabasePath,
-    deleteBackup: deleteBackup
+    deleteBackup: deleteBackup,
+    openCreateLLMModal: openCreateLLMModal,
+    openEditLLMModal: openEditLLMModal,
+    closeLLMModal: closeLLMModal,
+    saveLLMConfig: saveLLMConfig,
+    openDeleteLLMModal: openDeleteLLMModal,
+    closeDeleteLLMModal: closeDeleteLLMModal,
+    confirmDeleteLLMConfig: confirmDeleteLLMConfig,
+    setDefaultLLMConfig: setDefaultLLMConfig,
+    testLLMConfig: testLLMConfig
 };
 
 })();

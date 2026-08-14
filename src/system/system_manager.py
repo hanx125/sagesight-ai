@@ -88,6 +88,60 @@ class StreamingServer:
         }
 
 
+@dataclass
+class LLMConfig:
+    """大语言模型 API 接入配置"""
+    id: int = 0
+    name: str = ''                      # 配置名称
+    provider: str = 'openai'            # API 格式: openai / anthropic
+    base_url: str = ''                  # API base URL
+    api_key: str = ''                   # API 密钥
+    model: str = ''                     # 模型名（如 gpt-4o, claude-3-5-sonnet-20241022）
+    temperature: float = 0.3            # 温度参数
+    max_tokens: int = 500               # 最大输出 token
+    enable_description: bool = True     # 启用事件描述
+    enable_dedup: bool = True           # 启用语义去重
+    dedup_window_seconds: int = 300     # 去重时间窗口（秒）
+    dedup_iou_threshold: float = 0.3    # 规则层去重 IoU 阈值
+    is_default: bool = False            # 是否默认
+    enabled: bool = True                # 是否启用
+    description: str = ''               # 描述
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典（api_key 脱敏返回）"""
+        def format_datetime(value):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value
+            if isinstance(value, datetime):
+                return value.isoformat()
+            return str(value)
+
+        return {
+            'id': self.id,
+            'name': self.name,
+            'provider': self.provider,
+            'base_url': self.base_url,
+            'api_key': self.api_key[:8] + '***' if self.api_key else '',
+            'api_key_configured': bool(self.api_key),
+            'model': self.model,
+            'temperature': self.temperature,
+            'max_tokens': self.max_tokens,
+            'enable_description': self.enable_description,
+            'enable_dedup': self.enable_dedup,
+            'dedup_window_seconds': self.dedup_window_seconds,
+            'dedup_iou_threshold': self.dedup_iou_threshold,
+            'is_default': self.is_default,
+            'enabled': self.enabled,
+            'description': self.description,
+            'created_at': format_datetime(self.created_at),
+            'updated_at': format_datetime(self.updated_at)
+        }
+
+
 # ========================================
 # 默认配置
 # ========================================
@@ -227,11 +281,38 @@ class SystemManager:
         conn.commit()
         conn.close()
         logger.info("流媒体服务器配置表已初始化")
-    
+
+        # 创建大模型 API 配置表
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS llm_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                provider TEXT DEFAULT 'openai',
+                base_url TEXT DEFAULT '',
+                api_key TEXT DEFAULT '',
+                model TEXT DEFAULT '',
+                temperature REAL DEFAULT 0.3,
+                max_tokens INTEGER DEFAULT 500,
+                enable_description INTEGER DEFAULT 1,
+                enable_dedup INTEGER DEFAULT 1,
+                dedup_window_seconds INTEGER DEFAULT 300,
+                dedup_iou_threshold REAL DEFAULT 0.3,
+                is_default INTEGER DEFAULT 0,
+                enabled INTEGER DEFAULT 1,
+                description TEXT DEFAULT '',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        logger.info("大模型 API 配置表已初始化")
+
     # ========================================
     # 流媒体服务器 CRUD
     # ========================================
-    
+
     def get_all_streaming_servers(self) -> List[StreamingServer]:
         """获取所有流媒体服务器配置"""
         conn = sqlite3.connect(self.db_path)
@@ -411,6 +492,159 @@ class SystemManager:
             config=safe_json_loads(row[16], {}),
             created_at=row[17],
             updated_at=row[18]
+        )
+
+    # ========================================
+    # 大模型 API 配置 CRUD
+    # ========================================
+
+    def get_all_llm_configs(self) -> List[LLMConfig]:
+        """获取所有大模型配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM llm_config ORDER BY is_default DESC, name')
+        rows = cursor.fetchall()
+        conn.close()
+        return [self._row_to_llm_config(row) for row in rows]
+
+    def get_llm_config(self, config_id: int) -> Optional[LLMConfig]:
+        """获取单个大模型配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM llm_config WHERE id = ?', (config_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return self._row_to_llm_config(row) if row else None
+
+    def get_default_llm_config(self) -> Optional[LLMConfig]:
+        """获取默认的大模型配置（is_default=1 且 enabled=1）"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM llm_config WHERE is_default = 1 AND enabled = 1 LIMIT 1')
+        row = cursor.fetchone()
+        conn.close()
+        return self._row_to_llm_config(row) if row else None
+
+    def create_llm_config(self, config: LLMConfig) -> int:
+        """创建大模型配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        if config.is_default:
+            cursor.execute('UPDATE llm_config SET is_default = 0')
+
+        cursor.execute('''
+            INSERT INTO llm_config (
+                name, provider, base_url, api_key, model,
+                temperature, max_tokens,
+                enable_description, enable_dedup,
+                dedup_window_seconds, dedup_iou_threshold,
+                is_default, enabled, description
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            config.name, config.provider, config.base_url, config.api_key, config.model,
+            config.temperature, config.max_tokens,
+            int(config.enable_description), int(config.enable_dedup),
+            config.dedup_window_seconds, config.dedup_iou_threshold,
+            int(config.is_default), int(config.enabled), config.description
+        ))
+        conn.commit()
+        config_id = cursor.lastrowid
+        conn.close()
+        return config_id
+
+    def update_llm_config(self, config_id: int, config: LLMConfig) -> bool:
+        """更新大模型配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        if config.is_default:
+            cursor.execute('UPDATE llm_config SET is_default = 0 WHERE id != ?', (config_id,))
+
+        # api_key 为空时不更新（前端脱敏返回，不回传真实 key 时保留原值）
+        if config.api_key:
+            cursor.execute('''
+                UPDATE llm_config SET
+                    name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
+                    temperature = ?, max_tokens = ?,
+                    enable_description = ?, enable_dedup = ?,
+                    dedup_window_seconds = ?, dedup_iou_threshold = ?,
+                    is_default = ?, enabled = ?, description = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (
+                config.name, config.provider, config.base_url, config.api_key, config.model,
+                config.temperature, config.max_tokens,
+                int(config.enable_description), int(config.enable_dedup),
+                config.dedup_window_seconds, config.dedup_iou_threshold,
+                int(config.is_default), int(config.enabled), config.description,
+                config_id
+            ))
+        else:
+            cursor.execute('''
+                UPDATE llm_config SET
+                    name = ?, provider = ?, base_url = ?, model = ?,
+                    temperature = ?, max_tokens = ?,
+                    enable_description = ?, enable_dedup = ?,
+                    dedup_window_seconds = ?, dedup_iou_threshold = ?,
+                    is_default = ?, enabled = ?, description = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (
+                config.name, config.provider, config.base_url, config.model,
+                config.temperature, config.max_tokens,
+                int(config.enable_description), int(config.enable_dedup),
+                config.dedup_window_seconds, config.dedup_iou_threshold,
+                int(config.is_default), int(config.enabled), config.description,
+                config_id
+            ))
+
+        conn.commit()
+        success = cursor.rowcount > 0
+        conn.close()
+        return success
+
+    def delete_llm_config(self, config_id: int) -> bool:
+        """删除大模型配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM llm_config WHERE id = ?', (config_id,))
+        conn.commit()
+        success = cursor.rowcount > 0
+        conn.close()
+        return success
+
+    def set_default_llm_config(self, config_id: int) -> bool:
+        """设置默认大模型配置"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('UPDATE llm_config SET is_default = 0')
+        cursor.execute('UPDATE llm_config SET is_default = 1 WHERE id = ?', (config_id,))
+        conn.commit()
+        success = cursor.rowcount > 0
+        conn.close()
+        return success
+
+    def _row_to_llm_config(self, row: tuple) -> LLMConfig:
+        """将数据库行转换为 LLMConfig 对象"""
+        return LLMConfig(
+            id=row[0],
+            name=row[1] or '',
+            provider=row[2] or 'openai',
+            base_url=row[3] or '',
+            api_key=row[4] or '',
+            model=row[5] or '',
+            temperature=row[6] if row[6] is not None else 0.3,
+            max_tokens=row[7] if row[7] is not None else 500,
+            enable_description=bool(row[8]) if row[8] is not None else True,
+            enable_dedup=bool(row[9]) if row[9] is not None else True,
+            dedup_window_seconds=row[10] if row[10] is not None else 300,
+            dedup_iou_threshold=row[11] if row[11] is not None else 0.3,
+            is_default=bool(row[12]),
+            enabled=bool(row[13]) if row[13] is not None else True,
+            description=row[14] or '',
+            created_at=row[15],
+            updated_at=row[16]
         )
 
 

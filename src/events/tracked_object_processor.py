@@ -245,6 +245,13 @@ class TrackedObjectProcessor(mp.Process):
         )
         self.frame_cache_inflight_locks: dict[str, threading.Lock] = {}
 
+        # 大模型事件描述+去重线程池（异步调用，不阻塞事件管道）
+        # 大模型 API 响应 1-3 秒，必须异步执行
+        self.llm_executor: Optional[ThreadPoolExecutor] = None
+        self.llm_describer = None
+        self.llm_deduplicator = None
+        self._init_llm(proc_logger)
+
         # ✅ 初始化复用的 HTTP Session（避免每次 requests.post 创建新 PoolManager）
         from requests import Session
         from requests.adapters import HTTPAdapter
@@ -381,6 +388,10 @@ class TrackedObjectProcessor(mp.Process):
         if self.ai_stream_executor:
             self.ai_stream_executor.shutdown(wait=False)
 
+        # 关闭大模型线程池
+        if self.llm_executor:
+            self.llm_executor.shutdown(wait=False)
+
         # ✅ 关闭 HTTP Session（释放连接池）
         if self._http_session is not None:
             try:
@@ -390,6 +401,46 @@ class TrackedObjectProcessor(mp.Process):
 
         self._cleanup(proc_logger)
         proc_logger.info(f"事件处理进程已退出 (共处理 {processed_count} 帧)")
+
+    def _init_llm(self, proc_logger):
+        """初始化大模型事件描述+去重服务
+
+        从数据库加载默认 LLM 配置，若未配置或未启用则跳过（不影响事件处理）。
+        """
+        try:
+            from src.system.system_manager import get_system_manager
+            manager = get_system_manager()
+            config = manager.get_default_llm_config()
+
+            if config is None or not config.enabled:
+                proc_logger.info("未配置默认大模型，事件描述+去重功能未启用")
+                return
+
+            # 检查是否至少启用了一项功能
+            if not config.enable_description and not config.enable_dedup:
+                proc_logger.info("大模型描述和去重均未启用，跳过初始化")
+                return
+
+            from src.llm.event_describer import EventDescriber
+            from src.llm.event_deduplicator import EventDeduplicator
+
+            self.llm_executor = ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix="LLM"
+            )
+
+            if config.enable_description:
+                self.llm_describer = EventDescriber(config)
+            if config.enable_dedup:
+                self.llm_deduplicator = EventDeduplicator(config)
+
+            proc_logger.info(
+                f"大模型事件处理已启用: model={config.model}, "
+                f"provider={config.provider}, "
+                f"description={'on' if self.llm_describer else 'off'}, "
+                f"dedup={'on' if self.llm_deduplicator else 'off'}"
+            )
+        except Exception as e:
+            proc_logger.warning(f"大模型初始化失败，事件描述+去重未启用: {e}")
 
     def _init_components(self, proc_logger):
         """初始化 CameraState、EventOutput 和 FrameCache"""
@@ -1409,6 +1460,27 @@ class TrackedObjectProcessor(mp.Process):
                             bbox=bbox, trajectory_points=trajectory_points,
                         )
 
+        # 大模型事件描述 + 去重（仅对通过区域过滤的事件异步执行）
+        if passes_zones and final_image is not None and self.llm_executor:
+            cam_cfg = self.camera_configs.get(camera_id, {})
+            event_info = {
+                'class_name': class_name,
+                'camera_name': cam_cfg.get('camera_name', camera_id),
+                'zone_name': ",".join(entered_zones) if entered_zones else '',
+                'event_type': self._derive_event_type(obj_dict),
+                'duration': frame_time - event_start_frame_time,
+                'start_time': event_start_time,
+            }
+            self.llm_executor.submit(
+                self._async_llm_process,
+                event_id=event_id,
+                camera_id=camera_id,
+                class_name=class_name,
+                bbox=bbox,
+                image=final_image,
+                event_info=event_info,
+            )
+
         # 清理缩略图
         event_output.clear_thumbnail(event_id)
 
@@ -1424,6 +1496,90 @@ class TrackedObjectProcessor(mp.Process):
             f"event_id={event_id[:8] if event_id else ''}, label={class_name}, "
             f"duration={frame_time - event_start_frame_time:.1f}s"
         )
+
+    def _async_llm_process(
+        self,
+        event_id: str,
+        camera_id: str,
+        class_name: str,
+        bbox: list,
+        image,
+        event_info: dict,
+    ):
+        """大模型事件处理（在线程池中异步执行，不阻塞事件管道）
+
+        1. 若启用去重：先做两层去重判断
+           - 重复事件：标记 dedup_status=duplicate，不生成描述
+           - 正常事件：继续生成描述
+        2. 若启用描述且事件非重复：生成自然语言描述存入事件记录
+
+        所有异常静默处理，绝不影响事件管道主流程。
+        """
+        # 编码图片为 JPEG bytes
+        image_bytes = None
+        try:
+            from src.utils.image import encode_jpeg
+            image_bytes = encode_jpeg(image, quality=85)
+        except Exception as e:
+            logger.debug(f"[LLM] 图片编码失败 event={event_id[:8]}: {e}")
+
+        if image_bytes is None:
+            return
+
+        # 第一阶段：去重判断
+        dedup_status = "normal"
+        dedup_reason = ""
+        if self.llm_deduplicator is not None:
+            try:
+                dedup_status, dedup_reason = self.llm_deduplicator.check_duplicate(
+                    event_id=event_id,
+                    camera_id=camera_id,
+                    class_name=class_name,
+                    bbox=bbox,
+                    image_bytes=image_bytes,
+                )
+                # 写入去重结果
+                from src.tasks.task_manager import TaskManager
+                tm = TaskManager()
+                tm.update_event(
+                    event_id,
+                    dedup_status=dedup_status,
+                    dedup_reason=dedup_reason,
+                )
+            except Exception as e:
+                logger.warning(f"[LLM] 去重失败 event={event_id[:8]}: {e}")
+
+        # 重复事件不再生成描述
+        if dedup_status == "duplicate":
+            logger.info(
+                f"[LLM] 事件被判定为重复，跳过描述: "
+                f"event={event_id[:8]}, reason={dedup_reason[:60]}"
+            )
+            return
+
+        # 第二阶段：生成事件描述
+        if self.llm_describer is not None:
+            try:
+                description = self.llm_describer.describe(
+                    image_bytes=image_bytes,
+                    event_info=event_info,
+                )
+                if description:
+                    from src.tasks.task_manager import TaskManager
+                    from datetime import datetime
+                    tm = TaskManager()
+                    tm.update_event(
+                        event_id,
+                        ai_description=description,
+                        ai_description_model=self.llm_describer.config.model,
+                        ai_description_time=datetime.now(),
+                    )
+                    logger.info(
+                        f"[LLM] 事件描述已写入: event={event_id[:8]}, "
+                        f"desc={description[:60]}"
+                    )
+            except Exception as e:
+                logger.warning(f"[LLM] 描述生成失败 event={event_id[:8]}: {e}")
 
     def _maybe_push_ai_stream(
         self, camera_id: str, frame_time: float, tracked_objects: dict,

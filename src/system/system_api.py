@@ -5,7 +5,7 @@ SageSight AI - 系统管理 API 接口
 
 import logging
 from flask import Blueprint, jsonify, request
-from src.system.system_manager import get_system_manager, StreamingServer
+from src.system.system_manager import get_system_manager, StreamingServer, LLMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +207,172 @@ def set_default_streaming_server(server_id: int):
         })
     
     return jsonify({'error': '设置失败'}), 500
+
+
+# ========================================
+# 大模型 API 配置
+# ========================================
+
+@system_bp.route('/llm-configs', methods=['GET'])
+def get_llm_configs():
+    """获取所有大模型配置"""
+    manager = get_system_manager()
+    configs = manager.get_all_llm_configs()
+    return jsonify([config.to_dict() for config in configs])
+
+
+@system_bp.route('/llm-configs/<int:config_id>', methods=['GET'])
+def get_llm_config(config_id: int):
+    """获取单个大模型配置"""
+    manager = get_system_manager()
+    config = manager.get_llm_config(config_id)
+    if config:
+        return jsonify(config.to_dict())
+    return jsonify({'error': '大模型配置不存在'}), 404
+
+
+@system_bp.route('/llm-configs/default', methods=['GET'])
+def get_default_llm_config():
+    """获取默认大模型配置"""
+    manager = get_system_manager()
+    config = manager.get_default_llm_config()
+    if config:
+        return jsonify(config.to_dict())
+    return jsonify({'error': '未配置默认大模型'}), 404
+
+
+@system_bp.route('/llm-configs', methods=['POST'])
+def create_llm_config():
+    """创建大模型配置"""
+    data = request.get_json()
+    if not data or not data.get('name'):
+        return jsonify({'error': '缺少配置名称'}), 400
+    if not data.get('model'):
+        return jsonify({'error': '缺少模型名称'}), 400
+
+    manager = get_system_manager()
+    config = LLMConfig(
+        name=data['name'],
+        provider=data.get('provider', 'openai'),
+        base_url=data.get('base_url', ''),
+        api_key=data.get('api_key', ''),
+        model=data['model'],
+        temperature=float(data.get('temperature', 0.3)),
+        max_tokens=int(data.get('max_tokens', 500)),
+        enable_description=bool(data.get('enable_description', True)),
+        enable_dedup=bool(data.get('enable_dedup', True)),
+        dedup_window_seconds=int(data.get('dedup_window_seconds', 300)),
+        dedup_iou_threshold=float(data.get('dedup_iou_threshold', 0.3)),
+        is_default=bool(data.get('is_default', False)),
+        enabled=bool(data.get('enabled', True)),
+        description=data.get('description', '')
+    )
+    config_id = manager.create_llm_config(config)
+    if config_id:
+        if _socketio:
+            _socketio.emit('llm_config_created', {'config_id': config_id})
+        return jsonify({
+            'message': '大模型配置创建成功',
+            'config_id': config_id,
+            'config': manager.get_llm_config(config_id).to_dict()
+        })
+    return jsonify({'error': '创建失败'}), 500
+
+
+@system_bp.route('/llm-configs/<int:config_id>', methods=['PUT'])
+def update_llm_config(config_id: int):
+    """更新大模型配置"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': '缺少更新数据'}), 400
+
+    manager = get_system_manager()
+    existing = manager.get_llm_config(config_id)
+    if not existing:
+        return jsonify({'error': '大模型配置不存在'}), 404
+
+    # api_key 脱敏返回的 '***' 不回写，空值保留原 key
+    api_key = data.get('api_key', '')
+    if not api_key or api_key.endswith('***'):
+        api_key = existing.api_key
+
+    config = LLMConfig(
+        id=config_id,
+        name=data.get('name', existing.name),
+        provider=data.get('provider', existing.provider),
+        base_url=data.get('base_url', existing.base_url),
+        api_key=api_key,
+        model=data.get('model', existing.model),
+        temperature=float(data.get('temperature', existing.temperature)),
+        max_tokens=int(data.get('max_tokens', existing.max_tokens)),
+        enable_description=bool(data.get('enable_description', existing.enable_description)),
+        enable_dedup=bool(data.get('enable_dedup', existing.enable_dedup)),
+        dedup_window_seconds=int(data.get('dedup_window_seconds', existing.dedup_window_seconds)),
+        dedup_iou_threshold=float(data.get('dedup_iou_threshold', existing.dedup_iou_threshold)),
+        is_default=bool(data.get('is_default', existing.is_default)),
+        enabled=bool(data.get('enabled', existing.enabled)),
+        description=data.get('description', existing.description)
+    )
+    success = manager.update_llm_config(config_id, config)
+    if success:
+        if _socketio:
+            _socketio.emit('llm_config_updated', {'config_id': config_id})
+        return jsonify({
+            'message': '大模型配置更新成功',
+            'config': manager.get_llm_config(config_id).to_dict()
+        })
+    return jsonify({'error': '更新失败'}), 500
+
+
+@system_bp.route('/llm-configs/<int:config_id>', methods=['DELETE'])
+def delete_llm_config(config_id: int):
+    """删除大模型配置"""
+    manager = get_system_manager()
+    config = manager.get_llm_config(config_id)
+    if not config:
+        return jsonify({'error': '大模型配置不存在'}), 404
+    if config.is_default:
+        return jsonify({'error': '无法删除默认大模型配置'}), 400
+    success = manager.delete_llm_config(config_id)
+    if success:
+        if _socketio:
+            _socketio.emit('llm_config_deleted', {'config_id': config_id})
+        return jsonify({'message': '大模型配置删除成功'})
+    return jsonify({'error': '删除失败'}), 500
+
+
+@system_bp.route('/llm-configs/<int:config_id>/set-default', methods=['POST'])
+def set_default_llm_config(config_id: int):
+    """设置默认大模型配置"""
+    manager = get_system_manager()
+    config = manager.get_llm_config(config_id)
+    if not config:
+        return jsonify({'error': '大模型配置不存在'}), 404
+    success = manager.set_default_llm_config(config_id)
+    if success:
+        if _socketio:
+            _socketio.emit('llm_config_updated', {'config_id': config_id})
+        return jsonify({
+            'message': '已设置为默认大模型配置',
+            'config': manager.get_llm_config(config_id).to_dict()
+        })
+    return jsonify({'error': '设置失败'}), 500
+
+
+@system_bp.route('/llm-configs/<int:config_id>/test', methods=['POST'])
+def test_llm_config(config_id: int):
+    """测试大模型连通性（发送简单文本请求验证 API 可用）"""
+    manager = get_system_manager()
+    config = manager.get_llm_config(config_id)
+    if not config:
+        return jsonify({'error': '大模型配置不存在'}), 404
+    try:
+        from src.llm.llm_client import LLMClient
+        client = LLMClient(config)
+        reply = client.chat_text("请回复'连接成功'四个字。")
+        return jsonify({'message': '连接成功', 'reply': reply})
+    except Exception as e:
+        return jsonify({'error': f'连接失败: {e}'}), 500
 
 
 # ========================================

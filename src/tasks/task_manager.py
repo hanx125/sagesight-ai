@@ -591,6 +591,12 @@ class EventRecord:
     entered_zones: List[str] = field(default_factory=list)  # 目标进入过的区域（只增不减）
     zone_name: str = ""  # 当前所在区域（多个用逗号分隔）
     loitered_zones: List[str] = field(default_factory=list)  # 生命周期内累计曾徘徊的区域（只增不减）
+    # 大模型描述 + 去重字段
+    ai_description: Optional[str] = None  # 多模态大模型生成的事件描述
+    ai_description_model: str = ""  # 生成描述使用的模型名
+    ai_description_time: Optional[datetime] = None  # 描述生成时间
+    dedup_status: str = ""  # 去重状态：normal（正常）/duplicate（重复）
+    dedup_reason: str = ""  # 去重判定原因
     created_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
@@ -627,6 +633,11 @@ class EventRecord:
             'entered_zones': self.entered_zones,
             'zone_name': self.zone_name,
             'loitered_zones': self.loitered_zones,
+            'ai_description': self.ai_description,
+            'ai_description_model': self.ai_description_model,
+            'ai_description_time': format_datetime(self.ai_description_time),
+            'dedup_status': self.dedup_status,
+            'dedup_reason': self.dedup_reason,
             'created_at': format_datetime(self.created_at)
         }
 
@@ -921,6 +932,23 @@ class TaskManager:
             if 'loitered_zones' not in columns:
                 cursor.execute("ALTER TABLE events ADD COLUMN loitered_zones TEXT")
                 logger.debug("[TaskManager] events 表添加 loitered_zones 字段")
+
+            # 迁移：添加大模型描述 + 去重字段
+            if 'ai_description' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN ai_description TEXT")
+                logger.debug("[TaskManager] events 表添加 ai_description 字段")
+            if 'ai_description_model' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN ai_description_model VARCHAR(100)")
+                logger.debug("[TaskManager] events 表添加 ai_description_model 字段")
+            if 'ai_description_time' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN ai_description_time DATETIME")
+                logger.debug("[TaskManager] events 表添加 ai_description_time 字段")
+            if 'dedup_status' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN dedup_status VARCHAR(20)")
+                logger.debug("[TaskManager] events 表添加 dedup_status 字段")
+            if 'dedup_reason' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN dedup_reason TEXT")
+                logger.debug("[TaskManager] events 表添加 dedup_reason 字段")
 
             # ========================================
             # 算法注册表（保留表结构，避免旧触发器/外键引用失败）
@@ -1288,7 +1316,12 @@ class TaskManager:
                      status: str = None,
                      entered_zones: List[str] = None,
                      zone_name: str = None,
-                     loitered_zones: List[str] = None) -> bool:
+                     loitered_zones: List[str] = None,
+                     ai_description: str = None,
+                     ai_description_model: str = None,
+                     ai_description_time=None,
+                     dedup_status: str = None,
+                     dedup_reason: str = None) -> bool:
         """更新事件记录
 
         支持部分更新：仅更新提供的字段，未提供的字段保持不变。
@@ -1308,6 +1341,11 @@ class TaskManager:
             entered_zones: 目标进入过的区域列表（只增不减）
             zone_name: 当前所在区域（多个用逗号分隔）
             loitered_zones: 生命周期内累计曾徘徊的区域列表（只增不减，写入独立列）
+            ai_description: 多模态大模型生成的事件描述
+            ai_description_model: 生成描述使用的模型名
+            ai_description_time: 描述生成时间
+            dedup_status: 去重状态（normal/duplicate）
+            dedup_reason: 去重判定原因
 
         Returns:
             是否更新成功
@@ -1334,6 +1372,22 @@ class TaskManager:
         if loitered_zones is not None:
             updates.append('loitered_zones = ?')
             params.append(json.dumps(loitered_zones))
+
+        if ai_description is not None:
+            updates.append('ai_description = ?')
+            params.append(ai_description)
+        if ai_description_model is not None:
+            updates.append('ai_description_model = ?')
+            params.append(ai_description_model)
+        if ai_description_time is not None:
+            updates.append('ai_description_time = ?')
+            params.append(ai_description_time)
+        if dedup_status is not None:
+            updates.append('dedup_status = ?')
+            params.append(dedup_status)
+        if dedup_reason is not None:
+            updates.append('dedup_reason = ?')
+            params.append(dedup_reason)
 
         if start_time is not None:
             updates.append('start_time = ?')
@@ -1423,7 +1477,9 @@ class TaskManager:
             query = '''SELECT id, event_id, task_id, camera_id, algorithm, type, class_name,
                        confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
                        local_gif_url, minio_gif_url, ftp_gif_url,
-                       metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones, created_at FROM events WHERE 1=1'''
+                       metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
+                       ai_description, ai_description_model, ai_description_time, dedup_status, dedup_reason,
+                       created_at FROM events WHERE 1=1'''
             params = []
 
             if task_id:
@@ -1445,6 +1501,54 @@ class TaskManager:
             cursor.execute(query, params)
             rows = cursor.fetchall()
 
+            return [self._row_to_event(row) for row in rows]
+
+    def get_recent_events(
+        self,
+        camera_id: str = None,
+        class_name: str = None,
+        seconds: int = 300,
+        exclude_event_id: str = None,
+        limit: int = 20,
+    ) -> List[EventRecord]:
+        """获取近期事件（供大模型语义去重使用）
+
+        Args:
+            camera_id: 摄像机ID（同相机内去重）
+            class_name: 目标类别（同类内去重）
+            seconds: 时间窗口（秒），默认 5 分钟
+            exclude_event_id: 排除的事件ID（当前事件本身）
+            limit: 最多返回条数
+
+        Returns:
+            近期事件列表（按时间倒序）
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            query = '''SELECT id, event_id, task_id, camera_id, algorithm, type, class_name,
+                       confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
+                       local_gif_url, minio_gif_url, ftp_gif_url,
+                       metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
+                       ai_description, ai_description_model, ai_description_time, dedup_status, dedup_reason,
+                       created_at FROM events
+                       WHERE created_at >= datetime('now', ?)'''
+            params = [f'-{seconds} seconds']
+
+            if camera_id:
+                query += ' AND camera_id = ?'
+                params.append(camera_id)
+            if class_name:
+                query += ' AND class_name = ?'
+                params.append(class_name)
+            if exclude_event_id:
+                query += ' AND event_id != ?'
+                params.append(exclude_event_id)
+
+            query += ' ORDER BY created_at DESC LIMIT ?'
+            params.append(limit)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
             return [self._row_to_event(row) for row in rows]
 
     def get_event_count(
@@ -1544,9 +1648,10 @@ class TaskManager:
                 except (ValueError, TypeError):
                     return value  # 保持原字符串
         
-        created_at = parse_datetime(row[22])  # created_at 在 index 22（loitered_zones=21, zone_name=20）
+        created_at = parse_datetime(row[27])  # created_at 在 index 27
         start_time = parse_datetime(row[16])  # start_time 在 index 16
         end_time = parse_datetime(row[17])    # end_time 在 index 17
+        ai_description_time = parse_datetime(row[24])  # ai_description_time 在 index 24
 
         return EventRecord(
             id=row[0],
@@ -1571,6 +1676,11 @@ class TaskManager:
             entered_zones=safe_json_loads(row[19], []),
             zone_name=row[20] or '',
             loitered_zones=safe_json_loads(row[21], []),
+            ai_description=row[22],
+            ai_description_model=row[23] or '',
+            ai_description_time=ai_description_time,
+            dedup_status=row[25] or '',
+            dedup_reason=row[26] or '',
             created_at=created_at
         )
     

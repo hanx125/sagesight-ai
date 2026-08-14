@@ -55,6 +55,12 @@
                 </svg>
                 数据库管理
             </button>
+            <button class="tab-btn" data-tab="llm" onclick="System.switchTab('llm')">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                </svg>
+                大模型配置
+            </button>
         </div>
         
         <!-- 标签页内容 -->
@@ -578,6 +584,24 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 大模型配置标签页 -->
+            <div class="tab-panel" id="llmTab">
+                <div class="tab-header">
+                    <h3>大模型配置</h3>
+                    <button class="btn btn-primary" onclick="System.openCreateLLMModal()">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                        </svg>
+                        添加配置
+                    </button>
+                </div>
+
+                <!-- 大模型配置列表 -->
+                <div class="servers-list" id="llmConfigsList">
+                    <div class="loading-placeholder">加载中...</div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -695,6 +719,127 @@
         <div class="modal-footer">
             <button type="button" class="btn btn-secondary" onclick="System.closeDeleteServerModal()">取消</button>
             <button type="button" class="btn btn-danger" onclick="System.confirmDeleteServer()">删除</button>
+        </div>
+    </div>
+</div>
+
+<!-- 添加/编辑大模型配置模态框 -->
+<div id="llmModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="llmModalTitle">添加大模型配置</h3>
+            <button class="modal-close" onclick="System.closeLLMModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="llmForm">
+                <input type="hidden" id="llmId">
+
+                <div class="form-group">
+                    <label for="llmName">配置名称 *</label>
+                    <input type="text" id="llmName" required placeholder="例如: 通义千问 / GPT-4o">
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="llmProvider">API 类型</label>
+                        <select id="llmProvider">
+                            <option value="openai">OpenAI 兼容格式</option>
+                            <option value="anthropic">Anthropic 格式</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="llmModel">模型名称 *</label>
+                        <input type="text" id="llmModel" required placeholder="例如: qwen-vl-max / gpt-4o / claude-3-5-sonnet">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="llmBaseUrl">API 地址 (Base URL)</label>
+                    <input type="text" id="llmBaseUrl" placeholder="例如: https://dashscope.aliyuncs.com/compatible-mode/v1">
+                    <p class="form-hint">支持 OpenAI/Anthropic 兼容接口的服务地址，留空时使用各类型默认地址</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="llmApiKey">API 密钥</label>
+                    <input type="password" id="llmApiKey" placeholder="sk-...">
+                    <p class="form-hint">编辑时留空则保留原密钥</p>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="llmTemperature">温度 (Temperature)</label>
+                        <input type="number" id="llmTemperature" step="0.1" min="0" max="2" placeholder="0.3">
+                    </div>
+                    <div class="form-group">
+                        <label for="llmMaxTokens">最大输出 Tokens</label>
+                        <input type="number" id="llmMaxTokens" min="1" placeholder="500">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>功能开关</label>
+                    <div class="checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="llmEnableDescription" checked>
+                            <span>启用事件描述</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="llmEnableDedup" checked>
+                            <span>启用事件去重</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="llmDedupWindow">去重窗口（秒）</label>
+                        <input type="number" id="llmDedupWindow" min="10" placeholder="300">
+                    </div>
+                    <div class="form-group">
+                        <label for="llmDedupIou">去重 IoU 阈值</label>
+                        <input type="number" id="llmDedupIou" step="0.05" min="0" max="1" placeholder="0.3">
+                    </div>
+                </div>
+                <p class="form-hint" style="margin-top:-10px; margin-bottom:12px;">去重窗口：同相机同类别在窗口内检测到重叠目标则判为重复；IoU 阈值：目标框重叠度超过该值视为同一目标。</p>
+
+                <div class="form-group">
+                    <label for="llmDescription">描述</label>
+                    <textarea id="llmDescription" rows="2" placeholder="配置说明信息"></textarea>
+                </div>
+
+                <div class="form-group checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="llmEnabled" checked>
+                        <span>启用该配置</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="llmDefault">
+                        <span>设为默认配置</span>
+                    </label>
+                </div>
+            </form>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="System.closeLLMModal()">取消</button>
+            <button type="button" class="btn btn-primary" onclick="System.saveLLMConfig()">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 删除大模型配置确认模态框 -->
+<div id="deleteLLMModal" class="modal">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h3>确认删除</h3>
+            <button class="modal-close" onclick="System.closeDeleteLLMModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>确定要删除大模型配置 <strong id="deleteLLMName"></strong> 吗？</p>
+            <p class="warning-text">删除后将无法恢复。</p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="System.closeDeleteLLMModal()">取消</button>
+            <button type="button" class="btn btn-danger" onclick="System.confirmDeleteLLMConfig()">删除</button>
         </div>
     </div>
 </div>
