@@ -552,6 +552,7 @@ a:hover {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
     padding: 0 24px;
     position: fixed;
     top: 0;
@@ -613,34 +614,40 @@ a:hover {
     text-overflow: ellipsis;
 }
 
-/* 标题栏自适应 */
-@media (max-width: 1400px) {
-    .header-center { gap: 16px; }
-    .title-text { font-size: 20px; letter-spacing: 1px; }
-    .nav-link { padding: 8px 12px; font-size: 13px; }
-}
-
-@media (max-width: 1200px) {
+/* 标题栏自适应：随视口逐步收敛（导航文字→图标、标题缩小→隐藏），配合弹性布局，任何宽度下均不与两侧组件重叠 */
+@media (max-width: 1600px) {
     .top-header { padding: 0 16px; }
     .logo h1 { font-size: 18px; }
-    .title-text { font-size: 18px; letter-spacing: 1px; }
-    /* 响应式：空间紧张时导航只显示图标，隐藏文字 */
+    /* 空间紧张时导航只显示图标，隐藏文字，为主标题腾出空间 */
     .nav-link span { display: none; }
     .nav-link { padding: 8px; gap: 0; }
-    /* 导航图标保持原有大小，不缩小 */
     .header-center { gap: 12px; }
     .header-right { gap: 12px; }
+    .title-text { font-size: 14px; letter-spacing: 0; }
     .title-decoration { width: 30px; }
 }
 
+@media (max-width: 1150px) {
+    /* 中间区域只保留导航图标：隐藏项目标题，彻底消除与两侧组件的重叠 */
+    .project-title { display: none; }
+    /* 右侧功能区压缩：隐藏用户名/角色与下拉箭头，仅保留头像与功能图标 */
+    .user-info { display: none; }
+    .user-dropdown { display: none; }
+    .header-right { gap: 8px; }
+}
+
 @media (max-width: 992px) {
-    .nav-link span { display: none; }
-    .nav-link { padding: 8px; }
     .nav-link svg { width: 18px; height: 18px; }
     .logo h1 { font-size: 16px; }
-    .title-text { font-size: 16px; letter-spacing: 0; }
-    .title-decoration { width: 20px; }
     .header-center { gap: 8px; }
+}
+
+@media (max-width: 700px) {
+    /* 极窄屏：隐藏次要功能按钮，导航图标进一步缩小，保证导航与两侧不重叠 */
+    .header-theme-toggle { display: none; }
+    .header-fullscreen { display: none; }
+    .nav-link svg { width: 16px; height: 16px; }
+    .nav-link { padding: 6px; }
 }
 
 /* 左侧导航菜单 */
@@ -648,26 +655,26 @@ a:hover {
     display: flex;
     align-items: center;
     gap: 6px;
-    flex-shrink: 1;
+    flex: 0 0 auto;
     min-width: 0;
 }
 
-/* 中间项目标题 */
-/* 绝对定位居中：彻底脱离左右两侧组件宽度影响，始终保持页面正中 */
+/* 中间导航+标题区域：弹性占位，两端导航固定、标题居中且空间不足时优先压缩，保证任何宽度下不与两侧重叠 */
 .header-center {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
+    flex: 1 1 auto;
+    min-width: 0;
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 24px;
-    z-index: 1;
+    gap: 20px;
 }
 
 .project-title {
+    flex: 1 1 auto;
+    min-width: 0;
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 16px;
     white-space: nowrap;
     animation: titleFadeIn 0.5s ease;
@@ -686,6 +693,9 @@ a:hover {
     text-shadow: 0 2px 4px rgba(0, 105, 92, 0.1);
     position: relative;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
 }
 
 .title-text::after {
@@ -730,7 +740,7 @@ a:hover {
     display: flex;
     align-items: center;
     gap: 6px;
-    flex-shrink: 1;
+    flex: 0 0 auto;
     min-width: 0;
 }
 
@@ -745,7 +755,7 @@ a:hover {
     font-size: 14px;
     transition: all 0.3s;
     white-space: nowrap;
-    flex-shrink: 1;
+    flex-shrink: 0;
     min-width: 0;
 }
 
@@ -3132,53 +3142,54 @@ body.pjax-loading main.main-wrapper {
    响应式布局
    ======================================== */
 @media (max-width: 1024px) {
-    .header-nav {
+    .header-nav-left,
+    .header-nav-right {
         gap: 4px;
     }
-    
+
     .nav-link {
-        padding: 6px 12px;
+        padding: 6px;
     }
-    
+
     .nav-link span {
         display: none;
     }
-    
+
     .nav-link svg {
-        width: 20px;
-        height: 20px;
+        width: 18px;
+        height: 18px;
     }
 }
 
 @media (max-width: 768px) {
     .top-header {
-        padding: 0 16px;
+        padding: 0 10px;
     }
 
+    /* 小屏保持导航图标可用（不隐藏，保证操作不受影响），进一步压缩两侧 */
     .header-nav-left,
     .header-nav-right {
-        display: none;
+        gap: 4px;
+    }
+
+    .nav-link {
+        padding: 6px;
     }
 
     .header-center {
-        position: absolute;
-        left: 50%;
-        transform: translateX(-50%);
-        display: flex;
-        justify-content: center;
+        gap: 8px;
     }
 
-    .title-text {
-        font-size: 16px;
-        letter-spacing: 1px;
+    .logo h1 {
+        display: none;
     }
 
-    .title-decoration {
-        width: 20px;
+    .user-dropdown {
+        display: none;
     }
 
     .header-right {
-        gap: 8px;
+        gap: 6px;
     }
 
     .user-info {

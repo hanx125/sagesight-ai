@@ -709,7 +709,7 @@ if _is_main_process:
             cursor.execute('SELECT type, COUNT(*) FROM events GROUP BY type')
             type_stats = dict(cursor.fetchall())
 
-            # 按事件状态统计（tracking_start/tracking_update/tracking_end/gif_ready）
+            # 按事件状态统计（tracking_start/tracking_update/initial/final/duplicate/tracking_end）
             cursor.execute('SELECT status, COUNT(*) FROM events GROUP BY status')
             status_stats = dict(cursor.fetchall())
 

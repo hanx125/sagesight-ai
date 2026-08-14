@@ -587,7 +587,7 @@ class EventRecord:
     metadata: Dict = field(default_factory=dict)
     start_time: Optional[datetime] = None  # 跟踪起始时间
     end_time: Optional[datetime] = None    # 跟踪终止时间
-    status: str = "tracking_start"  # 事件状态：tracking_start/tracking_update/tracking_end/gif_ready
+    status: str = "tracking_start"  # 事件状态：tracking_start/tracking_update/initial/final/duplicate/tracking_end
     entered_zones: List[str] = field(default_factory=list)  # 目标进入过的区域（只增不减）
     zone_name: str = ""  # 当前所在区域（多个用逗号分隔）
     loitered_zones: List[str] = field(default_factory=list)  # 生命周期内累计曾徘徊的区域（只增不减）
@@ -1337,7 +1337,7 @@ class TaskManager:
             bbox: 检测框坐标
             confidence: 置信度
             class_name: 类别名称
-            status: 事件状态（tracking_start/tracking_update/tracking_end/gif_ready），写入独立 status 列
+            status: 事件状态（tracking_start/tracking_update/initial/final/duplicate/tracking_end），写入独立 status 列
             entered_zones: 目标进入过的区域列表（只增不减）
             zone_name: 当前所在区域（多个用逗号分隔）
             loitered_zones: 生命周期内累计曾徘徊的区域列表（只增不减，写入独立列）
@@ -1466,6 +1466,7 @@ class TaskManager:
         camera_id: str = None,
         algorithm: str = None,
         event_type: str = None,
+        status: str = None,
         limit: int = 100,
         offset: int = 0
     ) -> List[EventRecord]:
@@ -1494,6 +1495,9 @@ class TaskManager:
             if event_type:
                 query += ' AND type = ?'
                 params.append(event_type)
+            if status:
+                query += ' AND status = ?'
+                params.append(status)
 
             query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
             params.extend([limit, offset])
@@ -1525,13 +1529,16 @@ class TaskManager:
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            # created_at 由 add_event 以本地时间(datetime.now())写入，
+            # 窗口比较必须用 localtime，否则 UTC 与本地时间错位 8 小时会把窗口放大
             query = '''SELECT id, event_id, task_id, camera_id, algorithm, type, class_name,
                        confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
                        local_gif_url, minio_gif_url, ftp_gif_url,
                        metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
                        ai_description, ai_description_model, ai_description_time, dedup_status, dedup_reason,
                        created_at FROM events
-                       WHERE created_at >= datetime('now', ?)'''
+                       WHERE created_at >= datetime('now', 'localtime', ?)
+                       AND (dedup_status IS NULL OR dedup_status != 'duplicate')'''
             params = [f'-{seconds} seconds']
 
             if camera_id:
@@ -1556,7 +1563,8 @@ class TaskManager:
         task_id: int = None,
         camera_id: str = None,
         algorithm: str = None,
-        event_type: str = None
+        event_type: str = None,
+        status: str = None
     ) -> int:
         """获取事件数量"""
         with sqlite3.connect(self.db_path) as conn:
@@ -1577,6 +1585,9 @@ class TaskManager:
             if event_type:
                 query += ' AND type = ?'
                 params.append(event_type)
+            if status:
+                query += ' AND status = ?'
+                params.append(status)
 
             cursor.execute(query, params)
             return cursor.fetchone()[0]
@@ -1614,7 +1625,7 @@ class TaskManager:
             cursor = conn.cursor()
             
             cursor.execute(
-                'DELETE FROM events WHERE created_at < datetime("now", ?)',
+                'DELETE FROM events WHERE created_at < datetime("now", "localtime", ?)',
                 (f'-{days} days',)
             )
             

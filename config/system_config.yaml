@@ -18,7 +18,7 @@ database:
   pool_enabled: false
   pool_size: 5
 web_server:
-  host: 192.168.5.2
+  host: 192.168.5.3
   port: 5556
   debug: false
   cors_enabled: true
@@ -69,15 +69,14 @@ events_cleanup:
   enabled: true
   retention_days: 7
   cleanup_interval_hours: 24
-  # 启动延迟秒数：避开系统启动高峰，防止清理线程抢占 SQLite 写锁导致系统卡住
   startup_delay_seconds: 120
-  # 每批清理的事件数：分批删除 + 批间休眠，缩短单次写锁占用时间
   batch_size: 200
-# 事件规则去重（事件管理功能，独立于大模型，不消耗 token）
 event_dedup:
   enabled: true
   window_seconds: 300
-  iou_threshold: 0.3
+  # IoU 阈值：检测框重叠度超过该值才判定为重复（固定摄像头下 0.3 过敏感，
+  # 会把反复经过同一位置的目标全部拦截；0.85 仅拦截高度重合的明显重复）
+  iou_threshold: 0.85
 node_management:
   enabled: false
   node_id: ''

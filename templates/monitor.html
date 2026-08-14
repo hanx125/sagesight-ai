@@ -609,6 +609,10 @@
                             <label>事件状态</label>
                             <span id="monitorEventStatus" class="event-status"></span>
                         </div>
+                        <div class="event-detail-item" id="monitorEventDedupWrap" style="display:none;">
+                            <label>去重原因</label>
+                            <span id="monitorEventDedupReason" style="color:#c62828; word-break:break-all;"></span>
+                        </div>
                         <div class="event-detail-item">
                             <label>目标类别</label>
                             <span id="monitorEventClass"></span>
@@ -689,7 +693,7 @@
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/ZLMRTCClient.js') }}"></script>
 <script src="{{ url_for('static', filename='js/jessibuca/jessibuca.js') }}"></script>
-<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260814"></script>
+<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260814f"></script>
 <script src="{{ url_for('static', filename='js/ptz_joystick.js') }}"></script>
 <script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}?v=20260801"></script>
 
@@ -801,6 +805,9 @@
 .event-status.status-start   { background: #e3f2fd; color: #1976d2; }  /* 跟踪开始：蓝 */
 .event-status.status-update  { background: #f3e5f5; color: #7b1fa2; }  /* 跟踪更新：紫 */
 .event-status.status-ended   { background: #6c757d; color: #fff; }     /* 已结束：灰 */
+.event-status.status-initial { background: #fff3e0; color: #e65100; }  /* 初始事件：橙 */
+.event-status.status-final   { background: #e8f5e9; color: #2e7d32; }  /* 最终事件：绿 */
+.event-status.status-duplicate { background: #ffebee; color: #c62828; } /* 被去重：红 */
 .event-status.status-gif     { background: #e8f5e9; color: #2e7d32; }  /* GIF就绪：绿 */
 .event-status.status-unknown { background: #eee; color: #555; }
 

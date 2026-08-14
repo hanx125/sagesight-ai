@@ -849,6 +849,7 @@ def get_events():
     algorithm = request.args.get('algorithm')
     class_name = request.args.get('class_name')
     event_type = request.args.get('event_type')
+    status = request.args.get('status')
 
     task_manager = get_task_manager()
     events = task_manager.get_events(
@@ -856,6 +857,7 @@ def get_events():
         camera_id=camera_id,
         algorithm=algorithm,
         event_type=event_type,
+        status=status,
         limit=per_page,
         offset=offset
     )
@@ -865,7 +867,8 @@ def get_events():
         task_id=task_id,
         camera_id=camera_id,
         algorithm=algorithm,
-        event_type=event_type
+        event_type=event_type,
+        status=status
     )
     
     events_dict = [event.to_dict() for event in events]

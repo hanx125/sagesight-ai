@@ -816,7 +816,7 @@ class EventOutput:
 
         Args:
             event_id: 事件 UUID
-            status: 事件状态（tracking_start / tracking_update / tracking_end / gif_ready），写入独立 status 列
+            status: 事件状态（tracking_start / tracking_update / initial / final / duplicate / tracking_end），写入独立 status 列
             data: 更新数据字典（可能包含 start_time, end_time, bbox 等）
             image: 可选的图片数据（RGB 格式 numpy 数组）
             push_websocket: 是否推送 event_update 到前端（end 时为 True）
@@ -1043,13 +1043,12 @@ class EventOutput:
             if not gif_urls:
                 return None
 
-            # 更新数据库中的 GIF URL 和状态
+            # 更新数据库中的 GIF URL（不覆盖事件状态：新状态机中状态由去重流程决定）
             from src.tasks.task_manager import TaskManager
             task_manager = TaskManager()
             task_manager.update_event(
                 event_id=event_id,
                 gif_urls=gif_urls,
-                status='gif_ready'
             )
 
             local_path = gif_urls.get('local', '')
@@ -1151,6 +1150,71 @@ class EventOutput:
             )
         except Exception as e:
             logger.debug(f"[EventOutput] MQTT 补推完整事件失败: {e}")
+
+    def push_ai_description_to_mqtt(self, event_id: str):
+        """AI 描述写入后补推事件数据到 MQTT（供 LLM 线程调用）
+
+        事件在 GIF 就绪时已补推一次完整数据（此时 AI 描述尚未生成）。
+        描述由大模型异步生成、时间晚于 GIF，故在此单独补推一次，
+        update_type='ai_description' 标记，供第三方更新事件描述。
+
+        内部经 io 线程池异步执行，不阻塞 LLM 线程。
+        """
+        if not self.mqtt_outputter:
+            return
+        self._io_executor.submit(self._push_ai_description_task, event_id)
+
+    def _push_ai_description_task(self, event_id: str):
+        """异步执行 AI 描述 MQTT 补推（在 io 线程池中运行）"""
+        try:
+            from src.tasks.task_manager import TaskManager
+            task_manager = TaskManager()
+            record = task_manager.get_event_by_id(event_id)
+            if record is None:
+                logger.debug(f"[EventOutput] MQTT 补推描述失败：未找到事件 {event_id[:8]}")
+                return
+
+            d = record.to_dict()
+            payload = {
+                'event_id': d['event_id'],
+                'update_type': 'ai_description',     # 标记：本消息为 AI 描述补推更新
+                'type': d['type'],                   # 最终事件类型（tracking/zone/loitering）
+                'status': d['status'],               # 当前事件状态（initial/final/duplicate）
+                'camera_id': d['camera_id'],
+                'task_id': d['task_id'],
+                'algorithm': d['algorithm'],
+                'class_name': d['class_name'],
+                'confidence': d['confidence'],
+                'bbox': d['bbox'],
+                'image_urls': {                      # 图片存储地址
+                    'local': d['local_image_url'],
+                    'minio': d['minio_image_url'],
+                    'ftp': d['ftp_image_url'],
+                },
+                'gif_urls': {                        # GIF 存储地址
+                    'local': d['local_gif_url'],
+                    'minio': d['minio_gif_url'],
+                    'ftp': d['ftp_gif_url'],
+                },
+                'entered_zones': d['entered_zones'],
+                'zone_name': d['zone_name'],
+                'loitered_zones': d['loitered_zones'],
+                'start_time': d['start_time'],
+                'end_time': d['end_time'],
+                'metadata': d['metadata'] or {},
+                # AI 描述相关字段（本次补推的核心）
+                'ai_description': d['ai_description'],
+                'ai_description_model': d['ai_description_model'],
+                'ai_description_time': d['ai_description_time'],
+            }
+            self.mqtt_outputter.send(payload)
+            logger.info(
+                f"[EventOutput] MQTT 补推 AI 描述: event_id={event_id[:8]}, "
+                f"model={d['ai_description_model']}, "
+                f"desc={str(d['ai_description'] or '')[:60]}"
+            )
+        except Exception as e:
+            logger.debug(f"[EventOutput] MQTT 补推 AI 描述失败: {e}")
 
     def close(self):
         """关闭所有输出器"""

@@ -346,11 +346,12 @@ function initWebSocket() {
             }
         });
 
-        // event_update（跟踪结束）：徘徊区域非空时补一次橙闪提示
+        // event_update（事件结束/去重完成）：徘徊区域非空时补一次橙闪提示
         socket.on('event_update', function(data) {
             try {
                 const loiteredZones = (data.loitered_zones || []);
-                if (loiteredZones.length > 0 && data.status === 'tracking_end') {
+                const status = data.status || '';
+                if (loiteredZones.length > 0 && ['initial', 'final', 'tracking_end'].includes(status)) {
                     triggerAlarm('loitering', data);
                 }
             } catch (e) {
@@ -3185,6 +3186,16 @@ function showMonitorEventDetail(event) {
     detailStatusEl.textContent = detailStatusInfo.text;
     detailStatusEl.className = `event-status ${detailStatusInfo.className}`;
 
+    // 去重原因展示（仅被去重事件且存在原因时显示）
+    const dedupWrap = document.getElementById('monitorEventDedupWrap');
+    const dedupReasonEl = document.getElementById('monitorEventDedupReason');
+    if (event.dedup_status === 'duplicate' && event.dedup_reason) {
+        dedupReasonEl.textContent = event.dedup_reason;
+        dedupWrap.style.display = '';
+    } else {
+        dedupWrap.style.display = 'none';
+    }
+
     document.getElementById('monitorEventClass').textContent = event.class_name || '-';
     document.getElementById('monitorEventChannel').textContent = event.channel_name || event.camera_id || '-';
     document.getElementById('monitorEventTask').textContent = getTaskNameById(event.task_id) || event.task_name || '-';
@@ -3418,7 +3429,11 @@ function getStatusDisplay(status) {
     const statusMap = {
         'tracking_start':  { text: '跟踪开始', className: 'status-start' },
         'tracking_update': { text: '跟踪更新', className: 'status-update' },
-        'tracking_end':    { text: '已结束',   className: 'status-ended' }
+        'tracking_end':    { text: '已结束',   className: 'status-ended' },
+        'initial':         { text: '初始事件', className: 'status-initial' },
+        'final':           { text: '最终事件', className: 'status-final' },
+        'duplicate':       { text: '被去重',   className: 'status-duplicate' },
+        'gif_ready':       { text: 'GIF就绪',  className: 'status-gif' }
     };
     return statusMap[status] || { text: status || '未知', className: 'status-unknown' };
 }

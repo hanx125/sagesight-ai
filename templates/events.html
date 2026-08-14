@@ -25,7 +25,7 @@
             </div>
             <div class="stat-content">
                 <div class="stat-value" id="statTrackStart">0</div>
-                <div class="stat-label">跟踪开始</div>
+                <div class="stat-label">初始事件</div>
             </div>
         </div>
         <div class="stat-card">
@@ -36,7 +36,7 @@
             </div>
             <div class="stat-content">
                 <div class="stat-value" id="statTrackEnd">0</div>
-                <div class="stat-label">跟踪结束</div>
+                <div class="stat-label">最终事件</div>
             </div>
         </div>
         <div class="stat-card">
@@ -68,6 +68,15 @@
                     <option value="tracking">目标跟踪</option>
                     <option value="zone">区域检测</option>
                     <option value="loitering">徘徊检测</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>状态：</label>
+                <select id="filterStatus" onchange="Events.applyEventFilters()">
+                    <option value="">全部状态</option>
+                    <option value="initial">初始事件</option>
+                    <option value="final">最终事件</option>
+                    <option value="duplicate">被去重</option>
                 </select>
             </div>
             <div class="filter-group">
@@ -224,6 +233,10 @@
                         <div class="event-detail-item">
                             <label>事件状态</label>
                             <span id="eventDetailStatus" class="event-status"></span>
+                        </div>
+                        <div class="event-detail-item" id="eventDetailDedupWrap" style="display:none;">
+                            <label>去重原因</label>
+                            <span id="eventDetailDedupReason" style="color:#c62828; word-break:break-all;"></span>
                         </div>
                         <div class="event-detail-item">
                             <label>目标类别</label>
@@ -496,6 +509,9 @@
     .event-status.status-start   { background: #e3f2fd; color: #1976d2; }  /* 跟踪开始：蓝 */
     .event-status.status-update  { background: #f3e5f5; color: #7b1fa2; }  /* 跟踪更新：紫 */
     .event-status.status-ended   { background: #6c757d; color: #fff; }     /* 已结束：灰 */
+    .event-status.status-initial { background: #fff3e0; color: #e65100; }  /* 初始事件：橙 */
+    .event-status.status-final   { background: #e8f5e9; color: #2e7d32; }  /* 最终事件：绿 */
+    .event-status.status-duplicate { background: #ffebee; color: #c62828; } /* 被去重：红 */
     .event-status.status-gif     { background: #e8f5e9; color: #2e7d32; }  /* GIF就绪：绿 */
     .event-status.status-unknown { background: #eee; color: #555; }
 
@@ -673,8 +689,8 @@ window.Events = (function() {
             const data = await response.json();
             
             document.getElementById('statTotal').textContent = data.total || 0;
-            document.getElementById('statTrackStart').textContent = data.by_status?.tracking_start || 0;
-            document.getElementById('statTrackEnd').textContent = data.by_status?.tracking_end || 0;
+            document.getElementById('statTrackStart').textContent = data.by_status?.initial || 0;
+            document.getElementById('statTrackEnd').textContent = data.by_status?.final || 0;
             document.getElementById('statCar').textContent = data.by_class?.car || 0;
             
             if (data.by_class) {
@@ -721,11 +737,13 @@ window.Events = (function() {
         const taskId = document.getElementById('filterTask').value;
         const type = document.getElementById('filterType').value;
         const className = document.getElementById('filterClass').value;
+        const status = document.getElementById('filterStatus').value;
         
         const params = new URLSearchParams({ page: currentPage, per_page: perPage });
         if (taskId) params.append('task_id', taskId);
         if (type) params.append('event_type', type);
         if (className) params.append('class_name', className);
+        if (status) params.append('status', status);
         
         try {
             const response = await fetch(`/api/events?${params.toString()}`);
@@ -905,6 +923,9 @@ window.Events = (function() {
             'tracking_start':  { text: '跟踪开始', className: 'status-start' },
             'tracking_update': { text: '跟踪更新', className: 'status-update' },
             'tracking_end':    { text: '已结束',   className: 'status-ended' },
+            'initial':         { text: '初始事件', className: 'status-initial' },
+            'final':           { text: '最终事件', className: 'status-final' },
+            'duplicate':       { text: '被去重',   className: 'status-duplicate' },
             'gif_ready':       { text: 'GIF就绪',  className: 'status-gif' }
         };
         return statusMap[status] || { text: status || '未知', className: 'status-unknown' };
@@ -989,6 +1010,7 @@ window.Events = (function() {
         document.getElementById('filterTask').value = '';
         document.getElementById('filterType').value = '';
         document.getElementById('filterClass').value = '';
+        document.getElementById('filterStatus').value = '';
         currentPage = 1;
         loadEvents();
     }
@@ -1016,6 +1038,16 @@ window.Events = (function() {
             const detailStatusEl = document.getElementById('eventDetailStatus');
             detailStatusEl.textContent = detailStatusInfo.text;
             detailStatusEl.className = `event-status ${detailStatusInfo.className}`;
+
+            // 去重原因展示（仅被去重事件且存在原因时显示）
+            const dedupWrap = document.getElementById('eventDetailDedupWrap');
+            const dedupReasonEl = document.getElementById('eventDetailDedupReason');
+            if (event.dedup_status === 'duplicate' && event.dedup_reason) {
+                dedupReasonEl.textContent = event.dedup_reason;
+                dedupWrap.style.display = '';
+            } else {
+                dedupWrap.style.display = 'none';
+            }
 
             document.getElementById('eventDetailClass').textContent = event.class_name || '-';
             document.getElementById('eventDetailConfidence').textContent = event.confidence ? (event.confidence * 100).toFixed(2) + '%' : '-';
@@ -1311,8 +1343,7 @@ window.Events = (function() {
                     currentEvents[eventIdx].ftp_gif_url = data.ftp_gif_url || '';
                 }
 
-                // ✅ GIF 就绪后状态统一置为 gif_ready
-                updateEventStatusUI(data.event_id, 'gif_ready');
+                // 状态保持当前值（初始/最终/被去重由状态机管理，gif_ready 仅用于推送事件名）
             });
 
             eventGifSocket.on('connect', () => {

@@ -1443,57 +1443,24 @@ class TrackedObjectProcessor(mp.Process):
                 f"duration={frame_time - event_start_frame_time:.2f}s"
             )
 
-        # 更新事件状态 + 推送前端
-        event_output.update_event(
-            event_id,
-            status="tracking_end",
-            data=update_data,
-            image=final_image,
-            push_websocket=True,
-            event_type=self._derive_event_type(obj_dict),
-        )
-
-        # 异步生成 GIF
-        if passes_zones and event_output.gif_enabled and self.gif_executor:
-            frame_cache = self.frame_caches.get(camera_id)
-            if frame_cache is not None:
-                gif_cfg = event_output.gif_cfg
-                pre_seconds = gif_cfg.get('pre_seconds', 5.0)
-                post_seconds = gif_cfg.get('post_seconds', 0.0)
-                max_frames = gif_cfg.get('max_frames', 60)
-
-                retrieval_start = event_start_frame_time - pre_seconds
-                retrieval_end = frame_time
-
-                cached_frames = frame_cache.get_frames(
-                    retrieval_start, retrieval_end, max_frames=max_frames
-                )
-
-                if cached_frames and len(cached_frames) >= 2:
-                    frames = [img for _, img in cached_frames]
-                    trajectory_points = obj_dict.get("trajectory", [])
-
-                    logger.debug(
-                        f"[{camera_id}] GIF 帧回取成功(宽限期超时): {len(frames)}帧"
-                    )
-
-                    if post_seconds > 0:
-                        self._schedule_delayed_gif(
-                            event_output, event_id, camera_id,
-                            frames, bbox, trajectory_points,
-                            frame_time, post_seconds, max_frames
-                        )
-                    else:
-                        self.gif_executor.submit(
-                            self._async_generate_gif,
-                            event_output, event_id,
-                            frames=frames, camera_id=camera_id,
-                            bbox=bbox, trajectory_points=trajectory_points,
-                        )
-
-        # 事件后处理（仅对通过区域过滤的事件）
-        if passes_zones and event_id:
-            # 1. 规则去重（事件管理功能，独立于大模型，不消耗 token）
+        if not passes_zones:
+            # 未通过区域过滤：保持原行为，仅更新基础数据（状态=已结束，不参与去重）
+            event_output.update_event(
+                event_id,
+                status="tracking_end",
+                data=update_data,
+                image=final_image,
+                push_websocket=True,
+                event_type=self._derive_event_type(obj_dict),
+            )
+        else:
+            # ========================================
+            # 通过区域过滤：新状态机流转
+            # 1. 规则去重前置（事件管理功能，独立于大模型，不消耗 token）
+            #    - 判重 → 状态=被去重，不生成最终图片/GIF，跳过语义去重（节省资源）
+            #    - 未判重 → 生成图片和事件数据 → 状态=初始事件
+            # 2. 语义去重（大模型，前提打开大模型功能）→ 最终事件 / 被去重
+            # ========================================
             dedup_status = "normal"
             dedup_reason = ""
             if self.rule_deduper is not None:
@@ -1504,37 +1471,105 @@ class TrackedObjectProcessor(mp.Process):
                         class_name=class_name,
                         bbox=bbox,
                     )
-                    if dedup_status == "duplicate":
-                        from src.tasks.task_manager import TaskManager
-                        tm = TaskManager()
-                        tm.update_event(
-                            event_id,
-                            dedup_status=dedup_status,
-                            dedup_reason=dedup_reason,
-                        )
                 except Exception as e:
                     logger.warning(f"[RuleDedup] 规则去重失败 event={event_id[:8]}: {e}")
 
-            # 2. 规则层未判定重复才提交大模型任务（语义去重 + 描述）
-            if dedup_status != "duplicate" and final_image is not None and self.llm_executor:
-                cam_cfg = self.camera_configs.get(camera_id, {})
-                event_info = {
-                    'class_name': class_name,
-                    'camera_name': cam_cfg.get('camera_name', camera_id),
-                    'zone_name': ",".join(entered_zones) if entered_zones else '',
-                    'event_type': self._derive_event_type(obj_dict),
-                    'duration': frame_time - event_start_frame_time,
-                    'start_time': event_start_time,
-                }
-                self.llm_executor.submit(
-                    self._async_llm_process,
-                    event_id=event_id,
-                    camera_id=camera_id,
-                    class_name=class_name,
-                    bbox=bbox,
-                    image=final_image,
-                    event_info=event_info,
+            if dedup_status == "duplicate":
+                # 规则去重判重：状态=被去重，不生成最终图片/GIF，跳过语义去重
+                event_output.update_event(
+                    event_id,
+                    status="duplicate",
+                    data=update_data,
+                    image=None,
+                    push_websocket=True,
+                    event_type=self._derive_event_type(obj_dict),
                 )
+                from src.tasks.task_manager import TaskManager
+                tm = TaskManager()
+                tm.update_event(
+                    event_id,
+                    dedup_status=dedup_status,
+                    dedup_reason=dedup_reason,
+                )
+                logger.info(
+                    f"[{camera_id}] 事件被规则去重: event_id={event_id[:8]}, "
+                    f"reason={dedup_reason[:80]}"
+                )
+            else:
+                # 规则未判重：生成图片和事件数据 → 状态=初始事件
+                event_output.update_event(
+                    event_id,
+                    status="initial",
+                    data=update_data,
+                    image=final_image,
+                    push_websocket=True,
+                    event_type=self._derive_event_type(obj_dict),
+                )
+
+                # 异步生成 GIF（仅初始事件）
+                if event_output.gif_enabled and self.gif_executor:
+                    frame_cache = self.frame_caches.get(camera_id)
+                    if frame_cache is not None:
+                        gif_cfg = event_output.gif_cfg
+                        pre_seconds = gif_cfg.get('pre_seconds', 5.0)
+                        post_seconds = gif_cfg.get('post_seconds', 0.0)
+                        max_frames = gif_cfg.get('max_frames', 60)
+
+                        retrieval_start = event_start_frame_time - pre_seconds
+                        retrieval_end = frame_time
+
+                        cached_frames = frame_cache.get_frames(
+                            retrieval_start, retrieval_end, max_frames=max_frames
+                        )
+
+                        if cached_frames and len(cached_frames) >= 2:
+                            frames = [img for _, img in cached_frames]
+                            trajectory_points = obj_dict.get("trajectory", [])
+
+                            logger.debug(
+                                f"[{camera_id}] GIF 帧回取成功(宽限期超时): {len(frames)}帧"
+                            )
+
+                            if post_seconds > 0:
+                                self._schedule_delayed_gif(
+                                    event_output, event_id, camera_id,
+                                    frames, bbox, trajectory_points,
+                                    frame_time, post_seconds, max_frames
+                                )
+                            else:
+                                self.gif_executor.submit(
+                                    self._async_generate_gif,
+                                    event_output, event_id,
+                                    frames=frames, camera_id=camera_id,
+                                    bbox=bbox, trajectory_points=trajectory_points,
+                                )
+
+                # 语义去重（大模型，前提打开大模型功能）+ 描述：
+                # 异步完成后由 _async_llm_process 切换状态 → 最终事件 / 被去重
+                if final_image is not None and self.llm_executor:
+                    cam_cfg = self.camera_configs.get(camera_id, {})
+                    event_info = {
+                        'class_name': class_name,
+                        'camera_name': cam_cfg.get('camera_name', camera_id),
+                        'zone_name': ",".join(entered_zones) if entered_zones else '',
+                        'event_type': self._derive_event_type(obj_dict),
+                        'duration': frame_time - event_start_frame_time,
+                        'start_time': event_start_time,
+                    }
+                    self.llm_executor.submit(
+                        self._async_llm_process,
+                        event_id=event_id,
+                        camera_id=camera_id,
+                        class_name=class_name,
+                        bbox=bbox,
+                        image=final_image,
+                        event_info=event_info,
+                    )
+                else:
+                    # 大模型未启用或无最终快照：直接作为最终事件（状态切换）
+                    from src.tasks.task_manager import TaskManager
+                    tm = TaskManager()
+                    tm.update_event(event_id, status="final", dedup_status="normal")
 
         # 清理缩略图
         event_output.clear_thumbnail(event_id)
@@ -1580,11 +1615,17 @@ class TrackedObjectProcessor(mp.Process):
             logger.debug(f"[LLM] 图片编码失败 event={event_id[:8]}: {e}")
 
         if image_bytes is None:
+            # 无可处理快照：无法执行语义去重，直接作为最终事件
+            from src.tasks.task_manager import TaskManager
+            tm = TaskManager()
+            tm.update_event(event_id, status="final", dedup_status="normal")
             return
 
         # 语义层去重（大模型，仅对规则层未判重的候选事件）
         dedup_status = "normal"
         dedup_reason = ""
+        from src.tasks.task_manager import TaskManager
+        tm = TaskManager()
         if self.llm_deduplicator is not None:
             try:
                 dedup_status, dedup_reason = self.llm_deduplicator.semantic_check(
@@ -1593,16 +1634,44 @@ class TrackedObjectProcessor(mp.Process):
                     class_name=class_name,
                     image_bytes=image_bytes,
                 )
-                # 写入去重结果
-                from src.tasks.task_manager import TaskManager
-                tm = TaskManager()
-                tm.update_event(
-                    event_id,
-                    dedup_status=dedup_status,
-                    dedup_reason=dedup_reason,
-                )
             except Exception as e:
                 logger.warning(f"[LLM] 语义去重失败 event={event_id[:8]}: {e}")
+
+        # 状态切换：重复 → 被去重；正常/未启用语义去重 → 最终事件
+        # 写库后事件状态机完成最终流转（初始事件 → 最终事件 / 被去重）
+        final_status = "duplicate" if dedup_status == "duplicate" else "final"
+        tm.update_event(
+            event_id,
+            status=final_status,
+            dedup_status=dedup_status,
+            dedup_reason=dedup_reason,
+        )
+
+        # 推送状态切换到前端（驾驶舱实时刷新徽章）
+        try:
+            from src.system.system_config_loader import get_web_server_host, get_web_server_port
+            payload = {
+                'event_id': event_id,
+                'status': final_status,
+                'dedup_status': dedup_status,
+                'dedup_reason': dedup_reason,
+                'data': {},
+            }
+            if self._http_session is not None:
+                self._http_session.post(
+                    f'http://{get_web_server_host("0.0.0.0")}:{get_web_server_port()}/api/events/update',
+                    json=payload,
+                    timeout=2.0,
+                )
+            else:
+                import requests
+                requests.post(
+                    f'http://{get_web_server_host("0.0.0.0")}:{get_web_server_port()}/api/events/update',
+                    json=payload,
+                    timeout=2.0,
+                )
+        except Exception as e:
+            logger.debug(f"[LLM] 推送状态切换失败 event={event_id[:8]}: {e}")
 
         # 重复事件不再生成描述
         if dedup_status == "duplicate":
@@ -1633,6 +1702,16 @@ class TrackedObjectProcessor(mp.Process):
                         f"[LLM] 事件描述已写入: event={event_id[:8]}, "
                         f"desc={description[:60]}"
                     )
+
+                    # ✅ AI 描述写入后补推一次 MQTT（第三方订阅可获取描述）
+                    event_output = self.event_outputs.get(camera_id)
+                    if event_output is not None:
+                        try:
+                            event_output.push_ai_description_to_mqtt(event_id)
+                        except Exception as e:
+                            logger.debug(
+                                f"[LLM] MQTT 补推 AI 描述失败 event={event_id[:8]}: {e}"
+                            )
             except Exception as e:
                 logger.warning(f"[LLM] 描述生成失败 event={event_id[:8]}: {e}")
 
