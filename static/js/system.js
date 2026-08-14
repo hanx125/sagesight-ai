@@ -1704,11 +1704,11 @@ function renderLLMConfigsList() {
                 
                 <div class="server-card-footer">
                     <div class="server-actions">
-                        <button class="server-btn" onclick="System.testLLMConfig(${config.id})">
+                        <button class="server-btn" id="llm-test-btn-${config.id}" onclick="System.testLLMConfig(${config.id})">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z"/>
                             </svg>
-                            测试
+                            <span>测试</span>
                         </button>
                         ${!config.is_default ? `
                         <button class="server-btn" onclick="System.setDefaultLLMConfig(${config.id})">
@@ -1907,8 +1907,35 @@ async function setDefaultLLMConfig(configId) {
     }
 }
 
+// 轻量 Toast 提示（即时视觉反馈，不依赖全局通知中心）
+function showLLMToast(message, type) {
+    let toast = document.getElementById('llmToast');
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'llmToast';
+        document.body.appendChild(toast);
+    }
+    toast.className = 'llm-toast ' + (type || 'info');
+    toast.textContent = message;
+    toast.style.display = 'block';
+    clearTimeout(showLLMToast._timer);
+    showLLMToast._timer = setTimeout(function() {
+        toast.style.display = 'none';
+    }, 2500);
+}
+
 async function testLLMConfig(configId) {
-    showNotification('正在测试大模型连接...', 'info');
+    // 按钮进入测试中状态，防止重复点击
+    const btn = document.getElementById('llm-test-btn-' + configId);
+    if (btn) {
+        btn.disabled = true;
+        const label = btn.querySelector('span');
+        if (label) {
+            btn.dataset.original = label.textContent;
+            label.textContent = '测试中...';
+        }
+    }
+    showLLMToast('正在测试大模型连接...', 'info');
     
     try {
         const response = await fetch(`/api/system/llm-configs/${configId}/test`, {
@@ -1918,14 +1945,23 @@ async function testLLMConfig(configId) {
         const result = await response.json();
         
         if (response.ok) {
-            showNotification(`连接成功: ${result.reply || ''}`, 'success');
+            showLLMToast(`连接成功: ${result.reply || ''}`, 'success');
         } else {
-            showNotification(result.error || '连接失败', 'error');
+            showLLMToast(result.error || '连接失败', 'error');
         }
         
     } catch (error) {
         console.error('测试大模型连接失败:', error);
-        showNotification('测试大模型连接失败', 'error');
+        showLLMToast('测试大模型连接失败', 'error');
+    } finally {
+        // 恢复按钮状态
+        if (btn) {
+            btn.disabled = false;
+            const label = btn.querySelector('span');
+            if (label) {
+                label.textContent = btn.dataset.original || '测试';
+            }
+        }
     }
 }
 

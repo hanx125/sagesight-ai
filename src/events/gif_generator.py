@@ -605,6 +605,7 @@ class GIFGenerator:
         清理过期的本地文件
         
         根据 local_retention_days 配置，删除超过保留天数的文件。
+        采用分批删除 + 批间休眠，避免一次性删除大量文件时阻塞事件处理进程。
         """
         if not os.path.exists(self.output_dir):
             return
@@ -619,36 +620,54 @@ class GIFGenerator:
         # 计算过期时间
         retention_seconds = self.local_retention_days * 24 * 3600
         
-        # 遍历目录
-        deleted_count = 0
-        total_size = 0
+        # 分批清理参数
+        batch_size = 200
+        batch_sleep_seconds = 0.05
         
+        # 1. 先扫描出过期文件列表（listdir + stat）
+        expired_files = []
         try:
             for filename in os.listdir(self.output_dir):
                 filepath = os.path.join(self.output_dir, filename)
-                
-                # 检查文件修改时间
-                if os.path.isfile(filepath):
-                    file_mtime = os.path.getmtime(filepath)
-                    age_seconds = current_time - file_mtime
-                    
-                    # 删除过期文件
-                    if age_seconds > retention_seconds:
+                if not os.path.isfile(filepath):
+                    continue
+                file_mtime = os.path.getmtime(filepath)
+                if current_time - file_mtime > retention_seconds:
+                    expired_files.append(filepath)
+        except Exception as e:
+            logger.debug(f"[GIFGenerator] 扫描过期文件失败: {e}")
+            return
+        
+        if not expired_files:
+            self.last_cleanup_time = current_time
+            return
+        
+        # 2. 分批删除，批间休眠让出文件系统/CPU
+        deleted_count = 0
+        total_size = 0
+        try:
+            for i in range(0, len(expired_files), batch_size):
+                batch = expired_files[i:i + batch_size]
+                for filepath in batch:
+                    try:
                         file_size = os.path.getsize(filepath)
                         os.remove(filepath)
                         deleted_count += 1
                         total_size += file_size
-            
-            # 更新清理时间
-            self.last_cleanup_time = current_time
-            
-            if deleted_count > 0:
-                logger.debug(f"[GIFGenerator] 已清理 {deleted_count} 个过期文件")
-                logger.debug(f"[GIFGenerator]   释放空间: {total_size / 1024 / 1024:.2f} MB")
-                logger.debug(f"[GIFGenerator]   保留天数: {self.local_retention_days}")
-        
+                    except OSError:
+                        # 文件可能已被其他清理逻辑删除，跳过
+                        pass
+                time.sleep(batch_sleep_seconds)
         except Exception as e:
             logger.debug(f"[GIFGenerator] 清理文件失败: {e}")
+        
+        # 更新清理时间
+        self.last_cleanup_time = current_time
+        
+        if deleted_count > 0:
+            logger.debug(f"[GIFGenerator] 已清理 {deleted_count} 个过期文件")
+            logger.debug(f"[GIFGenerator]   释放空间: {total_size / 1024 / 1024:.2f} MB")
+            logger.debug(f"[GIFGenerator]   保留天数: {self.local_retention_days}")
     
     def close(self):
         """关闭 GIF 生成器"""

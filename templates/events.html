@@ -175,82 +175,109 @@
 <div id="eventDetailModal" class="modal">
     <div class="modal-content modal-large">
         <div class="modal-header">
-            <h3>事件详情</h3>
+            <div class="modal-header-title">
+                <span class="modal-header-icon">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+                    </svg>
+                </span>
+                <h3>事件详情</h3>
+            </div>
             <button class="modal-close" onclick="Events.closeEventDetailModal()">&times;</button>
         </div>
         <div class="modal-body">
             <div class="event-detail-content">
                 <div class="event-detail-image-container">
                     <div class="event-media-switcher">
-                        <button class="btn btn-sm btn-primary" id="showImageBtn" onclick="Events.switchEventMedia('image')">显示图片</button>
-                        <button class="btn btn-sm btn-secondary" id="showGifBtn" onclick="Events.switchEventMedia('gif')">显示GIF</button>
+                        <button class="btn btn-sm btn-primary" id="showImageBtn" onclick="Events.switchEventMedia('image')">图片</button>
+                        <button class="btn btn-sm btn-secondary" id="showGifBtn" onclick="Events.switchEventMedia('gif')">GIF</button>
                     </div>
-                    <img id="eventDetailImage" src="" alt="事件图片" class="event-detail-image" style="display: block;">
-                    <img id="eventDetailGif" src="" alt="事件GIF" class="event-detail-image" style="display: none;">
-                    <div class="event-detail-no-image" id="eventDetailNoImage" style="display: none;">
-                        <svg viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
-                        </svg>
-                        <span>无媒体文件</span>
+                    <div class="event-detail-image-wrapper">
+                        <img id="eventDetailImage" src="" alt="事件图片" class="event-detail-image" style="display: block;">
+                        <img id="eventDetailGif" src="" alt="事件GIF" class="event-detail-image" style="display: none;">
+                        <div class="event-detail-no-image" id="eventDetailNoImage" style="display: none;">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                            </svg>
+                            <span>无媒体文件</span>
+                        </div>
+                    </div>
+                    <div class="event-detail-group event-detail-ai-desc">
+                        <div class="event-detail-group-title">AI 事件描述</div>
+                        <div class="event-detail-ai-content" id="eventDetailAiDesc">
+                            <div class="event-detail-ai-placeholder">暂无 AI 描述</div>
+                        </div>
                     </div>
                 </div>
-                
+
                 <div class="event-detail-info">
-                    <div class="event-detail-row">
-                        <label>事件ID：</label>
-                        <span id="eventDetailId"></span>
+                    <div class="event-detail-group">
+                        <div class="event-detail-group-title">基本信息</div>
+                        <div class="event-detail-item">
+                            <label>事件ID</label>
+                            <span id="eventDetailId"></span>
+                        </div>
+                        <div class="event-detail-item">
+                            <label>事件类型</label>
+                            <span id="eventDetailType"></span>
+                        </div>
+                        <div class="event-detail-item">
+                            <label>事件状态</label>
+                            <span id="eventDetailStatus" class="event-status"></span>
+                        </div>
+                        <div class="event-detail-item">
+                            <label>目标类别</label>
+                            <span id="eventDetailClass"></span>
+                        </div>
+                        <div class="event-detail-item">
+                            <label>置信度</label>
+                            <span id="eventDetailConfidence"></span>
+                        </div>
                     </div>
-                    <div class="event-detail-row">
-                        <label>事件类型：</label>
-                        <span id="eventDetailType"></span>
+                    <div class="event-detail-group">
+                        <div class="event-detail-group-title">设备与任务</div>
+                        <div class="event-detail-item">
+                            <label>设备通道</label>
+                            <span id="eventDetailCamera"></span>
+                        </div>
+                        <div class="event-detail-item">
+                            <label>任务</label>
+                            <span id="eventDetailTask"></span>
+                        </div>
+                        <div class="event-detail-item">
+                            <label>算法</label>
+                            <span id="eventDetailAlgorithm"></span>
+                        </div>
                     </div>
-                    <div class="event-detail-row">
-                        <label>事件状态：</label>
-                        <span id="eventDetailStatus"></span>
+                    <div class="event-detail-group">
+                        <div class="event-detail-group-title">区域信息</div>
+                        <div class="event-detail-item">
+                            <label>进入区域</label>
+                            <span id="eventDetailEnteredZones"></span>
+                        </div>
+                        <div class="event-detail-item">
+                            <label>当前区域</label>
+                            <span id="eventDetailZoneName"></span>
+                        </div>
+                        <div class="event-detail-item">
+                            <label>徘徊区域</label>
+                            <span id="eventDetailLoiteredZones"></span>
+                        </div>
                     </div>
-                    <div class="event-detail-row">
-                        <label>目标类别：</label>
-                        <span id="eventDetailClass"></span>
-                    </div>
-                    <div class="event-detail-row">
-                        <label>置信度：</label>
-                        <span id="eventDetailConfidence"></span>
-                    </div>
-                    <div class="event-detail-row">
-                        <label>设备通道：</label>
-                        <span id="eventDetailCamera"></span>
-                    </div>
-                    <div class="event-detail-row">
-                        <label>任务：</label>
-                        <span id="eventDetailTask"></span>
-                    </div>
-                    <div class="event-detail-row">
-                        <label>算法：</label>
-                        <span id="eventDetailAlgorithm"></span>
-                    </div>
-                    <div class="event-detail-row">
-                        <label>进入区域：</label>
-                        <span id="eventDetailEnteredZones"></span>
-                    </div>
-                    <div class="event-detail-row">
-                        <label>当前区域：</label>
-                        <span id="eventDetailZoneName"></span>
-                    </div>
-                    <div class="event-detail-row">
-                        <label>徘徊区域：</label>
-                        <span id="eventDetailLoiteredZones"></span>
-                    </div>
-                    <div class="event-detail-row">
-                        <label>起始时间：</label>
-                        <span id="eventDetailStartTime"></span>
-                    </div>
-                    <div class="event-detail-row">
-                        <label>终止时间：</label>
-                        <span id="eventDetailEndTime"></span>
-                    </div>
-                    <div class="event-detail-row">
-                        <label>记录时间：</label>
-                        <span id="eventDetailTime"></span>
+                    <div class="event-detail-group">
+                        <div class="event-detail-group-title">时间信息</div>
+                        <div class="event-detail-item">
+                            <label>起始时间</label>
+                            <span id="eventDetailStartTime"></span>
+                        </div>
+                        <div class="event-detail-item">
+                            <label>终止时间</label>
+                            <span id="eventDetailEndTime"></span>
+                        </div>
+                        <div class="event-detail-item">
+                            <label>记录时间</label>
+                            <span id="eventDetailTime"></span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -587,39 +614,6 @@
     .stat-icon-track { background: rgba(33, 150, 243, 0.1); color: #2196f3; }
     .stat-icon-end { background: rgba(255, 152, 0, 0.1); color: #ff9800; }
 
-    /* 详情模态框 */
-    .event-detail-content { display: flex; gap: 24px; }
-    .event-detail-image-container { flex: 1; min-width: 300px; height: 320px; }
-    .event-media-switcher {
-        display: flex;
-        gap: 8px;
-        margin-bottom: 12px;
-        justify-content: center;
-    }
-    .event-media-switcher .btn-sm {
-        padding: 6px 16px;
-        font-size: 13px;
-        border-radius: 4px;
-        transition: all 0.2s;
-    }
-    .event-detail-image { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; background: #1a1a1a; }
-    .event-detail-no-image {
-        width: 100%;
-        height: 300px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        background: #f5f5f5;
-        border-radius: 8px;
-        color: #999;
-    }
-    .event-detail-no-image svg { width: 64px; height: 64px; margin-bottom: 12px; }
-    .event-detail-info { flex: 1; display: flex; flex-direction: column; gap: 12px; }
-    .event-detail-row { display: flex; gap: 12px; font-size: 14px; }
-    .event-detail-row label { min-width: 80px; color: var(--text-secondary); }
-    .event-detail-row span { color: var(--text-primary); }
-
     /* 清理模态框输入框样式 */
     #customDays {
         width: 100%;
@@ -916,6 +910,13 @@ window.Events = (function() {
         return statusMap[status] || { text: status || '未知', className: 'status-unknown' };
     }
 
+    // HTML 转义（用于 AI 描述等动态内容安全渲染）
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = String(text == null ? '' : text);
+        return div.innerHTML;
+    }
+
     function updatePagination() {
         const prevBtn = document.getElementById('prevBtn');
         const nextBtn = document.getElementById('nextBtn');
@@ -1030,6 +1031,19 @@ window.Events = (function() {
             document.getElementById('eventDetailStartTime').textContent = event.start_time ? new Date(event.start_time).toLocaleString() : '-';
             document.getElementById('eventDetailEndTime').textContent = event.end_time ? new Date(event.end_time).toLocaleString() : '-';
             document.getElementById('eventDetailTime').textContent = event.created_at ? new Date(event.created_at).toLocaleString() : '-';
+
+            // AI 事件描述（统一格式渲染）
+            const aiDescEl = document.getElementById('eventDetailAiDesc');
+            if (event.ai_description) {
+                const aiMetaParts = [];
+                if (event.ai_description_model) aiMetaParts.push('模型: ' + event.ai_description_model);
+                if (event.ai_description_time) aiMetaParts.push('时间: ' + new Date(event.ai_description_time).toLocaleString());
+                aiDescEl.innerHTML =
+                    '<p class="event-detail-ai-text">' + escapeHtml(event.ai_description) + '</p>' +
+                    (aiMetaParts.length ? '<p class="event-detail-ai-meta">' + aiMetaParts.join(' · ') + '</p>' : '');
+            } else {
+                aiDescEl.innerHTML = '<div class="event-detail-ai-placeholder">暂无 AI 描述</div>';
+            }
 
             // 获取图片和 GIF URL
             const rawImageUrl = event.local_image_url || event.minio_image_url || event.ftp_image_url;

@@ -162,6 +162,8 @@ def get_events_cleanup_config() -> Dict[str, Any]:
         - enabled: 是否启用自动清理后台线程（默认 False）
         - retention_days: 事件保留天数，超过则清理（默认 7）
         - cleanup_interval_hours: 自动清理间隔小时数（默认 24）
+        - startup_delay_seconds: 启动延迟秒数，避开系统启动高峰（默认 120）
+        - batch_size: 每批清理的事件数，批间休眠让出 SQLite 锁（默认 200）
     """
     config = load_system_config()
     cleanup_cfg = config.get('events_cleanup', {})
@@ -169,6 +171,8 @@ def get_events_cleanup_config() -> Dict[str, Any]:
         'enabled': cleanup_cfg.get('enabled', False),
         'retention_days': cleanup_cfg.get('retention_days', 7),
         'cleanup_interval_hours': cleanup_cfg.get('cleanup_interval_hours', 24),
+        'startup_delay_seconds': cleanup_cfg.get('startup_delay_seconds', 120),
+        'batch_size': cleanup_cfg.get('batch_size', 200),
     }
 
 

@@ -69,6 +69,10 @@ events_cleanup:
   enabled: true
   retention_days: 7
   cleanup_interval_hours: 24
+  # 启动延迟秒数：避开系统启动高峰，防止清理线程抢占 SQLite 写锁导致系统卡住
+  startup_delay_seconds: 120
+  # 每批清理的事件数：分批删除 + 批间休眠，缩短单次写锁占用时间
+  batch_size: 200
 node_management:
   enabled: false
   node_id: ''

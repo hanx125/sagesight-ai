@@ -18,12 +18,17 @@ URL格式：
 import os
 import sqlite3
 import threading
+import time
 from typing import Dict, List, Optional
 from urllib.parse import urlparse, unquote
 
 import logging
 
 logger = logging.getLogger(__name__)
+
+# 分批清理参数：每批处理的事件数 / 每批之间的休眠秒数（让出 CPU 与 SQLite 锁）
+_DEFAULT_BATCH_SIZE = 200
+_BATCH_SLEEP_SECONDS = 0.05
 
 
 class EventCleanupService:
@@ -48,12 +53,20 @@ class EventCleanupService:
         self._minio_outputter = None
         self._ftp_outputter = None
 
-    def cleanup_events_by_days(self, days: int) -> Dict:
+    def cleanup_events_by_days(self, days: int, batch_size: Optional[int] = None) -> Dict:
         """
         清理超过指定天数的事件（含存储对象）
 
+        分批处理，避免一次性大查询/大删除长时间占用 SQLite 写锁导致系统卡住：
+        1. 每批最多查询 batch_size 条过期事件（从最早的开始）
+        2. 逐条清理该批事件的存储对象
+        3. 按 event_id 批量删除该批数据库记录
+        4. 批间休眠让出锁，给 Web 请求和事件处理留出窗口
+        5. 循环直到没有更多过期事件
+
         Args:
             days: 保留天数，清理超过此天数的事件
+            batch_size: 每批处理的事件数（None 时使用默认值）
 
         Returns:
             清理统计字典：
@@ -64,72 +77,85 @@ class EventCleanupService:
                 'total_files': 处理的文件总数
             }
         """
-        logger.info(f"[EventCleanup] 开始清理超过 {days} 天的事件")
+        if batch_size is None:
+            batch_size = _DEFAULT_BATCH_SIZE
 
-        # 1. 查询过期事件（含6个URL字段）
-        expired_events = self._query_expired_events(days)
-        if not expired_events:
-            logger.info(f"[EventCleanup] 没有超过 {days} 天的事件需要清理")
-            return {
-                'deleted_records': 0,
-                'deleted_files': 0,
-                'failed_files': 0,
-                'total_files': 0
-            }
+        logger.info(f"[EventCleanup] 开始清理超过 {days} 天的事件 (batch_size={batch_size})")
 
-        logger.info(f"[EventCleanup] 发现 {len(expired_events)} 条过期事件，开始清理存储对象")
-
-        # 2. 逐个事件清理存储对象
+        total_deleted_records = 0
         total_deleted_files = 0
         total_failed_files = 0
         total_files = 0
 
-        for event in expired_events:
-            try:
-                result = self._cleanup_event_storage(event)
-                total_deleted_files += result['deleted']
-                total_failed_files += result['failed']
-                total_files += result['total']
-            except Exception as e:
-                logger.error(f"[EventCleanup] 清理事件存储失败 event_id={event.get('event_id', '')}: {e}")
+        batch_no = 0
+        while True:
+            batch_no += 1
 
-        # 3. 删除数据库记录
-        deleted_records = self._delete_expired_records(days)
+            # 1. 查询一批过期事件（LIMIT batch_size）
+            expired_events = self._query_expired_events(days, limit=batch_size)
+            if not expired_events:
+                break
+
+            logger.info(f"[EventCleanup] 批次 {batch_no}: 处理 {len(expired_events)} 条过期事件")
+
+            # 2. 逐条清理该批事件的存储对象
+            for event in expired_events:
+                try:
+                    result = self._cleanup_event_storage(event)
+                    total_deleted_files += result['deleted']
+                    total_failed_files += result['failed']
+                    total_files += result['total']
+                except Exception as e:
+                    logger.error(f"[EventCleanup] 清理事件存储失败 event_id={event.get('event_id', '')}: {e}")
+
+            # 3. 按 event_id 批量删除该批数据库记录
+            event_ids = [event['event_id'] for event in expired_events]
+            total_deleted_records += self._delete_expired_records(event_ids)
+
+            # 4. 批间休眠，让出 SQLite 锁给其他请求
+            time.sleep(_BATCH_SLEEP_SECONDS)
 
         logger.info(
-            f"[EventCleanup] 清理完成: 删除 {deleted_records} 条事件记录, "
+            f"[EventCleanup] 清理完成: 删除 {total_deleted_records} 条事件记录, "
             f"删除 {total_deleted_files} 个文件, 失败 {total_failed_files} 个, "
             f"总计处理 {total_files} 个文件"
         )
 
         return {
-            'deleted_records': deleted_records,
+            'deleted_records': total_deleted_records,
             'deleted_files': total_deleted_files,
             'failed_files': total_failed_files,
             'total_files': total_files
         }
 
-    def _query_expired_events(self, days: int) -> List[Dict]:
+    def _query_expired_events(self, days: int, limit: Optional[int] = None) -> List[Dict]:
         """
         查询过期事件（含6个URL字段）
 
         Args:
             days: 保留天数
+            limit: 每批最多返回的事件数（分批清理时使用，None 表示不限制）
 
         Returns:
-            过期事件列表，每个事件是包含6个URL字段的字典
+            过期事件列表（按 created_at 升序，从最早的事件开始处理）
         """
         events = []
         try:
+            sql = (
+                '''SELECT event_id, local_image_url, minio_image_url, ftp_image_url,
+                          local_gif_url, minio_gif_url, ftp_gif_url
+                   FROM events
+                   WHERE created_at < datetime("now", "localtime", ?)
+                   ORDER BY created_at ASC, id ASC'''
+            )
+            params: List = [f'-{days} days']
+            if limit is not None:
+                sql += ' LIMIT ?'
+                params.append(limit)
+
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    '''SELECT event_id, local_image_url, minio_image_url, ftp_image_url,
-                              local_gif_url, minio_gif_url, ftp_gif_url
-                       FROM events
-                       WHERE created_at < datetime("now", "localtime", ?)''',
-                    (f'-{days} days',)
-                )
+                cursor.execute(sql, params)
                 rows = cursor.fetchall()
 
                 for row in rows:
@@ -147,14 +173,24 @@ class EventCleanupService:
 
         return events
 
-    def _delete_expired_records(self, days: int) -> int:
-        """删除过期的数据库记录"""
+    def _delete_expired_records(self, event_ids: List[str]) -> int:
+        """按 event_id 批量删除数据库记录（单批 DELETE，缩短写锁占用时间）
+
+        Args:
+            event_ids: 本批待删除的事件ID列表
+
+        Returns:
+            实际删除的记录数
+        """
+        if not event_ids:
+            return 0
         try:
+            placeholders = ','.join('?' * len(event_ids))
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    'DELETE FROM events WHERE created_at < datetime("now", "localtime", ?)',
-                    (f'-{days} days',)
+                    f'DELETE FROM events WHERE event_id IN ({placeholders})',
+                    event_ids
                 )
                 conn.commit()
                 return cursor.rowcount
@@ -337,9 +373,11 @@ def start_event_cleanup_scheduler(stop_event: Optional[threading.Event] = None) 
     - enabled: false 时不启动后台线程（直接返回 None），仍可通过 API 手动清理
     - retention_days: 事件保留天数
     - cleanup_interval_hours: 清理间隔（小时）
+    - startup_delay_seconds: 启动延迟秒数，避开系统启动高峰，防止抢锁卡住
+    - batch_size: 每批清理的事件数，批间休眠让出 SQLite 锁
 
     线程行为：
-    - 启动时立即执行一次清理（清理启动前积累的过期事件）
+    - 启动后延迟 startup_delay_seconds 秒执行首次清理（清理启动前积累的过期事件）
     - 之后每 cleanup_interval_hours 小时执行一次 cleanup_events_by_days()
     - 使用 stop_event 实现优雅退出（未提供时使用模块级 _cleanup_stop_event）
 
@@ -364,6 +402,8 @@ def start_event_cleanup_scheduler(stop_event: Optional[threading.Event] = None) 
 
     retention_days = cfg['retention_days']
     interval_hours = cfg['cleanup_interval_hours']
+    startup_delay_seconds = cfg['startup_delay_seconds']
+    batch_size = cfg['batch_size']
 
     # 使用外部 stop_event 或创建模块级 stop_event
     if stop_event is None:
@@ -375,12 +415,21 @@ def start_event_cleanup_scheduler(stop_event: Optional[threading.Event] = None) 
     def _cleanup_loop():
         logger.info(
             f"[EventCleanup] 后台清理线程启动: "
-            f"retention_days={retention_days}, interval_hours={interval_hours}"
+            f"retention_days={retention_days}, interval_hours={interval_hours}, "
+            f"batch_size={batch_size}, startup_delay_seconds={startup_delay_seconds}"
         )
 
-        # 启动时立即执行一次清理（清理积累的过期事件）
+        # 启动延迟：避开系统启动高峰（Web 初始化、事件处理进程启动等），
+        # 防止清理线程一启动就占用 SQLite 写锁导致系统卡住
+        if startup_delay_seconds > 0:
+            logger.info(f"[EventCleanup] 启动延迟 {startup_delay_seconds} 秒后执行首次清理")
+            if stop_event.wait(startup_delay_seconds):
+                logger.info("[EventCleanup] 启动延迟期间收到停止通知，清理线程退出")
+                return
+
+        # 首次清理（分批执行，批间让出锁）
         try:
-            get_cleanup_service().cleanup_events_by_days(retention_days)
+            get_cleanup_service().cleanup_events_by_days(retention_days, batch_size=batch_size)
         except Exception as e:
             logger.error(f"[EventCleanup] 启动时清理失败: {e}")
 
@@ -390,7 +439,7 @@ def start_event_cleanup_scheduler(stop_event: Optional[threading.Event] = None) 
             if stop_event.wait(interval_hours * 3600):
                 break
             try:
-                get_cleanup_service().cleanup_events_by_days(retention_days)
+                get_cleanup_service().cleanup_events_by_days(retention_days, batch_size=batch_size)
             except Exception as e:
                 logger.error(f"[EventCleanup] 定期清理失败: {e}")
 

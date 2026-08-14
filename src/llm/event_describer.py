@@ -21,8 +21,18 @@ logger = logging.getLogger(__name__)
 # 事件描述系统提示词
 _SYSTEM_PROMPT = (
     "你是一个智能视频监控助手。根据提供的监控快照和检测信息，"
-    "用简洁准确的中文描述事件内容。描述应包含：目标行为、位置、"
-    "时间等关键信息，不超过两句话。不要描述检测框、置信度等技术细节。"
+    "生成规范统一的事件描述。必须严格按照以下四行模板输出，"
+    "每行以【字段】开头，不要添加任何额外解释或技术细节：\n"
+    "【目标】事件中的目标类别\n"
+    "【行为】一句话客观描述目标的行为过程\n"
+    "【位置】所在监控点位和区域\n"
+    "【时间】事件发生时间及持续时间\n"
+    "示例：\n"
+    "【目标】行人\n"
+    "【行为】一名行人从画面右侧快速横穿警戒区\n"
+    "【位置】东门入口摄像头 · 警戒区\n"
+    "【时间】10:23:45 起，持续约 5 秒\n"
+    "不要描述检测框、置信度等技术细节。"
 )
 
 
@@ -60,6 +70,10 @@ class EventDescriber:
                 system_prompt=_SYSTEM_PROMPT
             )
             description = description.strip()
+            # 清理模型可能包裹的 markdown 代码块
+            if description.startswith('```'):
+                description = description.strip('`').strip()
+                description = description.lstrip('python').strip()
             if description:
                 logger.info(
                     f"[EventDescriber] 事件描述生成成功: "
@@ -100,5 +114,5 @@ class EventDescriber:
         if start_time:
             parts.append(f"- 开始时间：{start_time}")
 
-        parts.append("请根据图片和以上信息，用一句话描述这个监控事件。")
+        parts.append("请根据图片和以上信息，严格按照系统规定的四行模板输出事件描述。")
         return "\n".join(parts)

@@ -915,9 +915,35 @@
         </div>
     </div>
 </div>
+
+<style>
+    /* 大模型测试 Toast 即时反馈 */
+    .llm-toast {
+        position: fixed;
+        top: 72px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 3000;
+        padding: 10px 22px;
+        border-radius: 8px;
+        font-size: 14px;
+        color: #fff;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+        animation: llmToastIn 0.25s ease;
+        max-width: 70vw;
+        word-break: break-all;
+    }
+    .llm-toast.success { background: #52c41a; }
+    .llm-toast.error { background: #ff4d4f; }
+    .llm-toast.info { background: #00695c; }
+    @keyframes llmToastIn {
+        from { opacity: 0; transform: translate(-50%, -8px); }
+        to { opacity: 1; transform: translate(-50%, 0); }
+    }
+</style>
 {% endblock %}
 
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/chart.umd.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/system.js') }}?v=20260804"></script>
+<script src="{{ url_for('static', filename='js/system.js') }}?v=20260814"></script>
 {% endblock %}

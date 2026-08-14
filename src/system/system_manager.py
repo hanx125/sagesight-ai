@@ -279,7 +279,6 @@ class SystemManager:
                 ))
         
         conn.commit()
-        conn.close()
         logger.info("流媒体服务器配置表已初始化")
 
         # 创建大模型 API 配置表

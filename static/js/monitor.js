@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SageSight AI - 监控墙页面 JavaScript
  */
 window.Monitor = (function() {
@@ -3198,6 +3198,19 @@ function showMonitorEventDetail(event) {
     document.getElementById('monitorEventStartTime').textContent = formatEventTime(event.start_time);
     document.getElementById('monitorEventEndTime').textContent = formatEventTime(event.end_time);
     document.getElementById('monitorEventTime').textContent = formatEventTime(event.created_at);
+
+    // AI 事件描述（统一格式渲染）
+    const aiDescEl = document.getElementById('monitorEventAiDesc');
+    if (event.ai_description) {
+        const aiMetaParts = [];
+        if (event.ai_description_model) aiMetaParts.push('模型: ' + event.ai_description_model);
+        if (event.ai_description_time) aiMetaParts.push('时间: ' + new Date(event.ai_description_time).toLocaleString());
+        aiDescEl.innerHTML =
+            '<p class="event-detail-ai-text">' + escapeHtml(event.ai_description) + '</p>' +
+            (aiMetaParts.length ? '<p class="event-detail-ai-meta">' + aiMetaParts.join(' · ') + '</p>' : '');
+    } else {
+        aiDescEl.innerHTML = '<div class="event-detail-ai-placeholder">暂无 AI 描述</div>';
+    }
 
     // 如果缺少 channel_name，异步从 API 获取并更新
     if (!event.channel_name && event.event_id) {
