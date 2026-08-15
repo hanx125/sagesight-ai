@@ -101,7 +101,7 @@ class MQTTOutputter:
                 f"event_id={event_id}, update_type={update_type}"
             )
         else:
-            logger.info(
+            logger.debug(
                 f"[MQTTOutputter] 已发布: topic={self.topic}, "
                 f"update_type={update_type}, event_id={event_id}"
             )

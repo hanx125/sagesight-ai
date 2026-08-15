@@ -1284,7 +1284,6 @@ class EventOutput:
                 f"[EventOutput] MQTT 跳过最终推送：mqtt_outputter 未初始化, event_id={event_id[:8]}"
             )
             return
-        logger.info(f"[EventOutput] 提交最终事件 MQTT 推送: event_id={event_id[:8]}")
         self._io_executor.submit(self._push_final_task, event_id)
 
     def _push_final_task(self, event_id: str):
