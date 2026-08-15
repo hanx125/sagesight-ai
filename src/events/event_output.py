@@ -945,6 +945,7 @@ class EventOutput:
             # 3. 更新数据库
             # 终态保护：initial/tracking_* 的异步写库可能晚于 final/duplicate/tracking_end 的同步写库执行，
             # 用原子条件更新（status_guard）保证终态不被覆盖回 initial，否则最终事件推送（MQTT/前端）被吞
+            status_guard = status in ('tracking_start', 'tracking_update', 'initial')
             success = task_manager.update_event(
                 event_id=event_id,
                 event_type=event_type,
@@ -960,7 +961,7 @@ class EventOutput:
                 entered_zones=entered_zones,
                 zone_name=zone_name,
                 loitered_zones=loitered_zones,
-                status_guard=status in ('tracking_start', 'tracking_update', 'initial'),
+                status_guard=status_guard,
             )
 
             if success:
