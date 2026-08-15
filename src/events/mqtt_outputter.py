@@ -44,8 +44,13 @@ class MQTTOutputter:
                 self.host = broker_host
                 self.port = 1883
         
-        # 创建 MQTT 客户端（paho 2.x 必须显式声明回调 API 版本，否则抛 Unsupported callback API version）
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+        # 创建 MQTT 客户端
+        # paho 2.x 必须显式声明回调 API 版本（否则抛 Unsupported callback API version）；
+        # paho 1.x 没有 CallbackAPIVersion 常量，直接 Client() 即可
+        if hasattr(mqtt, 'CallbackAPIVersion'):
+            self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+        else:
+            self.client = mqtt.Client()
 
         # 设置回调
         self.client.on_connect = self._on_connect
