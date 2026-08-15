@@ -1620,7 +1620,9 @@ class TaskManager:
                 '''SELECT id, event_id, task_id, camera_id, algorithm, type, class_name,
                           confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
                           local_gif_url, minio_gif_url, ftp_gif_url,
-                          metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones, created_at
+                          metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
+                          ai_description, ai_description_model, ai_description_time, dedup_status, dedup_reason,
+                          created_at
                    FROM events WHERE event_id = ?''',
                 (event_id,)
             )
