@@ -35,6 +35,8 @@ class EventOutput:
 
         # 摄像头标识
         self.camera_id = config.get('camera_id', 'default')
+        # 摄像机名称缓存（MQTT 推送时附带真实名称，供第三方映射设备；避免每次推送查库）
+        self._camera_name_cache: Optional[str] = None
 
         # 任务关联（可选）
         self.task_id = config.get('task_id')
@@ -503,7 +505,23 @@ class EventOutput:
         except Exception as e:
             logger.debug(f"[EventOutput] 清理图片失败: {e}")
     
-    def emit(self, event_type: str, data: Dict, image: Optional[np.ndarray] = None, 
+    def _get_camera_name(self) -> str:
+        """获取摄像机真实名称（MQTT 推送附带，供第三方按名称映射设备）
+
+        结果缓存（名称极少变化，避免每次推送查库）；查询失败或相机已删除时
+        回退为 camera_id，保证第三方仍能定位设备。
+        """
+        if self._camera_name_cache is None:
+            try:
+                from src.cameras.camera_manager import get_camera_manager
+                camera = get_camera_manager().get_camera(self.camera_id)
+                self._camera_name_cache = camera.name if camera else ''
+            except Exception as e:
+                logger.debug(f"[EventOutput] 获取摄像机名称失败: {e}")
+                self._camera_name_cache = ''
+        return self._camera_name_cache or self.camera_id
+
+    def emit(self, event_type: str, data: Dict, image: Optional[np.ndarray] = None,
             frame_id: int = 0, task_id: int = None, algorithm: str = None,
             metadata: Optional[Dict] = None) -> Optional[str]:
         """
@@ -580,6 +598,7 @@ class EventOutput:
             'timestamp': datetime.utcnow().isoformat() + 'Z',
             'type': event_type,
             'camera_id': self.camera_id,
+            'camera_name': self._get_camera_name(),  # 摄像机真实名称（供第三方映射设备）
             'task_id': actual_task_id,
             'algorithm': actual_algorithm,
             'frame_id': frame_id,
@@ -1120,6 +1139,7 @@ class EventOutput:
                 'type': d['type'],                    # 最终事件类型（tracking/zone/loitering）
                 'status': d['status'],                # 最终状态（gif_ready）
                 'camera_id': d['camera_id'],
+                'camera_name': self._get_camera_name(),  # 摄像机真实名称（供第三方映射设备）
                 'task_id': d['task_id'],
                 'algorithm': d['algorithm'],
                 'class_name': d['class_name'],
@@ -1181,6 +1201,7 @@ class EventOutput:
                 'type': d['type'],                   # 最终事件类型（tracking/zone/loitering）
                 'status': d['status'],               # 当前事件状态（initial/final/duplicate）
                 'camera_id': d['camera_id'],
+                'camera_name': self._get_camera_name(),  # 摄像机真实名称（供第三方映射设备）
                 'task_id': d['task_id'],
                 'algorithm': d['algorithm'],
                 'class_name': d['class_name'],
