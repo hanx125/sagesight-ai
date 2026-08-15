@@ -974,14 +974,18 @@ class EventOutput:
             if push_websocket and success:
                 # 推送实际生效的状态：异步写库可能被终态保护拦截（status_guard），
                 # 若事件已是终态则不推送非终态状态，避免前端收到 initial 覆盖 final
-                push_status = status
                 if status_guard:
                     try:
                         final_record = task_manager.get_event_by_id(event_id)
-                        if final_record is not None and final_record.status != status:
+                        if final_record is None:
+                            push_status = status
+                        else:
                             push_status = final_record.status
                     except Exception as e:
-                        logger.debug(f"[EventOutput] 查询推送状态失败: {e}")
+                        logger.debug(f"[EventOutput] 查询推送状态失败，跳过推送: {e}")
+                        return  # 查询失败不推送，避免非终态推送覆盖终态
+                else:
+                    push_status = status
                 self._push_event_update_to_websocket(event_id, push_status, data, image_urls)
 
         except Exception as e:
