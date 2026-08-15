@@ -1321,7 +1321,8 @@ class TaskManager:
                      ai_description_model: str = None,
                      ai_description_time=None,
                      dedup_status: str = None,
-                     dedup_reason: str = None) -> bool:
+                     dedup_reason: str = None,
+                     status_guard: bool = False) -> bool:
         """更新事件记录
 
         支持部分更新：仅更新提供的字段，未提供的字段保持不变。
@@ -1358,8 +1359,17 @@ class TaskManager:
             params.append(event_type)
 
         if status is not None:
-            updates.append('status = ?')
-            params.append(status)
+            if status_guard:
+                # 终态保护：事件已为终态(final/duplicate/tracking_end)时不允许被非终态覆盖，
+                # 原子条件更新，避免异步写库晚于终态写库执行时把状态改回 initial
+                updates.append(
+                    "status = CASE WHEN status IN ('final','duplicate','tracking_end') "
+                    "THEN status ELSE ? END"
+                )
+                params.append(status)
+            else:
+                updates.append('status = ?')
+                params.append(status)
 
         if entered_zones is not None:
             updates.append('entered_zones = ?')
