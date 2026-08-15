@@ -125,22 +125,23 @@ class EventOutput:
     def _init_mqtt_outputter(self):
         """初始化 MQTT 输出器（给其他平台订阅）"""
         mqtt_cfg = self.config.get('mqtt', {})
-        
+
         if not mqtt_cfg.get('enabled', False):
+            logger.debug(f"[EventOutput] MQTT 未启用，跳过初始化")
             return
-        
+
         try:
             from .mqtt_outputter import MQTTOutputter
-            
+
             mqtt_config = mqtt_cfg.get('config', {})
             self.mqtt_outputter = MQTTOutputter(mqtt_config)
-            
-            logger.debug(f"[EventOutput] MQTT 输出器已初始化（给其他平台订阅）")
-            logger.debug(f"[EventOutput]   Broker: {mqtt_config.get('broker', 'localhost:1883')}")
-            logger.debug(f"[EventOutput]   Topic: {mqtt_config.get('topic', 'sagesight/events')}")
-            
+
+            logger.info(f"[EventOutput] MQTT 输出器已初始化（给其他平台订阅）")
+            logger.info(f"[EventOutput]   Broker: {mqtt_config.get('broker', 'localhost:1883')}")
+            logger.info(f"[EventOutput]   Topic: {mqtt_config.get('topic', 'sagesight/events')}")
+
         except Exception as e:
-            logger.debug(f"[EventOutput] MQTT 输出器初始化失败: {e}")
+            logger.warning(f"[EventOutput] MQTT 输出器初始化失败: {e}")
 
     def _init_image_outputters(self):
         """初始化图片输出器（根据独立开关：local_enabled / minio_enabled / ftp_enabled）"""

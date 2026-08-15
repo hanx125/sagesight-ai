@@ -44,51 +44,65 @@ class MQTTOutputter:
                 self.host = broker_host
                 self.port = 1883
         
-        # 创建 MQTT 客户端
-        self.client = mqtt.Client()
-        
+        # 创建 MQTT 客户端（paho 2.x 必须显式声明回调 API 版本，否则抛 Unsupported callback API version）
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
+
         # 设置回调
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
-        
+
         # 连接到 Broker
         try:
             self.client.connect(self.host, self.port, keepalive=60)
             self.client.loop_start()
-            logger.debug(f"[MQTTOutputter] 已连接到 {self.host}:{self.port}")
+            logger.info(f"[MQTTOutputter] 已连接到 {self.host}:{self.port}, topic={self.topic}")
         except Exception as e:
-            logger.debug(f"[MQTTOutputter] 连接失败: {e}")
+            logger.warning(f"[MQTTOutputter] 连接失败: {e}")
             raise
-    
+
     def _on_connect(self, client, userdata, flags, rc):
         """连接回调"""
         if rc == 0:
-            logger.debug(f"[MQTTOutputter] MQTT 连接成功")
+            logger.info(f"[MQTTOutputter] MQTT 连接成功, topic={self.topic}")
         else:
-            logger.debug(f"[MQTTOutputter] MQTT 连接失败，错误码: {rc}")
-    
+            logger.warning(f"[MQTTOutputter] MQTT 连接失败，错误码: {rc}")
+
     def _on_disconnect(self, client, userdata, rc):
         """断开连接回调"""
         if rc != 0:
-            logger.debug(f"[MQTTOutputter] MQTT 意外断开连接，错误码: {rc}")
+            logger.warning(f"[MQTTOutputter] MQTT 意外断开连接，错误码: {rc}")
             # 尝试重连
             try:
                 self.client.reconnect()
             except Exception as e:
-                logger.debug(f"[MQTTOutputter] 重连失败: {e}")
-    
+                logger.warning(f"[MQTTOutputter] 重连失败: {e}")
+
     def send(self, event: Dict):
         """
         发送事件到 MQTT
-        
+
         Args:
             event: 事件字典
         """
         payload = json.dumps(event, ensure_ascii=False)
-        self.client.publish(self.topic, payload, qos=self.qos, retain=self.retain)
-    
+        info = self.client.publish(self.topic, payload, qos=self.qos, retain=self.retain)
+        # paho 1.x 返回 (rc, mid) 元组；paho 2.x 返回 MQTTMessageInfo 对象（含 .rc 属性）
+        rc = info[0] if isinstance(info, tuple) else getattr(info, 'rc', 0)
+        event_id = event.get('event_id', '')[:8] if isinstance(event, dict) else ''
+        update_type = event.get('update_type', '') if isinstance(event, dict) else ''
+        if rc != 0:
+            logger.warning(
+                f"[MQTTOutputter] 发布失败 rc={rc}: {mqtt.error_string(rc)}, "
+                f"event_id={event_id}, update_type={update_type}"
+            )
+        else:
+            logger.info(
+                f"[MQTTOutputter] 已发布: topic={self.topic}, "
+                f"update_type={update_type}, event_id={event_id}"
+            )
+
     def close(self):
         """关闭 MQTT 连接"""
         self.client.loop_stop()
         self.client.disconnect()
-        logger.debug(f"[MQTTOutputter] 已断开连接")
+        logger.info(f"[MQTTOutputter] 已断开连接")
