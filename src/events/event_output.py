@@ -1280,7 +1280,11 @@ class EventOutput:
         内部经 io 线程池异步执行，不阻塞调用线程。
         """
         if not self.mqtt_outputter:
+            logger.warning(
+                f"[EventOutput] MQTT 跳过最终推送：mqtt_outputter 未初始化, event_id={event_id[:8]}"
+            )
             return
+        logger.info(f"[EventOutput] 提交最终事件 MQTT 推送: event_id={event_id[:8]}")
         self._io_executor.submit(self._push_final_task, event_id)
 
     def _push_final_task(self, event_id: str):
@@ -1290,13 +1294,13 @@ class EventOutput:
             task_manager = TaskManager()
             record = task_manager.get_event_by_id(event_id)
             if record is None:
-                logger.debug(f"[EventOutput] MQTT 推送最终事件失败：未找到事件 {event_id[:8]}")
+                logger.warning(f"[EventOutput] MQTT 推送最终事件失败：未找到事件 {event_id[:8]}")
                 return
 
             d = record.to_dict()
             # 被去重事件不推送；非终态事件（异常时序）不推送
             if d['status'] not in ('final', 'tracking_end'):
-                logger.debug(
+                logger.warning(
                     f"[EventOutput] MQTT 跳过最终事件推送（状态非终态）: "
                     f"event_id={event_id[:8]}, status={d['status']}"
                 )
@@ -1338,7 +1342,7 @@ class EventOutput:
                 f"gif_urls={[k for k, v in payload['gif_urls'].items() if v]}"
             )
         except Exception as e:
-            logger.debug(f"[EventOutput] MQTT 推送最终事件失败: {e}")
+            logger.warning(f"[EventOutput] MQTT 推送最终事件失败: {e}")
 
     def close(self):
         """关闭所有输出器"""
