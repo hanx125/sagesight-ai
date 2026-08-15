@@ -1576,6 +1576,30 @@ class TrackedObjectProcessor(mp.Process):
                     from src.tasks.task_manager import TaskManager
                     tm = TaskManager()
                     tm.update_event(event_id, status="final", dedup_status="normal")
+                    # 推送状态切换到前端（驾驶舱实时刷新徽章），与 _async_llm_process 保持一致
+                    try:
+                        from src.system.system_config_loader import get_web_server_host, get_web_server_port
+                        payload = {
+                            'event_id': event_id,
+                            'status': 'final',
+                            'dedup_status': 'normal',
+                            'data': {},
+                        }
+                        if self._http_session is not None:
+                            self._http_session.post(
+                                f'http://{get_web_server_host("0.0.0.0")}:{get_web_server_port()}/api/events/update',
+                                json=payload,
+                                timeout=2.0,
+                            )
+                        else:
+                            import requests
+                            requests.post(
+                                f'http://{get_web_server_host("0.0.0.0")}:{get_web_server_port()}/api/events/update',
+                                json=payload,
+                                timeout=2.0,
+                            )
+                    except Exception as e:
+                        logger.debug(f"[Event] 推送最终状态失败 event={event_id[:8]}: {e}")
                     # MQTT：仅推最终事件——规则去重通过且无需语义去重，立即推送
                     try:
                         event_output.push_final_to_mqtt(event_id)

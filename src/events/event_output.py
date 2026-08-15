@@ -943,6 +943,22 @@ class EventOutput:
                         metadata = extra_meta
 
             # 3. 更新数据库
+            # 防竞态覆盖：initial/tracking_* 的异步写库可能晚于 final/duplicate/tracking_end 的同步写库执行，
+            # 若事件已为终态，则跳过 status 更新（其它字段照常更新），避免终态被覆盖回 initial，
+            # 否则最终事件推送（MQTT/前端）被吞，事件永远显示"初始状态"
+            if status in ('tracking_start', 'tracking_update', 'initial'):
+                try:
+                    existing = task_manager.get_event_by_id(event_id)
+                    if existing is not None and existing.status in ('final', 'duplicate', 'tracking_end'):
+                        logger.debug(
+                            f"[EventOutput] 跳过状态覆盖(事件已为终态): "
+                            f"event_id={event_id[:8]}, 终态={existing.status}, 待写={status}"
+                        )
+                        status = None
+                        push_websocket = False  # 终态已推送过，无需再推初始状态
+                except Exception as e:
+                    logger.debug(f"[EventOutput] 查询事件状态失败: {e}")
+
             success = task_manager.update_event(
                 event_id=event_id,
                 event_type=event_type,
