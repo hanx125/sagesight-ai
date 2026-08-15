@@ -744,6 +744,7 @@ class TrackedObjectProcessor(mp.Process):
             data=event_data,
             image=image,
             frame_id=obj_dict.get("frame_time", 0),
+            lifecycle=True,  # 参与去重状态机：创建阶段不推 MQTT，状态切换为最终事件后再推送
         )
 
     def _derive_event_type(self, obj_dict: dict) -> str:
@@ -1453,6 +1454,11 @@ class TrackedObjectProcessor(mp.Process):
                 push_websocket=True,
                 event_type=self._derive_event_type(obj_dict),
             )
+            # MQTT：仅推最终事件——tracking_end 为终态且未被去重，推送完整数据
+            try:
+                event_output.push_final_to_mqtt(event_id)
+            except Exception as e:
+                logger.debug(f"[MQTT] 推送 tracking_end 事件失败 event={event_id[:8]}: {e}")
         else:
             # ========================================
             # 通过区域过滤：新状态机流转
@@ -1570,6 +1576,11 @@ class TrackedObjectProcessor(mp.Process):
                     from src.tasks.task_manager import TaskManager
                     tm = TaskManager()
                     tm.update_event(event_id, status="final", dedup_status="normal")
+                    # MQTT：仅推最终事件——规则去重通过且无需语义去重，立即推送
+                    try:
+                        event_output.push_final_to_mqtt(event_id)
+                    except Exception as e:
+                        logger.debug(f"[MQTT] 推送最终事件失败 event={event_id[:8]}: {e}")
 
         # 清理缩略图
         event_output.clear_thumbnail(event_id)
@@ -1619,6 +1630,13 @@ class TrackedObjectProcessor(mp.Process):
             from src.tasks.task_manager import TaskManager
             tm = TaskManager()
             tm.update_event(event_id, status="final", dedup_status="normal")
+            # MQTT：仅推最终事件
+            event_output = self.event_outputs.get(camera_id)
+            if event_output is not None:
+                try:
+                    event_output.push_final_to_mqtt(event_id)
+                except Exception as e:
+                    logger.debug(f"[MQTT] 推送最终事件失败 event={event_id[:8]}: {e}")
             return
 
         # 语义层去重（大模型，仅对规则层未判重的候选事件）
@@ -1646,6 +1664,15 @@ class TrackedObjectProcessor(mp.Process):
             dedup_status=dedup_status,
             dedup_reason=dedup_reason,
         )
+
+        # MQTT：仅推最终事件——被去重事件不推送
+        if final_status == "final":
+            event_output = self.event_outputs.get(camera_id)
+            if event_output is not None:
+                try:
+                    event_output.push_final_to_mqtt(event_id)
+                except Exception as e:
+                    logger.debug(f"[MQTT] 推送最终事件失败 event={event_id[:8]}: {e}")
 
         # 推送状态切换到前端（驾驶舱实时刷新徽章）
         try:

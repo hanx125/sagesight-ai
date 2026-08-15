@@ -83,8 +83,6 @@ def create_streaming_server():
         rtc_port=data.get('rtc_port', 8000),
         secret=data.get('secret', ''),
         media_server_id=data.get('media_server_id', ''),
-        hook_url_prefix=data.get('hook_url_prefix', ''),
-        protocol=data.get('protocol', 'rtmp'),
         enabled=data.get('enabled', True),
         is_default=data.get('is_default', False),
         description=data.get('description', '')
@@ -132,8 +130,6 @@ def update_streaming_server(server_id: int):
         rtc_port=data.get('rtc_port', existing.rtc_port),
         secret=data.get('secret', existing.secret),
         media_server_id=data.get('media_server_id', existing.media_server_id),
-        hook_url_prefix=data.get('hook_url_prefix', existing.hook_url_prefix),
-        protocol=data.get('protocol', existing.protocol),
         enabled=data.get('enabled', existing.enabled),
         is_default=data.get('is_default', existing.is_default),
         description=data.get('description', existing.description),

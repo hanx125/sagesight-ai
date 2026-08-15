@@ -679,22 +679,7 @@
                     <label for="serverMediaServerId">服务器ID</label>
                     <input type="text" id="serverMediaServerId" placeholder="zlmedia-7d241d0e">
                 </div>
-                
-                <div class="form-group">
-                    <label for="serverHookUrlPrefix">回调URL前缀</label>
-                    <input type="text" id="serverHookUrlPrefix" placeholder="http://localhost:5000">
-                </div>
-                
-                <div class="form-group">
-                    <label for="serverProtocol">协议</label>
-                    <select id="serverProtocol">
-                        <option value="rtmp">RTMP</option>
-                        <option value="rtsp">RTSP</option>
-                        <option value="hls">HLS</option>
-                        <option value="webrtc">WebRTC</option>
-                    </select>
-                </div>
-                
+
                 <div class="form-group">
                     <label for="serverDescription">描述</label>
                     <textarea id="serverDescription" rows="3" placeholder="服务器描述信息"></textarea>
@@ -1000,5 +985,5 @@
 
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/chart.umd.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/system.js') }}?v=20260814d"></script>
+<script src="{{ url_for('static', filename='js/system.js') }}?v=20260814e"></script>
 {% endblock %}

@@ -46,8 +46,8 @@
                 </svg>
             </div>
             <div class="stat-content">
-                <div class="stat-value" id="statCar">0</div>
-                <div class="stat-label">车辆检测</div>
+                <div class="stat-value" id="statDuplicate">0</div>
+                <div class="stat-label">去重统计</div>
             </div>
         </div>
     </div>
@@ -691,7 +691,7 @@ window.Events = (function() {
             document.getElementById('statTotal').textContent = data.total || 0;
             document.getElementById('statTrackStart').textContent = data.by_status?.initial || 0;
             document.getElementById('statTrackEnd').textContent = data.by_status?.final || 0;
-            document.getElementById('statCar').textContent = data.by_class?.car || 0;
+            document.getElementById('statDuplicate').textContent = data.by_status?.duplicate || 0;
             
             if (data.by_class) {
                 const classSelect = document.getElementById('filterClass');

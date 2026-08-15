@@ -523,10 +523,10 @@ class EventOutput:
 
     def emit(self, event_type: str, data: Dict, image: Optional[np.ndarray] = None,
             frame_id: int = 0, task_id: int = None, algorithm: str = None,
-            metadata: Optional[Dict] = None) -> Optional[str]:
+            metadata: Optional[Dict] = None, lifecycle: bool = False) -> Optional[str]:
         """
         发送事件
-        
+
         Args:
             event_type: 事件类型 (detection, track_start, track_end, track_update)
             data: 事件数据字典，包含 track_id, class_name, confidence, bbox 等
@@ -535,7 +535,11 @@ class EventOutput:
             task_id: 关联的任务 ID（可选）
             algorithm: 使用的算法（可选）
             metadata: 额外的元数据
-        
+            lifecycle: 是否参与跟踪事件状态机（规则/语义去重 → final）。
+                True 时创建阶段不推 MQTT，待状态切换为最终事件后由
+                push_final_to_mqtt 推送（被去重事件不推送）；
+                False（属性事件等）创建时即推 MQTT。
+
         Returns:
             事件 ID，如果未发送则返回 None
         """
@@ -604,7 +608,8 @@ class EventOutput:
             'frame_id': frame_id,
             'data': data,
             'image_urls': image_urls,
-            'metadata': metadata or {}
+            'metadata': metadata or {},
+            'lifecycle': lifecycle,  # 跟踪事件状态机标记：True 时不做创建阶段 MQTT 首推
         }
         
         # 异步执行 I/O 密集型操作（远程上传、MQTT发送、数据库保存、WebSocket推送）
@@ -626,7 +631,9 @@ class EventOutput:
                         logger.debug(f"[EventOutput] 图片上传失败 ({outputter.__class__.__name__}): {e}")
 
             # 2. MQTT 发送
-            if self.mqtt_outputter:
+            # 跟踪事件（lifecycle=True）只在状态切换为最终事件后推送（被去重不推送），
+            # 属性事件等无状态机的事件仍在创建时立即推送
+            if self.mqtt_outputter and not event.get('lifecycle'):
                 try:
                     self.mqtt_outputter.send(event)
                 except Exception as e:
@@ -1114,13 +1121,13 @@ class EventOutput:
             logger.debug(f"[EventOutput] 推送 gif_ready 失败: {e}")
 
     def _push_complete_to_mqtt(self, event_id: str):
-        """GIF 就绪后补推完整事件数据到 MQTT
+        """GIF 就绪后补推完整事件数据到 MQTT（仅最终事件）
 
-        首次 MQTT 推送在事件创建时（track_start）发出，此时 GIF 尚未生成、type/status
-        为初始值。本方法在 GIF 就绪后从数据库查回完整记录，补推一次包含 GIF URL、最终
-        事件类型、最终状态、最终 zone 轨迹的完整消息，供第三方更新首次收到的数据。
+        跟踪事件只在状态切换为最终事件后推送 MQTT：GIF 生成完成时若语义去重
+        尚未结束（status=initial），此处跳过，由最终事件推送统一携带 GIF URL；
+        若事件已被去重（status=duplicate）则不推送；已为最终事件时补全 GIF URL。
 
-        payload 通过 event_id 与首次消息关联，update_type='gif_ready' 标记本消息为补推更新。
+        payload 通过 event_id 关联，update_type='gif_ready' 标记本消息为补推更新。
         """
         if not self.mqtt_outputter:
             return
@@ -1133,6 +1140,13 @@ class EventOutput:
                 return
 
             d = record.to_dict()
+            # 仅最终事件推送：初始事件（语义去重未完成）等待最终推送，被去重事件不推送
+            if d['status'] not in ('final', 'tracking_end'):
+                logger.debug(
+                    f"[EventOutput] MQTT 跳过 gif_ready 补推（事件未定）: "
+                    f"event_id={event_id[:8]}, status={d['status']}"
+                )
+                return
             payload = {
                 'event_id': d['event_id'],
                 'update_type': 'gif_ready',          # 标记：本消息为首次推送的完整更新
@@ -1236,6 +1250,76 @@ class EventOutput:
             )
         except Exception as e:
             logger.debug(f"[EventOutput] MQTT 补推 AI 描述失败: {e}")
+
+    def push_final_to_mqtt(self, event_id: str):
+        """最终事件推送到 MQTT（供去重状态机调用）
+
+        跟踪事件（lifecycle=True）创建时不推 MQTT，待状态切换为最终事件
+        （final）或未通过区域过滤结束（tracking_end）后调用本方法推送一次
+        完整数据；被去重（duplicate）的事件不推送。
+
+        内部经 io 线程池异步执行，不阻塞调用线程。
+        """
+        if not self.mqtt_outputter:
+            return
+        self._io_executor.submit(self._push_final_task, event_id)
+
+    def _push_final_task(self, event_id: str):
+        """异步执行最终事件 MQTT 推送（在 io 线程池中运行）"""
+        try:
+            from src.tasks.task_manager import TaskManager
+            task_manager = TaskManager()
+            record = task_manager.get_event_by_id(event_id)
+            if record is None:
+                logger.debug(f"[EventOutput] MQTT 推送最终事件失败：未找到事件 {event_id[:8]}")
+                return
+
+            d = record.to_dict()
+            # 被去重事件不推送；非终态事件（异常时序）不推送
+            if d['status'] not in ('final', 'tracking_end'):
+                logger.debug(
+                    f"[EventOutput] MQTT 跳过最终事件推送（状态非终态）: "
+                    f"event_id={event_id[:8]}, status={d['status']}"
+                )
+                return
+
+            payload = {
+                'event_id': d['event_id'],
+                'update_type': 'final',             # 标记：本消息为最终事件完整推送
+                'type': d['type'],                  # 最终事件类型（tracking/zone/loitering）
+                'status': d['status'],              # 最终状态（final/tracking_end）
+                'camera_id': d['camera_id'],
+                'camera_name': self._get_camera_name(),  # 摄像机真实名称（供第三方映射设备）
+                'task_id': d['task_id'],
+                'algorithm': d['algorithm'],
+                'class_name': d['class_name'],
+                'confidence': d['confidence'],
+                'bbox': d['bbox'],
+                'image_urls': {                     # 图片存储地址
+                    'local': d['local_image_url'],
+                    'minio': d['minio_image_url'],
+                    'ftp': d['ftp_image_url'],
+                },
+                'gif_urls': {                       # GIF 存储地址（生成完成则已含，未完成由 gif_ready 补推）
+                    'local': d['local_gif_url'],
+                    'minio': d['minio_gif_url'],
+                    'ftp': d['ftp_gif_url'],
+                },
+                'entered_zones': d['entered_zones'],
+                'zone_name': d['zone_name'],
+                'loitered_zones': d['loitered_zones'],
+                'start_time': d['start_time'],
+                'end_time': d['end_time'],
+                'metadata': d['metadata'] or {},
+            }
+            self.mqtt_outputter.send(payload)
+            logger.info(
+                f"[EventOutput] MQTT 推送最终事件: event_id={event_id[:8]}, "
+                f"type={d['type']}, status={d['status']}, "
+                f"gif_urls={[k for k, v in payload['gif_urls'].items() if v]}"
+            )
+        except Exception as e:
+            logger.debug(f"[EventOutput] MQTT 推送最终事件失败: {e}")
 
     def close(self):
         """关闭所有输出器"""

@@ -130,8 +130,7 @@ function renderServersList() {
     
     serversList.innerHTML = servers.map(server => {
         const typeLabel = getServerTypeLabel(server.server_type);
-        const protocolLabel = getProtocolLabel(server.protocol);
-        
+
         return `
             <div class="server-card ${server.is_default ? 'default' : ''} ${!server.enabled ? 'disabled' : ''}">
                 <div class="server-card-header">
@@ -180,16 +179,6 @@ function renderServersList() {
                         <span class="detail-value">${escapeHtml(server.media_server_id)}</span>
                     </div>
                     ` : ''}
-                    ${server.hook_url_prefix ? `
-                    <div class="server-detail-row">
-                        <span class="detail-label">回调URL前缀:</span>
-                        <span class="detail-value">${escapeHtml(server.hook_url_prefix)}</span>
-                    </div>
-                    ` : ''}
-                    <div class="server-detail-row">
-                        <span class="detail-label">协议:</span>
-                        <span class="detail-value">${protocolLabel}</span>
-                    </div>
                     ${server.description ? `
                     <div class="server-detail-row">
                         <span class="detail-label">描述:</span>
@@ -241,20 +230,6 @@ function getServerTypeLabel(type) {
 }
 
 // ========================================
-// 获取协议标签
-// ========================================
-
-function getProtocolLabel(protocol) {
-    const labels = {
-        'rtmp': 'RTMP',
-        'rtsp': 'RTSP',
-        'hls': 'HLS',
-        'webrtc': 'WebRTC'
-    };
-    return labels[protocol] || protocol;
-}
-
-// ========================================
 // 添加/编辑服务器模态框
 // ========================================
 
@@ -283,8 +258,6 @@ function openEditServerModal(serverId) {
     document.getElementById('serverRtcPort').value = server.rtc_port || 8000;
     document.getElementById('serverSecret').value = server.secret || '';
     document.getElementById('serverMediaServerId').value = server.media_server_id || '';
-    document.getElementById('serverHookUrlPrefix').value = server.hook_url_prefix || '';
-    document.getElementById('serverProtocol').value = server.protocol;
     document.getElementById('serverDescription').value = server.description || '';
     document.getElementById('serverEnabled').checked = server.enabled;
     document.getElementById('serverDefault').checked = server.is_default;
@@ -318,8 +291,6 @@ async function saveServer() {
         rtc_port: parseInt(document.getElementById('serverRtcPort').value) || 8000,
         secret: document.getElementById('serverSecret').value || '',
         media_server_id: document.getElementById('serverMediaServerId').value || '',
-        hook_url_prefix: document.getElementById('serverHookUrlPrefix').value || '',
-        protocol: document.getElementById('serverProtocol').value,
         description: document.getElementById('serverDescription').value,
         enabled: document.getElementById('serverEnabled').checked,
         is_default: document.getElementById('serverDefault').checked

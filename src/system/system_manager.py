@@ -37,14 +37,10 @@ class StreamingServer:
     # API配置
     secret: str = ''  # API密钥
     media_server_id: str = ''  # ZLM服务器ID
-    
-    # 回调配置
-    hook_url_prefix: str = ''  # 回调URL前缀（如 http://192.168.5.2:5000）
-    
+
     # 状态配置
     enabled: bool = True  # 是否启用
     is_default: bool = False  # 是否默认服务器
-    protocol: str = 'rtmp'  # 协议: rtmp, rtsp, hls, webrtc
     description: str = ''  # 描述
     status: str = 'unknown'  # 状态: online, offline, unknown
     
@@ -76,10 +72,8 @@ class StreamingServer:
             'rtc_port': self.rtc_port,
             'secret': self.secret,
             'media_server_id': self.media_server_id,
-            'hook_url_prefix': self.hook_url_prefix,
             'enabled': self.enabled,
             'is_default': self.is_default,
-            'protocol': self.protocol,
             'description': self.description,
             'status': self.status,
             'config': self.config,
@@ -155,20 +149,12 @@ DEFAULT_STREAMING_SERVERS = [
         'rtc_port': 8000,
         'secret': 'FpvUDVyWlqohv98EEE5Of3UcFhc18Ipt',
         'media_server_id': 'zlmedia-7d241d0e',
-        'hook_url_prefix': 'http://localhost:5000',
         'enabled': True,
         'is_default': True,
-        'protocol': 'rtmp',
         'description': 'ZLMediaKit 流媒体服务器',
         'config': {}
     }
 ]
-
-
-def _get_web_base_url() -> str:
-    """从 system_config.yaml 读取 Web 服务地址，构造 hook_url_prefix。"""
-    from src.system.system_config_loader import get_webhook_base_url
-    return get_webhook_base_url()
 
 
 # ========================================
@@ -224,14 +210,10 @@ class SystemManager:
                 -- API配置
                 secret TEXT DEFAULT '',
                 media_server_id TEXT DEFAULT '',
-                
-                -- 回调配置
-                hook_url_prefix TEXT DEFAULT '',
-                
+
                 -- 状态配置
                 enabled INTEGER DEFAULT 1,
                 is_default INTEGER DEFAULT 0,
-                protocol TEXT DEFAULT 'rtmp',
                 description TEXT DEFAULT '',
                 status TEXT DEFAULT 'unknown',
                 
@@ -254,9 +236,9 @@ class SystemManager:
                     INSERT INTO streaming_servers (
                         name, server_type, host,
                         rtmp_port, rtsp_port, http_port, rtc_port,
-                        secret, media_server_id, hook_url_prefix,
-                        enabled, is_default, protocol, description, status, config
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        secret, media_server_id,
+                        enabled, is_default, description, status, config
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     server['name'],
                     server['server_type'],
@@ -267,10 +249,8 @@ class SystemManager:
                     server['rtc_port'],
                     server['secret'],
                     server['media_server_id'],
-                    server.get('hook_url_prefix') or _get_web_base_url(),
                     server['enabled'],
                     server['is_default'],
-                    server['protocol'],
                     server['description'],
                     'unknown',
                     json.dumps(server['config'])
@@ -331,39 +311,42 @@ class SystemManager:
     # 流媒体服务器 CRUD
     # ========================================
 
+    # 流媒体服务器查询列（显式列名，兼容旧库残留的 hook_url_prefix/protocol 列）
+    _SERVER_COLUMNS = 'id, name, server_type, host, rtmp_port, rtsp_port, http_port, rtc_port, secret, media_server_id, enabled, is_default, description, status, config, created_at, updated_at'
+
     def get_all_streaming_servers(self) -> List[StreamingServer]:
         """获取所有流媒体服务器配置"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        cursor.execute('SELECT * FROM streaming_servers ORDER BY is_default DESC, name')
+
+        cursor.execute(f'SELECT {self._SERVER_COLUMNS} FROM streaming_servers ORDER BY is_default DESC, name')
         rows = cursor.fetchall()
         conn.close()
-        
+
         return [self._row_to_streaming_server(row) for row in rows]
-    
+
     def get_streaming_server(self, server_id: int) -> Optional[StreamingServer]:
         """获取单个流媒体服务器配置"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        cursor.execute('SELECT * FROM streaming_servers WHERE id = ?', (server_id,))
+
+        cursor.execute(f'SELECT {self._SERVER_COLUMNS} FROM streaming_servers WHERE id = ?', (server_id,))
         row = cursor.fetchone()
         conn.close()
-        
+
         if row:
             return self._row_to_streaming_server(row)
         return None
-    
+
     def get_default_streaming_server(self) -> Optional[StreamingServer]:
         """获取默认流媒体服务器"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
-        cursor.execute('SELECT * FROM streaming_servers WHERE is_default = 1 AND enabled = 1 LIMIT 1')
+
+        cursor.execute(f'SELECT {self._SERVER_COLUMNS} FROM streaming_servers WHERE is_default = 1 AND enabled = 1 LIMIT 1')
         row = cursor.fetchone()
         conn.close()
-        
+
         if row:
             return self._row_to_streaming_server(row)
         return None
@@ -381,9 +364,9 @@ class SystemManager:
             INSERT INTO streaming_servers (
                 name, server_type, host,
                 rtmp_port, rtsp_port, http_port, rtc_port,
-                secret, media_server_id, hook_url_prefix,
-                enabled, is_default, protocol, description, status, config
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                secret, media_server_id,
+                enabled, is_default, description, status, config
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             server.name,
             server.server_type,
@@ -394,10 +377,8 @@ class SystemManager:
             server.rtc_port,
             server.secret,
             server.media_server_id,
-            server.hook_url_prefix,
             server.enabled,
             server.is_default,
-            server.protocol,
             server.description,
             'unknown',
             json.dumps(server.config)
@@ -423,8 +404,8 @@ class SystemManager:
             UPDATE streaming_servers SET
                 name = ?, server_type = ?, host = ?,
                 rtmp_port = ?, rtsp_port = ?, http_port = ?, rtc_port = ?,
-                secret = ?, media_server_id = ?, hook_url_prefix = ?,
-                enabled = ?, is_default = ?, protocol = ?, description = ?,
+                secret = ?, media_server_id = ?,
+                enabled = ?, is_default = ?, description = ?,
                 status = ?, config = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
         ''', (
@@ -437,10 +418,8 @@ class SystemManager:
             server.rtc_port,
             server.secret,
             server.media_server_id,
-            server.hook_url_prefix,
             server.enabled,
             server.is_default,
-            server.protocol,
             server.description,
             server.status,
             json.dumps(server.config),
@@ -501,15 +480,13 @@ class SystemManager:
             rtc_port=row[7] or 8000,
             secret=row[8] or '',
             media_server_id=row[9] or '',
-            hook_url_prefix=row[10] or '',
-            enabled=row[11],
-            is_default=row[12],
-            protocol=row[13] or 'rtmp',
-            description=row[14] or '',
-            status=row[15] or 'unknown',
-            config=safe_json_loads(row[16], {}),
-            created_at=row[17],
-            updated_at=row[18]
+            enabled=row[10],
+            is_default=row[11],
+            description=row[12] or '',
+            status=row[13] or 'unknown',
+            config=safe_json_loads(row[14], {}),
+            created_at=row[15],
+            updated_at=row[16]
         )
 
     # ========================================
