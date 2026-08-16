@@ -1434,10 +1434,11 @@ class TrackedObjectProcessor(mp.Process):
                 else "end_image" if end_image is not None
                 else "none"
             )
-            logger.debug(
+            logger.info(
                 f"[{camera_id}] 事件结束(宽限期超时): event_id={event_id[:8] if event_id else ''}, "
                 f"label={class_name}, final_image来源={source}, "
-                f"duration={frame_time - event_start_frame_time:.2f}s"
+                f"duration={frame_time - event_start_frame_time:.2f}s, "
+                f"llm={final_image is not None and self.llm_executor is not None}"
             )
 
         if not passes_zones:
@@ -1560,6 +1561,11 @@ class TrackedObjectProcessor(mp.Process):
                     )
                 else:
                     # 大模型未启用或无最终快照：直接作为最终事件（状态切换）
+                    logger.info(
+                        f"[{camera_id}] 事件跳过语义去重/描述直接final: "
+                        f"event_id={event_id[:8]}, final_image={'有' if final_image is not None else '无'}, "
+                        f"llm_executor={'有' if self.llm_executor is not None else '无'}"
+                    )
                     from src.tasks.task_manager import TaskManager
                     tm = TaskManager()
                     tm.update_event(event_id, status="final", dedup_status="normal")
