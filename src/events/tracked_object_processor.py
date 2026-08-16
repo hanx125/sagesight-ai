@@ -517,13 +517,13 @@ class TrackedObjectProcessor(mp.Process):
             if self.display_config:
                 event_config.setdefault("gif", {})["display_config"] = self.display_config
 
-            # 必需区域：从 zones_config 的 required 标志派生（单一真相源）
+            # 必需区域：唯一来源为通道级 zones_config 的 required 标志
             # 任一区域 required=true 时，目标必须进入必需区域才产生事件（延迟创建）
-            # event_output.yaml 不再配置 capture.required_zones，避免两个来源冲突
+            # 覆盖任何 event_config 中残留的 required_zones（任务表已不再保存区域配置）
             zones_config = config.get("zones_config", [])
             required_zone_names = [z.get("name") for z in zones_config if z.get("required")]
-            if required_zone_names:
-                event_config.setdefault("capture", {})["required_zones"] = required_zone_names
+            capture_cfg = event_config.setdefault("capture", {})
+            capture_cfg["required_zones"] = required_zone_names
 
             self.event_outputs[cam_id] = EventOutput(event_config)
 

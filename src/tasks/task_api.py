@@ -247,12 +247,13 @@ def create_task():
     event_config = merge_config(default_event_config, data.get('event_config'))
     display_config = merge_config(default_display_config, data.get('display_config'))
 
-    # 校验 event_config.capture.required_zones（可选字段，配错直接拒绝创建）
-    capture_cfg = event_config.get('capture', {}) if isinstance(event_config, dict) else {}
-    if 'required_zones' in capture_cfg:
-        required_zones = capture_cfg['required_zones']
-        if not isinstance(required_zones, list) or not all(isinstance(z, str) for z in required_zones):
-            return jsonify({'error': 'event_config.capture.required_zones 必须是字符串列表'}), 400
+    # 区域配置唯一来源为通道表（device_channel_pool.zones_config），
+    # 任务表不再保存区域配置：剥离 event_config.capture.required_zones，防止重复来源
+    if isinstance(event_config, dict):
+        capture_cfg = event_config.get('capture', {})
+        if isinstance(capture_cfg, dict) and 'required_zones' in capture_cfg:
+            del capture_cfg['required_zones']
+            logger.info("[TaskApi] 创建任务：已剥离 event_config.capture.required_zones（区域配置仅存于通道表）")
 
     # target_classes：空数组表示不限制检测类别（检测所有类别）
     target_classes = data.get('target_classes', [])
@@ -448,14 +449,14 @@ def update_task(task_id: int):
     if 'detector_config' in update_data:
         update_data['detector_config'] = _normalize_detector_gpu_mem_limit(update_data['detector_config'])
 
-    # 校验 event_config.capture.required_zones（可选字段，配错直接拒绝更新）
+    # 区域配置唯一来源为通道表（device_channel_pool.zones_config），
+    # 任务表不再保存区域配置：剥离 event_config.capture.required_zones，防止重复来源
     merged_event_config = update_data.get('event_config')
     if isinstance(merged_event_config, dict):
         capture_cfg = merged_event_config.get('capture', {})
         if isinstance(capture_cfg, dict) and 'required_zones' in capture_cfg:
-            required_zones = capture_cfg['required_zones']
-            if not isinstance(required_zones, list) or not all(isinstance(z, str) for z in required_zones):
-                return jsonify({'error': 'event_config.capture.required_zones 必须是字符串列表'}), 400
+            del capture_cfg['required_zones']
+            logger.info(f"[TaskApi] 更新任务 {task_id}：已剥离 event_config.capture.required_zones（区域配置仅存于通道表）")
 
     # 1. 更新任务本身的配置
     success = task_manager.update_task(task_id, update_data)
