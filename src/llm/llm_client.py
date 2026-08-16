@@ -28,8 +28,8 @@ from src.system.system_manager import LLMConfig
 
 logger = logging.getLogger(__name__)
 
-# 请求超时（秒）：连接 10s，读取 60s（大模型响应可能较慢）
-_REQUEST_TIMEOUT = (10, 60)
+# 请求超时（秒）：连接 10s，读取 120s（大模型响应可能较慢）
+_REQUEST_TIMEOUT = (10, 120)
 
 
 class LLMClient:
@@ -161,7 +161,7 @@ class LLMClient:
         return self._openai_request(messages)
 
     def _openai_request(self, messages: list) -> str:
-        """发送 OpenAI 格式请求"""
+        """发送 OpenAI 格式请求，带重试逻辑（最多重试 1 次，共 2 次尝试）"""
         url = self._openai_url()
         headers = {
             "Content-Type": "application/json",
@@ -174,19 +174,30 @@ class LLMClient:
             "max_tokens": self.config.max_tokens
         }
 
-        start = time.time()
-        resp = requests.post(url, json=body, headers=headers, timeout=_REQUEST_TIMEOUT)
-        elapsed = time.time() - start
+        for attempt in range(2):
+            start = time.time()
+            try:
+                resp = requests.post(url, json=body, headers=headers, timeout=_REQUEST_TIMEOUT)
+                elapsed = time.time() - start
+                if resp.status_code != 200:
+                    err = resp.text[:500]
+                    logger.warning(f"[LLMClient] OpenAI 请求失败 {resp.status_code} (尝试 {attempt+1}/2, {elapsed:.1f}s): {err}")
+                    if attempt == 0:
+                        time.sleep(1)  # 重试前短暂等待
+                        continue
+                    raise RuntimeError(f"OpenAI API 返回 {resp.status_code}: {err}")
 
-        if resp.status_code != 200:
-            err = resp.text[:500]
-            logger.warning(f"[LLMClient] OpenAI 请求失败 {resp.status_code} ({elapsed:.1f}s): {err}")
-            raise RuntimeError(f"OpenAI API 返回 {resp.status_code}: {err}")
-
-        data = resp.json()
-        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        logger.debug(f"[LLMClient] OpenAI 响应 ({elapsed:.1f}s): {text[:100]}")
-        return text
+                data = resp.json()
+                text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                logger.debug(f"[LLMClient] OpenAI 响应 (尝试 {attempt+1}/2, {elapsed:.1f}s): {text[:100]}")
+                return text
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                logger.warning(f"[LLMClient] OpenAI 请求超时/连接错误 (尝试 {attempt+1}/2): {e}")
+                if attempt == 0:
+                    time.sleep(1)
+                    continue
+                raise RuntimeError(f"OpenAI API 请求失败: {e}")
+        raise RuntimeError("OpenAI API 多次尝试后仍失败")
 
     # ========================================
     # Anthropic 格式实现
@@ -238,7 +249,7 @@ class LLMClient:
         return self._anthropic_request(messages, system_prompt)
 
     def _anthropic_request(self, messages: list, system_prompt: str) -> str:
-        """发送 Anthropic 格式请求"""
+        """发送 Anthropic 格式请求，带重试逻辑（最多重试 1 次，共 2 次尝试）"""
         url = self._anthropic_url()
         headers = {
             "Content-Type": "application/json",
@@ -254,21 +265,32 @@ class LLMClient:
         if system_prompt:
             body["system"] = system_prompt
 
-        start = time.time()
-        resp = requests.post(url, json=body, headers=headers, timeout=_REQUEST_TIMEOUT)
-        elapsed = time.time() - start
+        for attempt in range(2):
+            start = time.time()
+            try:
+                resp = requests.post(url, json=body, headers=headers, timeout=_REQUEST_TIMEOUT)
+                elapsed = time.time() - start
+                if resp.status_code != 200:
+                    err = resp.text[:500]
+                    logger.warning(f"[LLMClient] Anthropic 请求失败 {resp.status_code} (尝试 {attempt+1}/2, {elapsed:.1f}s): {err}")
+                    if attempt == 0:
+                        time.sleep(1)  # 重试前短暂等待
+                        continue
+                    raise RuntimeError(f"Anthropic API 返回 {resp.status_code}: {err}")
 
-        if resp.status_code != 200:
-            err = resp.text[:500]
-            logger.warning(f"[LLMClient] Anthropic 请求失败 {resp.status_code} ({elapsed:.1f}s): {err}")
-            raise RuntimeError(f"Anthropic API 返回 {resp.status_code}: {err}")
-
-        data = resp.json()
-        # Anthropic 返回 content 是列表，取 text 类型的内容
-        content_blocks = data.get("content", [])
-        text = "".join(
-            block.get("text", "") for block in content_blocks
-            if block.get("type") == "text"
-        )
-        logger.debug(f"[LLMClient] Anthropic 响应 ({elapsed:.1f}s): {text[:100]}")
-        return text
+                data = resp.json()
+                # Anthropic 返回 content 是列表，取 text 类型的内容
+                content_blocks = data.get("content", [])
+                text = "".join(
+                    block.get("text", "") for block in content_blocks
+                    if block.get("type") == "text"
+                )
+                logger.debug(f"[LLMClient] Anthropic 响应 (尝试 {attempt+1}/2, {elapsed:.1f}s): {text[:100]}")
+                return text
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                logger.warning(f"[LLMClient] Anthropic 请求超时/连接错误 (尝试 {attempt+1}/2): {e}")
+                if attempt == 0:
+                    time.sleep(1)
+                    continue
+                raise RuntimeError(f"Anthropic API 请求失败: {e}")
+        raise RuntimeError("Anthropic API 多次尝试后仍失败")
