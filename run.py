@@ -694,7 +694,7 @@ if _is_main_process:
 
         返回字段说明：
         - by_type:   按 type 列分组（tracking/zone/loitering，事件检测维度）
-        - by_status: 按 status 列分组（tracking_start/tracking_end 等，事件生命周期维度）
+        - by_status: 按 status 列分组（initial / final / duplicate，事件三种状态）
         - by_class:  按 class_name 列分组（检测目标类别）
         - daily:     最近 7 天每日事件数
         """
@@ -709,7 +709,7 @@ if _is_main_process:
             cursor.execute('SELECT type, COUNT(*) FROM events GROUP BY type')
             type_stats = dict(cursor.fetchall())
 
-            # 按事件状态统计（tracking_start/tracking_update/initial/final/duplicate/tracking_end）
+            # 按事件状态统计（initial / final / duplicate）
             cursor.execute('SELECT status, COUNT(*) FROM events GROUP BY status')
             status_stats = dict(cursor.fetchall())
 

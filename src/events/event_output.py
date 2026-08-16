@@ -524,7 +524,8 @@ class EventOutput:
 
     def emit(self, event_type: str, data: Dict, image: Optional[np.ndarray] = None,
             frame_id: int = 0, task_id: int = None, algorithm: str = None,
-            metadata: Optional[Dict] = None, lifecycle: bool = False) -> Optional[str]:
+            metadata: Optional[Dict] = None, lifecycle: bool = False,
+            defer_db: bool = False) -> Optional[str]:
         """
         发送事件
 
@@ -540,6 +541,9 @@ class EventOutput:
                 True 时创建阶段不推 MQTT，待状态切换为最终事件后由
                 push_final_to_mqtt 推送（被去重事件不推送）；
                 False（属性事件等）创建时即推 MQTT。
+            defer_db: 是否延迟写库。True（跟踪事件）时创建阶段不写数据库，
+                事件仅在跟踪完成并通过区域过滤后由 create_tracking_event
+                首次落库为 initial/duplicate，保证事件列表只有三种状态。
 
         Returns:
             事件 ID，如果未发送则返回 None
@@ -611,6 +615,7 @@ class EventOutput:
             'image_urls': image_urls,
             'metadata': metadata or {},
             'lifecycle': lifecycle,  # 跟踪事件状态机标记：True 时不做创建阶段 MQTT 首推
+            'defer_db': defer_db,    # 延迟写库标记：True 时跟踪中不写库，仅在完成后落库
         }
         
         # 异步执行 I/O 密集型操作（远程上传、MQTT发送、数据库保存、WebSocket推送）
@@ -641,7 +646,10 @@ class EventOutput:
                     logger.debug(f"[EventOutput] MQTT 发送失败: {e}")
 
             # 3. 数据库保存 + WebSocket 推送
-            if self.save_to_db or event.get('task_id'):
+            # 跟踪事件（defer_db=True）不在创建阶段写库，仅在跟踪完成并通过
+            # 区域过滤后由 create_tracking_event 落库为 initial/duplicate，
+            # 保证事件列表只有 initial/final/duplicate 三种状态。
+            if (self.save_to_db or event.get('task_id')) and not event.get('defer_db'):
                 self._save_to_database(event)
         except Exception as e:
             logger.error(f"[EventOutput] 异步 I/O 任务失败: {e}")
@@ -829,200 +837,132 @@ class EventOutput:
             return False
         return bool(set(entered_zones) & set(self.required_zones))
 
-    def update_event(self, event_id: str, status: str = None,
-                     data: Dict = None, image=None,
-                     push_websocket: bool = False,
-                     event_type: str = None) -> bool:
-        """更新事件记录
+    def create_tracking_event(self, event_id: str, status: str, data: Dict = None,
+                              image=None, event_type: str = None,
+                              dedup_status: str = None, dedup_reason: str = None) -> bool:
+        """跟踪完成时创建事件记录（事件状态初始落库）
 
-        供 TrackedObjectProcessor 在跟踪过程中更新事件状态和数据。
-        如果提供图片，会保存图片并更新图片 URL。
+        跟踪过程中不写库（emit 以 defer_db=True 跳过），事件仅在跟踪完成并通过
+        区域过滤后首次写入数据库，状态为 initial（待语义去重）或 duplicate（规则
+        去重判重）。后续由去重流程切换为最终事件 final / 被去重 duplicate，
+        保证事件列表只有 initial / final / duplicate 三种状态。
 
-        远程上传（MinIO/FTP）、数据库更新、WebSocket 推送均异步执行，
-        不阻塞事件消费主循环，避免存储服务不可达时导致事件队列积压。
+        - 图片压缩 + 本地保存 + 数据库 INSERT 同步执行：确保记录行先于
+          final/duplicate 的状态切换存在，避免异步 UPDATE 命中空行。
+        - 远程上传（MinIO/FTP）+ WebSocket 推送异步执行。
 
         Args:
             event_id: 事件 UUID
-            status: 事件状态（tracking_start / tracking_update / initial / final / duplicate / tracking_end），写入独立 status 列
-            data: 更新数据字典（可能包含 start_time, end_time, bbox 等）
-            image: 可选的图片数据（RGB 格式 numpy 数组）
-            push_websocket: 是否推送 event_update 到前端（end 时为 True）
-            event_type: 事件类型（非 None 时更新 type 列）
+            status: 初始状态（initial / duplicate）
+            data: 更新数据字典（含 start_time, end_time, bbox, entered_zones 等）
+            image: 最终快照（RGB 格式 numpy 数组）
+            event_type: 事件类型（tracking / zone / loitering）
+            dedup_status: 去重状态（normal / duplicate）
+            dedup_reason: 去重判定原因
 
         Returns:
-            bool: True 表示任务已提交异步执行（不代表远程 I/O 已完成）
+            bool: True 表示记录已写入数据库
         """
         try:
             image_urls = {}
             compressed_image = None
-
-            # 图片压缩 + 本地保存（CPU/磁盘，毫秒级，同步执行）
-            # 远程上传交给异步线程，避免 MinIO/FTP 不可达时阻塞主循环
             if image is not None:
                 try:
                     compressed_image = self._compress_image(image)
-
-                    # 本地保存（同步，毫秒级）
                     if getattr(self, 'local_enabled', False):
                         local_path = self._save_image_local(event_id, compressed_image)
                         if local_path:
                             image_urls['local'] = f"http://{self.server_host}:{self.server_port}/{local_path}"
                 except Exception as e:
-                    logger.debug(f"[EventOutput] 更新事件图片处理失败: {e}")
+                    logger.debug(f"[EventOutput] 创建事件图片处理失败: {e}")
                     compressed_image = None
 
-            # 异步执行远程上传 + 数据库更新 + WebSocket 推送
-            self._io_executor.submit(
-                self._async_update_task,
-                event_id, status, data, compressed_image, image_urls,
-                push_websocket, event_type,
+            # 同步写库：确保行存在，供后续 final/duplicate 状态切换的 UPDATE 命中
+            record = self._insert_tracking_record(
+                event_id, status, data, image_urls, event_type, dedup_status, dedup_reason
             )
 
+            # 异步：远程上传 + WebSocket 推送
+            self._io_executor.submit(
+                self._async_create_tracking_io,
+                event_id, compressed_image, image_urls, record,
+            )
             return True
 
         except Exception as e:
-            logger.debug(f"[EventOutput] 更新事件异常: {e}")
+            logger.debug(f"[EventOutput] 创建跟踪事件失败: {e}")
             import traceback
             traceback.print_exc()
             return False
 
-    def _async_update_task(self, event_id: str, status: str, data: Dict,
-                           compressed_image, image_urls: Dict,
-                           push_websocket: bool, event_type: str):
-        """异步执行更新事件的 I/O 密集型操作（在线程池中运行，不阻塞主循环）
+    def _insert_tracking_record(self, event_id: str, status: str, data: Dict,
+                                image_urls: Dict, event_type: str,
+                                dedup_status: str, dedup_reason: str):
+        """同步插入事件记录到数据库，返回 EventRecord"""
+        from src.tasks.task_manager import TaskManager, EventRecord
 
-        - 远程上传图片到 MinIO/FTP
-        - 更新数据库记录
-        - 推送 WebSocket 事件更新到前端
-        """
+        event_data = data or {}
+        entered_zones = event_data.get('entered_zones') or []
+        current_zones = event_data.get('current_zones') or []
+        zone_name = ",".join(current_zones) if current_zones else ""
+        loitered_zones = event_data.get('loitered_zones') or []
+
+        record = EventRecord(
+            event_id=event_id,
+            task_id=self.task_id,
+            camera_id=self.camera_id,
+            algorithm=self.algorithm,
+            type=event_type or 'tracking',
+            class_name=event_data.get('class_name', ''),
+            confidence=event_data.get('confidence', 0.0),
+            bbox=event_data.get('bbox', []),
+            local_image_url=image_urls.get('local', ''),
+            minio_image_url=image_urls.get('MinIOOutputter', ''),
+            ftp_image_url=image_urls.get('FTPOutputter', ''),
+            metadata=event_data.get('metadata', {}),
+            start_time=self._parse_datetime(event_data.get('start_time')),
+            end_time=self._parse_datetime(event_data.get('end_time')),
+            status=status,
+            entered_zones=entered_zones,
+            zone_name=zone_name,
+            loitered_zones=loitered_zones,
+            dedup_status=dedup_status or '',
+            dedup_reason=dedup_reason or '',
+        )
+        TaskManager().add_event(record)
+        if not record.created_at:
+            record.created_at = datetime.now()
+        return record
+
+    def _async_create_tracking_io(self, event_id: str, compressed_image,
+                                  image_urls: Dict, record):
+        """异步执行创建事件记录的 I/O：远程上传 + WebSocket 推送"""
         try:
-            from src.tasks.task_manager import TaskManager
-            task_manager = TaskManager()
-
-            gif_urls = {}
-
-            # 1. 远程上传图片（MinIO/FTP）
             if compressed_image is not None and self.image_outputters:
                 for outputter in self.image_outputters:
                     try:
                         url = outputter.upload(event_id, compressed_image, content_type='image/jpeg')
                         image_urls[outputter.__class__.__name__] = url
                     except Exception as e:
-                        logger.debug(f"[EventOutput] 更新事件图片上传失败 ({outputter.__class__.__name__}): {e}")
+                        logger.debug(f"[EventOutput] 事件图片上传失败 ({outputter.__class__.__name__}): {e}")
+                # 更新远程图片 URL 到数据库与记录对象
+                if any(k in image_urls for k in ('MinIOOutputter', 'FTPOutputter')):
+                    from src.tasks.task_manager import TaskManager
+                    TaskManager().update_event(event_id=event_id, image_urls=image_urls)
+                    record.minio_image_url = image_urls.get('MinIOOutputter', record.minio_image_url)
+                    record.ftp_image_url = image_urls.get('FTPOutputter', record.ftp_image_url)
 
-            # 2. 提取 data 中的字段
-            metadata = data.get('metadata') if data else None
-            start_time = self._parse_datetime(data.get('start_time')) if data else None
-            end_time = self._parse_datetime(data.get('end_time')) if data else None
-            bbox = data.get('bbox') if data else None
-            confidence = data.get('confidence') if data else None
-            class_name = data.get('class_name') if data else None
-            # zone 字段：entered_zones 写入独立列，current_zones 转逗号串作为 zone_name
-            entered_zones = data.get('entered_zones') if data else None
-            current_zones = data.get('current_zones') if data else None
-            zone_name = ",".join(current_zones) if current_zones is not None else None
-            # loitered_zones：累计曾徘徊区域（只增不减），写入独立列
-            loitered_zones = data.get('loitered_zones') if data else None
-
-            # 提取 gif_urls（如果存在）
-            if data and 'gif_urls' in data:
-                gif_urls = data['gif_urls']
-
-            # status 写入独立 status 列（不再塞入 metadata）
-            # 将 data 中不属于独立列的额外字段放入 metadata
-            if data:
-                known_keys = ('metadata', 'start_time', 'end_time', 'bbox',
-                              'gif_urls', 'confidence', 'class_name', 'status',
-                              'entered_zones', 'current_zones', 'loitered_zones')
-                extra_meta = {k: v for k, v in data.items() if k not in known_keys}
-                if extra_meta:
-                    if metadata is None:
-                        metadata = {}
-                    if isinstance(metadata, dict):
-                        metadata.update(extra_meta)
-                    else:
-                        metadata = extra_meta
-
-            # 3. 更新数据库
-            # 终态保护：initial/tracking_* 的异步写库可能晚于 final/duplicate/tracking_end 的同步写库执行，
-            # 用原子条件更新（status_guard）保证终态不被覆盖回 initial，否则最终事件推送（MQTT/前端）被吞
-            status_guard = status in ('tracking_start', 'tracking_update', 'initial')
-            success = task_manager.update_event(
-                event_id=event_id,
-                event_type=event_type,
-                metadata=metadata,
-                image_urls=image_urls if image_urls else None,
-                gif_urls=gif_urls if gif_urls else None,
-                start_time=start_time,
-                end_time=end_time,
-                bbox=bbox,
-                confidence=confidence,
-                class_name=class_name,
-                status=status,
-                entered_zones=entered_zones,
-                zone_name=zone_name,
-                loitered_zones=loitered_zones,
-                status_guard=status_guard,
-            )
-
-            if success:
-                logger.debug(f"[EventOutput] 事件更新成功: event_id={event_id[:8]}, status={status}")
-            else:
-                logger.debug(f"[EventOutput] 事件更新失败（未找到记录）: event_id={event_id[:8]}")
-
-            # 4. WebSocket 推送（end 时）
-            if push_websocket and success:
-                # 推送实际生效的状态：异步写库可能被终态保护拦截（status_guard），
-                # 若事件已是终态则不推送非终态状态，避免前端收到 initial 覆盖 final
-                if status_guard:
-                    try:
-                        final_record = task_manager.get_event_by_id(event_id)
-                        if final_record is None:
-                            push_status = status
-                        else:
-                            push_status = final_record.status
-                    except Exception as e:
-                        logger.debug(f"[EventOutput] 查询推送状态失败，跳过推送: {e}")
-                        return  # 查询失败不推送，避免非终态推送覆盖终态
-                else:
-                    push_status = status
-                self._push_event_update_to_websocket(event_id, push_status, data, image_urls)
+            # WebSocket 推送前校验实际状态：异步去重可能已完成，避免 initial 覆盖 final
+            try:
+                from src.tasks.task_manager import TaskManager
+                current = TaskManager().get_event_by_id(event_id)
+                record.status = current.status if current is not None else record.status
+            except Exception as e:
+                logger.debug(f"[EventOutput] 查询推送状态失败，使用初始状态推送: {e}")
+            self._push_event_to_websocket(record)
 
         except Exception as e:
-            logger.error(f"[EventOutput] 异步更新事件任务失败: {e}")
-
-    def _push_event_update_to_websocket(self, event_id: str, status: str,
-                                        data: Dict, image_urls: Dict):
-        """推送事件状态更新到前端驾驶舱（event_update 事件）
-
-        Args:
-            event_id: 事件 UUID
-            status: 事件状态（active / ended）
-            data: 更新数据字典
-            image_urls: 图片 URL 字典
-        """
-        try:
-            import requests
-            data = data or {}
-            current_zones = data.get('current_zones') or []
-            payload = {
-                'event_id': event_id,
-                'task_id': self.task_id,
-                'status': status,
-                'data': data,
-                'image_urls': image_urls or {},
-                # zone 字段提到顶层，便于前端无需深挖 data 即可消费
-                'entered_zones': data.get('entered_zones') or [],
-                'zone_name': ",".join(current_zones) if current_zones else "",
-                'loitered_zones': data.get('loitered_zones') or [],
-            }
-            requests.post(
-                f'http://{self.server_host}:{self.server_port}/api/events/update',
-                json=payload,
-                timeout=2
-            )
-        except Exception as e:
-            logger.debug(f"[EventOutput] 推送 event_update 失败: {e}")
+            logger.error(f"[EventOutput] 创建事件异步 I/O 失败: {e}")
 
     def _get_gif_generator(self):
         """延迟初始化 GIF 生成器"""
@@ -1160,7 +1100,7 @@ class EventOutput:
 
             d = record.to_dict()
             # 仅最终事件推送：初始事件（语义去重未完成）等待最终推送，被去重事件不推送
-            if d['status'] not in ('final', 'tracking_end'):
+            if d['status'] != 'final':
                 logger.debug(
                     f"[EventOutput] MQTT 跳过 gif_ready 补推（事件未定）: "
                     f"event_id={event_id[:8]}, status={d['status']}"
@@ -1228,6 +1168,14 @@ class EventOutput:
                 return
 
             d = record.to_dict()
+            # 仅最终事件推送：AI 描述只在 final 事件上生成，此处兜底校验状态，
+            # 避免异常时序下被去重/初始事件补推描述给第三方
+            if d['status'] != 'final':
+                logger.debug(
+                    f"[EventOutput] MQTT 跳过 AI 描述补推（事件非最终）: "
+                    f"event_id={event_id[:8]}, status={d['status']}"
+                )
+                return
             payload = {
                 'event_id': d['event_id'],
                 'update_type': 'ai_description',     # 标记：本消息为 AI 描述补推更新
@@ -1297,10 +1245,10 @@ class EventOutput:
                 return
 
             d = record.to_dict()
-            # 被去重事件不推送；非终态事件（异常时序）不推送
-            if d['status'] not in ('final', 'tracking_end'):
+            # 仅最终事件推送：被去重事件不推送；非终态事件（异常时序）不推送
+            if d['status'] != 'final':
                 logger.warning(
-                    f"[EventOutput] MQTT 跳过最终事件推送（状态非终态）: "
+                    f"[EventOutput] MQTT 跳过最终事件推送（状态非final）: "
                     f"event_id={event_id[:8]}, status={d['status']}"
                 )
                 return

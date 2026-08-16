@@ -920,9 +920,7 @@ window.Events = (function() {
     // ✅ 事件状态 -> 中文 + 样式类的统一映射（与 monitor.html 一致）
     function getStatusDisplay(status) {
         const statusMap = {
-            'tracking_start':  { text: '跟踪开始', className: 'status-start' },
-            'tracking_update': { text: '跟踪更新', className: 'status-update' },
-            'tracking_end':    { text: '已结束',   className: 'status-ended' },
+            // 事件列表只有三种状态：初始事件 / 最终事件 / 被去重
             'initial':         { text: '初始事件', className: 'status-initial' },
             'final':           { text: '最终事件', className: 'status-final' },
             'duplicate':       { text: '被去重',   className: 'status-duplicate' },

@@ -745,6 +745,7 @@ class TrackedObjectProcessor(mp.Process):
             image=image,
             frame_id=obj_dict.get("frame_time", 0),
             lifecycle=True,  # 参与去重状态机：创建阶段不推 MQTT，状态切换为最终事件后再推送
+            defer_db=True,   # 跟踪中不写库：事件仅在跟踪完成并通过区域过滤后首次落库
         )
 
     def _derive_event_type(self, obj_dict: dict) -> str:
@@ -908,28 +909,11 @@ class TrackedObjectProcessor(mp.Process):
         bbox = obj_dict.get("box", [0, 0, 0, 0])
 
         # ✅ 只更新内存最佳缩略图（不保存到存储，不推送 WebSocket）
+        # 跟踪中不写库：事件状态仅 initial/final/duplicate 三种，此处仅维护内存
+        # 缩略图，等跟踪完成时统一落库为最终状态
         if image is not None:
             event_output.update_thumbnail(
                 event_id, image, confidence, tuple(bbox)
-            )
-
-        # ✅ 更新数据库事件状态为 tracking_update（不推送前端，只更新数据库）
-        if event_id:
-            update_data = {
-                "confidence": confidence,
-                "bbox": bbox,
-                "class_name": class_name,
-                "current_zones": obj_dict.get("current_zones", []),
-                "entered_zones": obj_dict.get("entered_zones", []),
-                "pending_loitering": obj_dict.get("pending_loitering", []),
-                "loitered_zones": obj_dict.get("loitered_zones", []),
-            }
-            event_output.update_event(
-                event_id,
-                status="tracking_update",
-                data=update_data,
-                image=None,
-                push_websocket=False,
             )
 
         logger.debug(
@@ -1445,20 +1429,18 @@ class TrackedObjectProcessor(mp.Process):
             )
 
         if not passes_zones:
-            # 未通过区域过滤：保持原行为，仅更新基础数据（状态=已结束，不参与去重）
-            event_output.update_event(
-                event_id,
-                status="tracking_end",
-                data=update_data,
-                image=final_image,
-                push_websocket=True,
-                event_type=self._derive_event_type(obj_dict),
-            )
-            # MQTT：仅推最终事件——tracking_end 为终态且未被去重，推送完整数据
+            # 未通过区域过滤：直接丢弃事件（不存库、不推送）
+            # 事件跟踪中不写库（defer_db），此处 delete_event 仅为安全兜底
+            # （兼容历史残留），确保事件列表只保留 initial/final/duplicate 三种状态
+            from src.tasks.task_manager import TaskManager
             try:
-                event_output.push_final_to_mqtt(event_id)
+                TaskManager().delete_event(event_id)
+                logger.info(
+                    f"[{camera_id}] 事件未通过区域过滤，丢弃: event_id={event_id[:8]}, "
+                    f"label={class_name}, entered_zones={entered_zones}"
+                )
             except Exception as e:
-                logger.debug(f"[MQTT] 推送 tracking_end 事件失败 event={event_id[:8]}: {e}")
+                logger.debug(f"[{camera_id}] 丢弃事件失败 event={event_id[:8]}: {e}")
         else:
             # ========================================
             # 通过区域过滤：新状态机流转
@@ -1482,18 +1464,12 @@ class TrackedObjectProcessor(mp.Process):
 
             if dedup_status == "duplicate":
                 # 规则去重判重：状态=被去重，不生成最终图片/GIF，跳过语义去重
-                event_output.update_event(
+                event_output.create_tracking_event(
                     event_id,
                     status="duplicate",
                     data=update_data,
                     image=None,
-                    push_websocket=True,
                     event_type=self._derive_event_type(obj_dict),
-                )
-                from src.tasks.task_manager import TaskManager
-                tm = TaskManager()
-                tm.update_event(
-                    event_id,
                     dedup_status=dedup_status,
                     dedup_reason=dedup_reason,
                 )
@@ -1503,12 +1479,11 @@ class TrackedObjectProcessor(mp.Process):
                 )
             else:
                 # 规则未判重：生成图片和事件数据 → 状态=初始事件
-                event_output.update_event(
+                event_output.create_tracking_event(
                     event_id,
                     status="initial",
                     data=update_data,
                     image=final_image,
-                    push_websocket=True,
                     event_type=self._derive_event_type(obj_dict),
                 )
 

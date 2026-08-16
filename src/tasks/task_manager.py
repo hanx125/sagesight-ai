@@ -889,11 +889,11 @@ class TaskManager:
             except Exception as e:
                 logger.warning(f"json_extract 回填 status 失败，跳过: {e}")
 
-            # 旧事件兜底：metadata 无 status 的行视为已结束
+            # 旧事件兜底：metadata 无 status 的行视为最终事件
             try:
                 cursor.execute('''
                     UPDATE events
-                    SET status = 'tracking_end'
+                    SET status = 'final'
                     WHERE (json_extract(metadata, '$.status') IS NULL
                            OR json_extract(metadata, '$.status') = '')
                       AND (status IS NULL OR status = '' OR status = 'tracking_start')
@@ -949,6 +949,26 @@ class TaskManager:
             if 'dedup_reason' not in columns:
                 cursor.execute("ALTER TABLE events ADD COLUMN dedup_reason TEXT")
                 logger.debug("[TaskManager] events 表添加 dedup_reason 字段")
+
+            # ========================================
+            # 迁移：历史事件状态归一化（保证事件列表只有 initial/final/duplicate 三种状态）
+            # 事件状态机升级为"跟踪中不写库"后，事件首次落库即为 initial/duplicate，
+            # 再切换为 final/duplicate。旧逻辑可能残留 tracking_start / tracking_update
+            # （跟踪中被中断的孤儿事件）和 tracking_end（已废弃状态），此处统一转为
+            # 最终事件 final，避免事件列表出现中间状态。
+            # ========================================
+            try:
+                cursor.execute('''
+                    UPDATE events SET status = 'final'
+                    WHERE status IN ('tracking_start', 'tracking_update', 'tracking_end')
+                ''')
+                if cursor.rowcount > 0:
+                    logger.info(
+                        f"[TaskManager] 已归一化 {cursor.rowcount} 条历史事件状态 "
+                        f"(tracking_start/tracking_update/tracking_end → final)"
+                    )
+            except Exception as e:
+                logger.warning(f"历史事件状态归一化失败: {e}")
 
             # ========================================
             # 算法注册表（保留表结构，避免旧触发器/外键引用失败）
@@ -1360,10 +1380,10 @@ class TaskManager:
 
         if status is not None:
             if status_guard:
-                # 终态保护：事件已为终态(final/duplicate/tracking_end)时不允许被非终态覆盖，
+                # 终态保护：事件已为终态(final/duplicate)时不允许被非终态覆盖，
                 # 原子条件更新，避免异步写库晚于终态写库执行时把状态改回 initial
                 updates.append(
-                    "status = CASE WHEN status IN ('final','duplicate','tracking_end') "
+                    "status = CASE WHEN status IN ('final','duplicate') "
                     "THEN status ELSE ? END"
                 )
                 params.append(status)
@@ -1630,6 +1650,14 @@ class TaskManager:
             if row is None:
                 return None
             return self._row_to_event(row)
+
+    def delete_event(self, event_id: str) -> bool:
+        """按 event_id 删除事件记录（用于未通过区域过滤的事件直接丢弃）"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM events WHERE event_id = ?', (event_id,))
+            conn.commit()
+            return cursor.rowcount > 0
 
     def clear_old_events(self, days: int = 7) -> int:
         """清理旧事件"""
