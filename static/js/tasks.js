@@ -45,13 +45,11 @@ function onDetectionTypeChange() {
     const pollingGroup = document.getElementById('pollingIntervalGroup');
     const motionGroup = document.getElementById('motionGateFallbackGroup');
     const cronGroup = document.getElementById('scheduleCronGroup');
-    const sourceGroup = document.getElementById('scheduleSourceGroup');
     const filePathGroup = document.getElementById('batchFilePathGroup');
     const fileLoopGroup = document.getElementById('fileLoopGroup');
     if (pollingGroup) pollingGroup.style.display = type === 'polling' ? '' : 'none';
     if (motionGroup) motionGroup.style.display = type === 'motion_gated' ? '' : 'none';
     if (cronGroup) cronGroup.style.display = type === 'scheduled' ? '' : 'none';
-    if (sourceGroup) sourceGroup.style.display = type === 'scheduled' ? '' : 'none';
     if (filePathGroup) filePathGroup.style.display = (type === 'file' || type === 'scheduled') ? '' : 'none';
     if (fileLoopGroup) fileLoopGroup.style.display = type === 'file' ? '' : 'none';
 }

@@ -183,44 +183,54 @@
                                     <option value="scheduled">定时批量检测</option>
                                 </select>
                             </div>
-                            <div class="form-group" id="pollingIntervalGroup" style="display: none;">
-                                <label for="pollingIntervalFrames">轮询抽样间隔（帧）</label>
-                                <input type="number" id="pollingIntervalFrames" name="polling_interval_frames" min="1" max="100" value="5">
-                                <small style="color: #888; font-size: 12px;">每 N 帧推理一次，其余帧跳过推理，省算力</small>
-                            </div>
-                            <div class="form-group" id="motionGateFallbackGroup" style="display: none;">
-                                <label for="motionGateFallbackInterval">无运动兜底补抽间隔（帧）</label>
-                                <input type="number" id="motionGateFallbackInterval" name="motion_gate_fallback_interval" min="1" max="1000" value="30">
-                                <small style="color: #888; font-size: 12px;">长时间静止时每 N 帧强制推理一次，防漏检静止目标</small>
-                            </div>
-                            <div class="form-group" id="scheduleCronGroup" style="display: none;">
-                                <label for="scheduleCron">定时 Cron 表达式</label>
-                                <input type="text" id="scheduleCron" name="schedule_cron" placeholder="如 0 2 * * *（每天 02:00）">
-                                <small style="color: #888; font-size: 12px;">5 字段：分 时 日 月 周，命中时启动批量检测</small>
-                            </div>
-                            <div class="form-group" id="scheduleSourceGroup" style="display: none;">
-                                <label for="scheduleSource">扫描来源目录</label>
-                                <input type="text" id="scheduleSource" name="schedule_source" placeholder="定时扫描目录下的视频文件">
-                                <small style="color: #888; font-size: 12px;">每次触发时扫描该目录下的视频文件进行批量检测；填了目录则忽略下方文件列表</small>
-                            </div>
-                            <div class="form-group" id="batchFilePathGroup" style="display: none; flex: 1 1 100%;">
-                                <label for="batchFilePaths">视频文件路径列表（每行一个）</label>
-                                <textarea id="batchFilePaths" name="batch_file_paths" rows="3" placeholder="D:\videos\a.mp4&#10;/recordings/b.mp4" style="width: 100%; resize: vertical;"></textarea>
-                            </div>
-                            <div class="form-group" id="fileLoopGroup" style="display: none;">
-                                <label for="fileLoop">循环处理</label>
-                                <select id="fileLoop" name="file_loop">
-                                    <option value="false">否</option>
-                                    <option value="true">是</option>
-                                </select>
-                                <small style="color: #888; font-size: 12px;">处理完所有文件后循环重复（用于实时源当作文件）</small>
-                            </div>
                             <div class="form-group">
                                 <label for="algorithmConfig">算法配置 <span class="required">*</span></label>
                                 <select id="algorithmConfig" name="algorithm_config" onchange="Tasks.onAlgorithmConfigChange()">
                                     <option value="">-- 请选择算法配置 --</option>
                                 </select>
                                 <input type="hidden" id="algorithm" name="algorithm">
+                            </div>
+                        </div>
+                        <!-- 轮询检测参数 -->
+                        <div class="form-row" id="pollingIntervalGroup" style="display: none;">
+                            <div class="form-group">
+                                <label for="pollingIntervalFrames">轮询抽样间隔（帧）</label>
+                                <input type="number" id="pollingIntervalFrames" name="polling_interval_frames" min="1" max="100" value="5">
+                            </div>
+                        </div>
+                        <!-- 运动门控检测参数 -->
+                        <div class="form-row" id="motionGateFallbackGroup" style="display: none;">
+                            <div class="form-group">
+                                <label for="motionGateFallbackInterval">无运动兜底补抽间隔（帧）</label>
+                                <input type="number" id="motionGateFallbackInterval" name="motion_gate_fallback_interval" min="1" max="1000" value="30">
+                            </div>
+                        </div>
+                        <!-- 定时批量检测参数 -->
+                        <div class="form-row" id="scheduleCronGroup" style="display: none;">
+                            <div class="form-group">
+                                <label for="scheduleCron">定时 Cron 表达式</label>
+                                <input type="text" id="scheduleCron" name="schedule_cron" placeholder="如 0 2 * * *（每天 02:00）">
+                            </div>
+                            <div class="form-group">
+                                <label for="scheduleSource">扫描来源目录</label>
+                                <input type="text" id="scheduleSource" name="schedule_source" placeholder="定时扫描目录下的视频文件">
+                            </div>
+                        </div>
+                        <!-- 批处理文件列表（file / scheduled 共用） -->
+                        <div class="form-row" id="batchFilePathGroup" style="display: none;">
+                            <div class="form-group" style="flex: 1 1 100%;">
+                                <label for="batchFilePaths">视频文件路径列表（每行一个）</label>
+                                <textarea id="batchFilePaths" name="batch_file_paths" rows="3" placeholder="D:\videos\a.mp4&#10;/recordings/b.mp4" style="width: 100%; resize: vertical;"></textarea>
+                            </div>
+                        </div>
+                        <!-- 离线文件循环处理参数 -->
+                        <div class="form-row" id="fileLoopGroup" style="display: none;">
+                            <div class="form-group">
+                                <label for="fileLoop">循环处理</label>
+                                <select id="fileLoop" name="file_loop">
+                                    <option value="false">否</option>
+                                    <option value="true">是</option>
+                                </select>
                             </div>
                         </div>
                         <div class="form-row">
@@ -252,27 +262,6 @@
                                     <option value="true">启用</option>
                                     <option value="false">禁用</option>
                                 </select>
-                            </div>
-                        </div>
-                        <!-- 事件规则去重（任务级，独立于大模型，不消耗 token） -->
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label for="dedupEnabled">事件规则去重</label>
-                                <select id="dedupEnabled" name="dedup_enabled">
-                                    <option value="true">启用</option>
-                                    <option value="false">禁用</option>
-                                </select>
-                                <small style="color: #888; font-size: 12px;">按「时间窗口+同类别+IoU 重叠」判重，被判定为重复的事件不推送第三方、不生成最终图片/GIF</small>
-                            </div>
-                            <div class="form-group">
-                                <label for="dedupWindowSeconds">去重时间窗口（秒）</label>
-                                <input type="number" id="dedupWindowSeconds" name="dedup_window_seconds" min="1" max="86400" value="300">
-                                <small style="color: #888; font-size: 12px;">窗口内同类别且位置高度重叠才判为重复</small>
-                            </div>
-                            <div class="form-group">
-                                <label for="dedupIouThreshold">IoU 阈值（0-1）</label>
-                                <input type="number" id="dedupIouThreshold" name="dedup_iou_threshold" step="0.01" min="0.01" max="1" value="0.85">
-                                <small style="color: #888; font-size: 12px;">检测框重叠度超过该值才判重复；0.3 过敏感，0.85 仅拦截明显重复</small>
                             </div>
                         </div>
                     </div>
@@ -823,6 +812,24 @@
                             <label for="eventGifPostSeconds">GIF结束后秒数</label>
                             <input type="number" id="eventGifPostSeconds" name="event_gif_post_seconds" step="0.5" min="0" max="20" placeholder="5.0">
                             <small style="color: #888; font-size: 12px;">事件结束后多少秒的帧纳入GIF（目标消失后等待此时间再生成）</small>
+                        </div>
+                    </div>
+                    <!-- 事件规则去重（任务级，独立于大模型，不消耗 token） -->
+                    <div class="form-row" style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+                        <div class="form-group">
+                            <label for="dedupEnabled">事件规则去重</label>
+                            <select id="dedupEnabled" name="dedup_enabled">
+                                <option value="true">启用</option>
+                                <option value="false">禁用</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="dedupWindowSeconds">去重时间窗口（秒）</label>
+                            <input type="number" id="dedupWindowSeconds" name="dedup_window_seconds" min="1" max="86400" value="300">
+                        </div>
+                        <div class="form-group">
+                            <label for="dedupIouThreshold">IoU 阈值（0-1）</label>
+                            <input type="number" id="dedupIouThreshold" name="dedup_iou_threshold" step="0.01" min="0.01" max="1" value="0.85">
                         </div>
                     </div>
                 </div>
