@@ -425,7 +425,23 @@ class DetectionTask:
     task_name: str = ""
     enabled: bool = True
     status: str = "stopped"
-    detection_type: str = "realtime"  # realtime（实时检测）, polling（轮询检测）
+    detection_type: str = "realtime"  # realtime（实时检测）, polling（轮询检测）, motion_gated（运动门控检测）, file（离线文件检测）, scheduled（定时批量检测）
+    # 轮询检测（polling）：每 N 帧推理一次，其余帧跳过推理仅保留跟踪状态
+    polling_interval_frames: int = 5
+    # 运动门控检测（motion_gated）：无运动时跳过推理，每 N 帧补抽一次以防漏检静止目标
+    motion_gate_fallback_interval: int = 30
+    # 定时批量检测（scheduled）：cron 表达式（如 "0 2 * * *"），命中时启动批量检测
+    schedule_cron: str = ""
+    # 定时批量检测（scheduled）：扫描来源（录像目录），为空时用 file_paths
+    schedule_source: str = ""
+    # 离线文件检测（file）/ 定时（scheduled）：待处理的视频文件路径列表
+    file_paths: List[str] = field(default_factory=list)
+    # 离线文件检测（file）：是否循环处理文件列表（True 时无限循环）
+    file_loop: bool = False
+    # 事件规则去重（任务级，独立于大模型，不消耗 token）
+    dedup_enabled: bool = True
+    dedup_window_seconds: int = 300
+    dedup_iou_threshold: float = 0.85
     status: str = "stopped"  # running, stopped, error
 
     # 检测算法配置
@@ -478,6 +494,15 @@ class DetectionTask:
             'enabled': self.enabled,
             'status': self.status,
             'detection_type': self.detection_type,  # 检测类型（新增）
+            'polling_interval_frames': self.polling_interval_frames,  # 轮询抽样间隔
+            'motion_gate_fallback_interval': self.motion_gate_fallback_interval,  # 运动门控兜底补抽间隔
+            'schedule_cron': self.schedule_cron,  # 定时批量 cron 表达式
+            'schedule_source': self.schedule_source,  # 定时批量扫描来源（录像目录）
+            'file_paths': self.file_paths,  # 离线文件路径列表
+            'file_loop': self.file_loop,  # 是否循环处理文件
+            'dedup_enabled': self.dedup_enabled,  # 事件规则去重开关
+            'dedup_window_seconds': self.dedup_window_seconds,  # 去重时间窗口（秒）
+            'dedup_iou_threshold': self.dedup_iou_threshold,  # 去重 IoU 阈值
             'algorithm': self.algorithm,
             'model_path': self.model_path,
             'model_type': self.model_type,  # 模型类型字段
@@ -504,6 +529,15 @@ class DetectionTask:
             enabled=data.get('enabled', True),
             status=data.get('status', 'stopped'),
             detection_type=data.get('detection_type', 'realtime'),  # 检测类型（新增）
+            polling_interval_frames=data.get('polling_interval_frames', 5),  # 轮询抽样间隔
+            motion_gate_fallback_interval=data.get('motion_gate_fallback_interval', 30),  # 运动门控兜底补抽间隔
+            schedule_cron=data.get('schedule_cron', ''),  # 定时批量 cron 表达式
+            schedule_source=data.get('schedule_source', ''),  # 定时批量扫描来源
+            file_paths=data.get('file_paths', []),  # 离线文件路径列表
+            file_loop=data.get('file_loop', False),  # 是否循环处理文件
+            dedup_enabled=data.get('dedup_enabled', True),  # 事件规则去重开关
+            dedup_window_seconds=data.get('dedup_window_seconds', 300),  # 去重时间窗口（秒）
+            dedup_iou_threshold=data.get('dedup_iou_threshold', 0.85),  # 去重 IoU 阈值
             algorithm=data.get('algorithm', 'yolov11'),
             model_path=data.get('model_path', 'models/yolov11n.onnx'),
             model_type=data.get('model_type', 'yolov11n'),  # 模型类型字段
@@ -531,6 +565,16 @@ class DetectionTask:
             'model_type': self.model_type,  # 模型类型字段
             'labels_file': self.labels_file,  # 标签文件路径（task_executor 经 task_config 取此值）
             'target_classes': self.target_classes,
+            'detection_type': self.detection_type,  # 检测类型
+            'polling_interval_frames': self.polling_interval_frames,  # 轮询抽样间隔
+            'motion_gate_fallback_interval': self.motion_gate_fallback_interval,  # 运动门控兜底补抽间隔
+            'schedule_cron': self.schedule_cron,  # 定时批量 cron 表达式
+            'schedule_source': self.schedule_source,  # 定时批量扫描来源
+            'file_paths': self.file_paths,  # 离线文件路径列表
+            'file_loop': self.file_loop,  # 是否循环处理文件
+            'dedup_enabled': self.dedup_enabled,  # 事件规则去重开关
+            'dedup_window_seconds': self.dedup_window_seconds,  # 去重时间窗口（秒）
+            'dedup_iou_threshold': self.dedup_iou_threshold,  # 去重 IoU 阈值
             'motion_detection_enabled': self.motion_detection_enabled,
             'tracking_enabled': self.tracking_enabled,
             'decoder_config': self.decoder_config,
@@ -706,6 +750,11 @@ class TaskManager:
 
                     -- 显示配置（JSON）
                     display_config TEXT DEFAULT '{}',
+
+                    -- 事件规则去重（任务级）
+                    dedup_enabled BOOLEAN DEFAULT 1,
+                    dedup_window_seconds INTEGER DEFAULT 300,
+                    dedup_iou_threshold REAL DEFAULT 0.85,
 
                     -- 时间戳
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -1006,6 +1055,47 @@ class TaskManager:
                 cursor.execute("ALTER TABLE detection_tasks ADD COLUMN detection_type VARCHAR(20) DEFAULT 'realtime'")
                 logger.info("数据库迁移: 添加detection_type字段到detection_tasks表")
 
+            # 添加检测类型参数：polling 轮询抽样间隔
+            if 'polling_interval_frames' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN polling_interval_frames INTEGER DEFAULT 5")
+                logger.info("数据库迁移: 添加 polling_interval_frames 字段到 detection_tasks 表")
+
+            # 添加检测类型参数：motion_gated 无运动兜底补抽间隔
+            if 'motion_gate_fallback_interval' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN motion_gate_fallback_interval INTEGER DEFAULT 30")
+                logger.info("数据库迁移: 添加 motion_gate_fallback_interval 字段到 detection_tasks 表")
+
+            # 添加检测类型参数：scheduled 定时批量 cron 表达式
+            if 'schedule_cron' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN schedule_cron VARCHAR(100) DEFAULT ''")
+                logger.info("数据库迁移: 添加 schedule_cron 字段到 detection_tasks 表")
+
+            # 添加检测类型参数：scheduled 扫描来源（录像目录）
+            if 'schedule_source' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN schedule_source VARCHAR(500) DEFAULT ''")
+                logger.info("数据库迁移: 添加 schedule_source 字段到 detection_tasks 表")
+
+            # 添加检测类型参数：file 离线文件路径列表（JSON）
+            if 'file_paths' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN file_paths TEXT DEFAULT '[]'")
+                logger.info("数据库迁移: 添加 file_paths 字段到 detection_tasks 表")
+
+            # 添加检测类型参数：file 是否循环处理文件
+            if 'file_loop' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN file_loop INTEGER DEFAULT 0")
+                logger.info("数据库迁移: 添加 file_loop 字段到 detection_tasks 表")
+
+            # 添加事件规则去重字段（任务级）
+            if 'dedup_enabled' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN dedup_enabled BOOLEAN DEFAULT 1")
+                logger.info("数据库迁移: 添加 dedup_enabled 字段到 detection_tasks 表")
+            if 'dedup_window_seconds' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN dedup_window_seconds INTEGER DEFAULT 300")
+                logger.info("数据库迁移: 添加 dedup_window_seconds 字段到 detection_tasks 表")
+            if 'dedup_iou_threshold' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN dedup_iou_threshold REAL DEFAULT 0.85")
+                logger.info("数据库迁移: 添加 dedup_iou_threshold 字段到 detection_tasks 表")
+
             # ✓ 新增：添加model_type字段到detection_tasks表
             if 'model_type' not in columns:
                 cursor.execute("ALTER TABLE detection_tasks ADD COLUMN model_type VARCHAR(50) DEFAULT 'yolov11n'")
@@ -1042,17 +1132,29 @@ class TaskManager:
 
             cursor.execute('''
                 INSERT INTO detection_tasks
-                (task_name, enabled, status, detection_type, algorithm, model_path, model_type, labels_file, target_classes,
+                (task_name, enabled, status, detection_type, polling_interval_frames, motion_gate_fallback_interval,
+                 schedule_cron, schedule_source, file_paths, file_loop,
+                 dedup_enabled, dedup_window_seconds, dedup_iou_threshold,
+                 algorithm, model_path, model_type, labels_file, target_classes,
                  motion_detection_enabled, tracking_enabled,
                  decoder_config, detector_config,
                  tracker_config, motion_config, event_config, display_config,
                  created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 task.task_name,
                 task.enabled,
                 task.status,
                 task.detection_type,
+                task.polling_interval_frames,
+                task.motion_gate_fallback_interval,
+                task.schedule_cron,
+                task.schedule_source,
+                json.dumps(task.file_paths),
+                task.file_loop,
+                task.dedup_enabled,
+                task.dedup_window_seconds,
+                task.dedup_iou_threshold,
                 task.algorithm,
                 task.model_path,
                 task.model_type,  # 模型类型字段
@@ -1085,7 +1187,10 @@ class TaskManager:
                               motion_detection_enabled, tracking_enabled,
                               decoder_config, detector_config, tracker_config,
                               motion_config, event_config, display_config,
-                              created_at, updated_at
+                              created_at, updated_at,
+                              polling_interval_frames, motion_gate_fallback_interval,
+                              schedule_cron, schedule_source, file_paths, file_loop,
+                              dedup_enabled, dedup_window_seconds, dedup_iou_threshold
                               FROM detection_tasks WHERE id = ?''', (task_id,))
             row = cursor.fetchone()
 
@@ -1113,7 +1218,10 @@ class TaskManager:
                        motion_detection_enabled, tracking_enabled,
                        decoder_config, detector_config, tracker_config,
                        motion_config, event_config, display_config,
-                       created_at, updated_at
+                       created_at, updated_at,
+                       polling_interval_frames, motion_gate_fallback_interval,
+                       schedule_cron, schedule_source, file_paths, file_loop,
+                       dedup_enabled, dedup_window_seconds, dedup_iou_threshold
                        FROM detection_tasks WHERE 1=1'''
             params = []
 
@@ -1144,7 +1252,7 @@ class TaskManager:
             cursor = conn.cursor()
             
             # JSON 字段列表
-            json_fields = ['target_classes', 'decoder_config', 'detector_config',
+            json_fields = ['target_classes', 'file_paths', 'decoder_config', 'detector_config',
                           'tracker_config', 'motion_config', 'event_config', 'display_config']
 
             updatable_fields = {
@@ -1152,6 +1260,15 @@ class TaskManager:
                 'enabled': 'enabled',
                 'status': 'status',
                 'detection_type': 'detection_type',
+                'polling_interval_frames': 'polling_interval_frames',
+                'motion_gate_fallback_interval': 'motion_gate_fallback_interval',
+                'schedule_cron': 'schedule_cron',
+                'schedule_source': 'schedule_source',
+                'file_paths': 'file_paths',
+                'file_loop': 'file_loop',
+                'dedup_enabled': 'dedup_enabled',
+                'dedup_window_seconds': 'dedup_window_seconds',
+                'dedup_iou_threshold': 'dedup_iou_threshold',
                 'algorithm': 'algorithm',
                 'model_path': 'model_path',
                 'model_type': 'model_type',  # 模型类型字段支持更新
@@ -1281,7 +1398,16 @@ class TaskManager:
             event_config=safe_json_loads_with_defaults(row[16] if len(row) > 16 else None, get_default_event_config()),  # 索引 16
             display_config=safe_json_loads(row[17] if len(row) > 17 else None, get_default_display_config()),  # 索引 17
             created_at=parse_datetime(row[18] if len(row) > 18 else None),  # 索引 18
-            updated_at=parse_datetime(row[19] if len(row) > 19 else None)  # 索引 19
+            updated_at=parse_datetime(row[19] if len(row) > 19 else None),  # 索引 19
+            polling_interval_frames=row[20] if len(row) > 20 and row[20] is not None else 5,  # 索引 20
+            motion_gate_fallback_interval=row[21] if len(row) > 21 and row[21] is not None else 30,  # 索引 21
+            schedule_cron=row[22] if len(row) > 22 and row[22] else '',  # 索引 22
+            schedule_source=row[23] if len(row) > 23 and row[23] else '',  # 索引 23
+            file_paths=safe_json_loads_list(row[24] if len(row) > 24 else None, []),  # 索引 24
+            file_loop=bool(row[25]) if len(row) > 25 else False,  # 索引 25
+            dedup_enabled=bool(row[26]) if len(row) > 26 and row[26] is not None else True,  # 索引 26
+            dedup_window_seconds=row[27] if len(row) > 27 and row[27] is not None else 300,  # 索引 27
+            dedup_iou_threshold=float(row[28]) if len(row) > 28 and row[28] is not None else 0.85  # 索引 28
         )
     
     # ========================================

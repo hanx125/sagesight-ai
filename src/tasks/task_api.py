@@ -22,6 +22,22 @@ _task_manager = None
 _process_manager = None
 _socketio = None
 
+# 事件规则去重默认值（从系统配置 event_dedup 段读取，作为任务级配置的兜底默认）
+_default_dedup = {}
+
+
+def _load_default_dedup():
+    """加载事件规则去重默认值（系统配置 event_dedup 段）"""
+    global _default_dedup
+    if _default_dedup:
+        return _default_dedup
+    try:
+        from src.system.system_config_loader import get_event_dedup_config
+        _default_dedup = get_event_dedup_config()
+    except Exception:
+        _default_dedup = {'enabled': True, 'window_seconds': 300, 'iou_threshold': 0.85}
+    return _default_dedup
+
 
 def _normalize_detector_gpu_mem_limit(detector_config: dict) -> dict:
     """归一化 detector_config.gpu_mem_limit 为字节单位（入库前调用）。
@@ -179,6 +195,9 @@ def create_task():
     if not data.get('task_name'):
         return jsonify({'error': '缺少必填字段: task_name'}), 400
 
+    # 加载事件规则去重默认值（未提供时使用系统配置 event_dedup 段）
+    _load_default_dedup()
+
     from src.tasks.task_manager import (
         DetectionTask,
         get_default_decoder_config,
@@ -289,6 +308,15 @@ def create_task():
         task_name=data.get('task_name', ''),
         enabled=data.get('enabled', True),
         detection_type=data.get('detection_type', 'realtime'),
+        polling_interval_frames=data.get('polling_interval_frames', 5),
+        motion_gate_fallback_interval=data.get('motion_gate_fallback_interval', 30),
+        schedule_cron=data.get('schedule_cron', ''),
+        schedule_source=data.get('schedule_source', ''),
+        file_paths=data.get('file_paths', []),
+        file_loop=data.get('file_loop', False),
+        dedup_enabled=data.get('dedup_enabled', _default_dedup.get('enabled', True)),
+        dedup_window_seconds=data.get('dedup_window_seconds', _default_dedup.get('window_seconds', 300)),
+        dedup_iou_threshold=data.get('dedup_iou_threshold', _default_dedup.get('iou_threshold', 0.85)),
         algorithm=data.get('algorithm', 'yolov11'),
         model_path=data.get('model_path', 'models/yolov11n.onnx'),
         model_type=data.get('model_type', 'yolov11n'),  # 模型类型字段

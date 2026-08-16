@@ -1068,6 +1068,15 @@ def task_monitor_thread():
                     # 如果用户主动停止任务，状态会被设置为 'stopped'
                     # 只有状态仍然是 'running' 的任务才需要重启
                     if task.status == 'running':
+                        # 批处理任务（file/scheduled）：进程正常退出即为完成，
+                        # 标记 stopped，不重启
+                        if task.detection_type in ('file', 'scheduled'):
+                            logger.info(
+                                f"[TaskMonitor] 批处理任务 {task.task_name} "
+                                f"已完成（detection_type={task.detection_type}），标记 stopped"
+                            )
+                            tm.update_task(task_id, {'status': 'stopped'})
+                            continue
                         logger.warning(f"[TaskMonitor] 任务 {task.task_name} 异常退出，尝试重启...")
                         tm.update_task(task_id, {'status': 'error'})
                         
@@ -1120,6 +1129,122 @@ def task_monitor_thread():
             time.sleep(5)
     
     logger.info("[TaskMonitor] 监控线程退出")
+
+
+# ========================================
+# 定时批量检测调度（scheduled）
+# ========================================
+
+def _cron_field_match(field: str, value: int) -> bool:
+    """判断单个 cron 字段是否匹配指定值
+
+    支持：* / */n / a-b / a-b/n / a,b,c
+    """
+    if field == '*':
+        return True
+    for part in field.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if '/' in part:
+            base, step = part.split('/', 1)
+            try:
+                step = int(step)
+            except ValueError:
+                continue
+            if base == '*':
+                if value % step == 0:
+                    return True
+            elif '-' in base:
+                try:
+                    a, b = map(int, base.split('-'))
+                except ValueError:
+                    continue
+                if a <= value <= b and (value - a) % step == 0:
+                    return True
+        elif '-' in part:
+            try:
+                a, b = map(int, part.split('-'))
+            except ValueError:
+                continue
+            if a <= value <= b:
+                return True
+        else:
+            try:
+                if int(part) == value:
+                    return True
+            except ValueError:
+                continue
+    return False
+
+
+def _cron_match(cron_expr: str, t) -> bool:
+    """判断 5 段 cron 表达式是否匹配当前时间（仅支持 5 字段，且 dom/dow 为 AND 语义）"""
+    fields = cron_expr.split()
+    if len(fields) != 5:
+        return False
+    minute, hour, dom, month, dow = fields
+    return (
+        _cron_field_match(minute, t.tm_min)
+        and _cron_field_match(hour, t.tm_hour)
+        and _cron_field_match(dom, t.tm_mday)
+        and _cron_field_match(month, t.tm_mon)
+        and _cron_field_match(dow, t.tm_wday)
+    )
+
+
+def scheduled_task_thread():
+    """定时批量检测调度线程
+
+    轮询 detection_type='scheduled' 的启用任务，cron 表达式命中时启动任务进程。
+    同一任务同一分钟只触发一次（避免 20s 轮询周期内重复触发）。
+    """
+    tm = get_task_manager()
+    pm = get_process_manager()
+    last_trigger = {}  # {task_id: minute_key}
+
+    logger.info("[Scheduler] 定时批量检测调度线程启动")
+
+    while getattr(pm, 'running', False):
+        try:
+            now = time.localtime()
+            tasks = tm.get_all_tasks(enabled_only=True)
+
+            for task in tasks:
+                if task.detection_type != 'scheduled':
+                    continue
+                cron_expr = (task.schedule_cron or '').strip()
+                if not cron_expr:
+                    continue
+                if not _cron_match(cron_expr, now):
+                    continue
+
+                minute_key = f"{now.tm_year}-{now.tm_mon}-{now.tm_mday} {now.tm_hour}:{now.tm_min}"
+                if last_trigger.get(task.id) == minute_key:
+                    continue  # 本分钟已触发
+                last_trigger[task.id] = minute_key
+
+                # 仅当任务未在运行时才启动
+                if task.id in pm.get_running_tasks():
+                    logger.debug(f"[Scheduler] 任务 {task.task_name} 已在运行，跳过本次触发")
+                    continue
+
+                logger.info(
+                    f"[Scheduler] 定时批量任务触发: {task.task_name} "
+                    f"(cron={cron_expr}, 命中 {minute_key})"
+                )
+                task_config = task.to_dict()
+                if pm.start_task(task_config):
+                    tm.update_task(task.id, {'status': 'running'})
+                else:
+                    logger.warning(f"[Scheduler] 定时批量任务启动失败: {task.task_name}")
+
+        except Exception as e:
+            logger.error(f"[Scheduler] 调度错误: {e}")
+
+        time.sleep(20)
+
+    logger.info("[Scheduler] 定时批量检测调度线程退出")
 
 
 # ========================================
@@ -1317,6 +1442,10 @@ if __name__ == '__main__':
     pm.running = True
     monitor_thread = threading.Thread(target=task_monitor_thread, daemon=True)
     monitor_thread.start()
+
+    # 启动定时批量检测调度线程（scheduled 任务 cron 触发）
+    scheduler_thread = threading.Thread(target=scheduled_task_thread, daemon=True)
+    scheduler_thread.start()
 
     # 启动事件清理后台线程（按 system_config.yaml 的 events_cleanup 配置定期清理过期事件及存储文件）
     # enabled=false 时不启动后台线程（仍可通过 POST /api/events/clear 手动清理）

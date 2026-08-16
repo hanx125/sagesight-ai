@@ -409,13 +409,25 @@ class TrackedObjectProcessor(mp.Process):
     def _init_rule_dedup(self, proc_logger):
         """初始化事件规则去重（事件管理功能，独立于大模型，不消耗 token）
 
-        配置来源为 system_config.yaml 的 event_dedup 段，不受大模型
-        总开关/大模型配置影响，总是初始化。
+        配置来源优先为任务级（camera_configs 中的 dedup_config，由 task_executor
+        从任务表注入），未配置时回退到 system_config.yaml 的 event_dedup 段。
+        不受大模型总开关/大模型配置影响，总是初始化。
         """
         try:
             from src.system.system_config_loader import get_event_dedup_config
             from src.events.rule_dedup import RuleDeduper
-            self.rule_deduper = RuleDeduper(get_event_dedup_config())
+
+            # 任务级去重配置（同一任务的所有相机共用任务级配置，取任意一个）
+            dedup_cfg = None
+            for cam_config in self.camera_configs.values():
+                if cam_config.get('dedup_config'):
+                    dedup_cfg = cam_config['dedup_config']
+                    break
+            if dedup_cfg is None:
+                # 回退到系统配置（默认值来源）
+                dedup_cfg = get_event_dedup_config()
+
+            self.rule_deduper = RuleDeduper(dedup_cfg)
             proc_logger.info(
                 f"事件规则去重已初始化: enabled={self.rule_deduper.enabled}, "
                 f"window={self.rule_deduper.window_seconds}s, "

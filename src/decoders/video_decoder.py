@@ -867,7 +867,29 @@ class VideoDecoder:
             logger.debug("[VideoDecoder] FFmpeg 进程已重启")
         except Exception as e:
             logger.debug(f"[VideoDecoder] 重启 FFmpeg 失败：{e}")
-    
+
+    def is_finished(self) -> bool:
+        """是否已处理完（仅视频文件模式有效）
+
+        当 FFmpeg 进程已退出且索引队列已空（所有帧已消费）时返回 True，
+        用于批处理（file/scheduled）流水线判断单个文件是否结束。
+        实时流（rtsp）模式始终返回 False。
+        """
+        if not self.config.video_file:
+            return False
+        try:
+            proc = self.process
+            if proc is None:
+                return False
+            if proc.poll() is None:
+                return False  # 进程仍在运行（文件未结束）
+            # 进程已退出：确认索引队列已空（帧已全部消费）
+            if self.index_queue is not None:
+                return self.index_queue.is_empty()
+            return True
+        except Exception:
+            return False
+
     def get_frame_index(self) -> Optional[FrameIndex]:
         """
         获取帧索引（从索引队列）

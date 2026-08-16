@@ -330,11 +330,17 @@ class CameraWorker:
         1. init_components 创建解码器对象（不启动，避免 FFmpeg 提前写帧导致环形缓冲区被覆盖）
         2. 在子进程内创建 RemoteObjectDetector / ImprovedMotionDetector / NorfairTracker
         3. pipeline 组件就绪后启动解码器（decoder.start），确保首帧即可被消费
-        4. 调用 camera_pipeline.run_pipeline() 主循环
+        4. 调用 pipeline_func 主循环（按检测类型选择流水线）
+
+        批处理（file/scheduled）：跳过 init_components，不创建解码器，由批处理流水线内部
+        按文件列表创建 VideoDecoder（每个文件一解码器，EOF 自动退出）。
         """
         self.running = True
 
-        if not self.init_components():
+        detection_type = self.task_config.get('detection_type', 'realtime')
+        is_batch = detection_type in ('file', 'scheduled')
+
+        if not is_batch and not self.init_components():
             logger.debug(f"[CameraWorker-{self.camera_id}] 初始化失败，退出")
             return
 
@@ -441,11 +447,55 @@ class CameraWorker:
                 logger.info(f"[CameraWorker-{self.camera_id}] zones_config 为空，zone 检测与徘徊告警将不可用")
 
             # ========================================
-            # 4. 启动解码器并调用 run_pipeline 主循环
-            # 此时 pipeline 组件（检测器/运动检测/跟踪器）均已就绪，
-            # 解码器启动后 FFmpeg 写入的第一帧即可被 pipeline 立即消费，
-            # 避免环形缓冲区在被读取前就被覆盖
+            # 4. 按检测类型启动流水线
             # ========================================
+            from src.pipeline.pipeline_factory import get_pipeline
+
+            if is_batch:
+                # 批处理（file/scheduled）：不启动实时解码器，由批处理流水线内部按文件创建解码器
+                pipeline_func = get_pipeline(detection_type)  # 返回 run_batch_pipeline
+                decoder_config = {
+                    'width': self.decoder_cfg.get('width', 640),
+                    'height': self.decoder_cfg.get('height', 640),
+                    'fps': self.decoder_cfg.get('fps', 25),
+                    'hwaccel_preset': self.decoder_cfg.get('hwaccel_preset', 'preset-dxva2'),
+                    'rtsp_transport': self.decoder_cfg.get('rtsp_transport', 'tcp'),
+                    'reconnect': False,  # 文件模式不重连，EOF 后结束
+                    'buffer_size': self.decoder_cfg.get('buffer_size', 1048576),
+                    'use_ring_buffer': self.decoder_cfg.get('use_ring_buffer', True),
+                    'ring_buffer_block_count': self.decoder_cfg.get('ring_buffer_block_count', 40),
+                    'index_queue_size': self.decoder_cfg.get('index_queue_size', 30),
+                    'camera_id': self.camera_id,
+                    'task_id': str(self.task_id) if self.task_id else '',
+                }
+                # 解析批处理文件列表：优先扫描 schedule_source 目录（scheduled 扫描来源），
+                # 其次使用 task_config.file_paths，最后回退到通道 rtsp_url
+                file_paths = self._resolve_batch_file_paths()
+                file_loop = bool(self.task_config.get('file_loop', False))
+                logger.info(
+                    f"[CameraWorker-{self.camera_id}] 批处理启动: "
+                    f"files={len(file_paths)}, file_loop={file_loop}"
+                )
+                pipeline_func(
+                    camera_id=self.camera_id,
+                    task_id=str(self.task_id),
+                    decoder_config=decoder_config,
+                    remote_detector=self.remote_detector,
+                    motion_detector=self.motion_detector,
+                    tracker=self.tracker,
+                    detected_objects_queue=self.detected_objects_queue,
+                    frame_shape=self.frame_shape,
+                    model_size=self.model_size,
+                    detect_threshold=self.detect_threshold,
+                    stop_event=self.stop_event,
+                    target_classes=self.target_classes,
+                    backend=self.backend,
+                    file_paths=file_paths,
+                    file_loop=file_loop,
+                )
+                return
+
+            # 实时/轮询/运动门控：启动解码器并调用对应流水线
             logger.info(f"[CameraWorker-{self.camera_id}] pipeline 组件就绪，启动解码器")
             self.decoder.start()
 
@@ -456,22 +506,38 @@ class CameraWorker:
             logger.debug(f"[CameraWorker-{self.camera_id}]   target_classes={self.target_classes}")
             logger.debug(f"[CameraWorker-{self.camera_id}]   backend={self.backend}")
 
-            run_pipeline(
-                camera_id=self.camera_id,
-                task_id=str(self.task_id),
-                decoder=self.decoder,
-                motion_detector=self.motion_detector,
-                remote_detector=self.remote_detector,
-                tracker=self.tracker,
-                detected_objects_queue=self.detected_objects_queue,
-                frame_shape=self.frame_shape,
-                model_size=self.model_size,
-                detect_threshold=self.detect_threshold,
-                stop_event=self.stop_event,
-                ptz_metrics=self.ptz_metrics,
-                target_classes=self.target_classes,
-                backend=self.backend,
+            pipeline_func = get_pipeline(detection_type)
+
+            pipeline_kwargs = {
+                'camera_id': self.camera_id,
+                'task_id': str(self.task_id),
+                'decoder': self.decoder,
+                'motion_detector': self.motion_detector,
+                'remote_detector': self.remote_detector,
+                'tracker': self.tracker,
+                'detected_objects_queue': self.detected_objects_queue,
+                'frame_shape': self.frame_shape,
+                'model_size': self.model_size,
+                'detect_threshold': self.detect_threshold,
+                'stop_event': self.stop_event,
+                'ptz_metrics': self.ptz_metrics,
+                'target_classes': self.target_classes,
+                'backend': self.backend,
+            }
+            if detection_type == 'polling':
+                pipeline_kwargs['polling_interval_frames'] = self.task_config.get(
+                    'polling_interval_frames', 5
+                )
+            elif detection_type == 'motion_gated':
+                pipeline_kwargs['motion_gate_fallback_interval'] = self.task_config.get(
+                    'motion_gate_fallback_interval', 30
+                )
+
+            logger.info(
+                f"[CameraWorker-{self.camera_id}] 选择流水线: detection_type={detection_type}, "
+                f"pipeline={pipeline_func.__name__}"
             )
+            pipeline_func(**pipeline_kwargs)
 
         except KeyboardInterrupt:
             logger.debug(f"[CameraWorker-{self.camera_id}] 收到键盘中断，退出")
@@ -483,6 +549,56 @@ class CameraWorker:
             self.cleanup()
 
         logger.debug(f"[CameraWorker-{self.camera_id}] 已退出")
+
+    def _resolve_batch_file_paths(self) -> List[str]:
+        """解析批处理（file/scheduled）待处理文件列表
+
+        优先顺序：
+        1. schedule_source（scheduled 扫描来源目录）：扫描该目录下的视频文件
+        2. task_config.file_paths（前端填写的文件路径列表）
+        3. 通道 rtsp_url（兜底，兼容旧配置）
+
+        Returns:
+            文件路径列表（已去重、过滤存在性失败项由批处理流水线自行处理）
+        """
+        # 1. 扫描来源目录（scheduled）
+        schedule_source = (self.task_config.get('schedule_source') or '').strip()
+        if schedule_source:
+            dir_path = schedule_source.replace('file://', '') if schedule_source.startswith('file://') else schedule_source
+            if os.path.isdir(dir_path):
+                VIDEO_EXTS = ('.mp4', '.avi', '.mkv', '.mov', '.flv', '.wmv', '.ts', '.m4v', '.webm')
+                candidates = []
+                try:
+                    for name in sorted(os.listdir(dir_path)):
+                        if name.lower().endswith(VIDEO_EXTS):
+                            candidates.append(os.path.join(dir_path, name))
+                except OSError as e:
+                    logger.warning(f"[CameraWorker-{self.camera_id}] 扫描目录失败: {dir_path} ({e})")
+                if candidates:
+                    logger.info(
+                        f"[CameraWorker-{self.camera_id}] schedule_source 扫描到 {len(candidates)} "
+                        f"个视频文件: {dir_path}"
+                    )
+                    return candidates
+                logger.warning(
+                    f"[CameraWorker-{self.camera_id}] schedule_source 目录无视频文件，"
+                    f"回退到 file_paths: {dir_path}"
+                )
+            else:
+                logger.warning(
+                    f"[CameraWorker-{self.camera_id}] schedule_source 不是有效目录，"
+                    f"回退到 file_paths: {schedule_source}"
+                )
+
+        # 2. 前端填写的文件路径列表
+        file_paths = self.task_config.get('file_paths') or []
+        file_paths = [p for p in file_paths if p]
+
+        # 3. 兜底：通道 rtsp_url
+        if not file_paths and self.rtsp_url:
+            file_paths = [self.rtsp_url]
+
+        return file_paths
 
     def cleanup(self):
         """清理资源"""
@@ -529,6 +645,10 @@ class MultiCameraTaskExecutor:
         self.task_name = task_config.get('task_name', 'unknown')
         self.algorithm = task_config.get('algorithm', 'yolov11')
         self.running = False
+
+        # 批处理模式（file / scheduled）：工作进程处理完文件后自动退出，
+        # 主循环需等待事件队列排空后再停止，避免丢失事件
+        self.is_batch = task_config.get('detection_type', 'realtime') in ('file', 'scheduled')
 
         # 摄像机工作进程（多进程架构）
         self.worker_processes: Dict[str, Process] = {}
@@ -826,6 +946,21 @@ class MultiCameraTaskExecutor:
             # ========================================
             camera_configs_for_processor = {}
             decoder_cfg = self.task_config.get('decoder_config', {})
+
+            # 事件规则去重配置（任务级，独立于大模型，不消耗 token）
+            # task_config 已含 dedup_enabled/dedup_window_seconds/dedup_iou_threshold，
+            # 未配置时回退到系统配置 event_dedup 段默认值
+            try:
+                from src.system.system_config_loader import get_event_dedup_config
+                _sys_dedup = get_event_dedup_config()
+            except Exception:
+                _sys_dedup = {'enabled': True, 'window_seconds': 300, 'iou_threshold': 0.85}
+            _dedup_cfg = {
+                'enabled': self.task_config.get('dedup_enabled', _sys_dedup.get('enabled', True)),
+                'window_seconds': self.task_config.get('dedup_window_seconds', _sys_dedup.get('window_seconds', 300)),
+                'iou_threshold': self.task_config.get('dedup_iou_threshold', _sys_dedup.get('iou_threshold', 0.85)),
+            }
+
             for cam in self.cameras:
                 cam_id = cam['camera_id']
                 camera_configs_for_processor[cam_id] = {
@@ -841,6 +976,7 @@ class MultiCameraTaskExecutor:
                     'algorithm': self.algorithm,
                     'class_names': list(class_names),
                     'fps': decoder_cfg.get('fps', 25),
+                    'dedup_config': _dedup_cfg,  # 事件规则去重配置（任务级）
                 }
 
             # ========================================
@@ -1038,6 +1174,11 @@ class MultiCameraTaskExecutor:
 
                 # 如果所有进程都停止，退出主循环
                 if alive_processes == 0:
+                    if self.is_batch:
+                        # 批处理：所有工作进程已处理完文件，等待事件队列排空再退出，
+                        # 避免 TrackedObjectProcessor 尚未消费完事件就被停止而丢失
+                        logger.debug(f"[MultiCameraExecutor-{self.task_id}] 批处理工作进程已结束，等待事件队列排空...")
+                        self._wait_batch_drain()
                     logger.debug(f"[MultiCameraExecutor-{self.task_id}] 所有工作进程已停止，退出主循环")
                     self.running = False
                     break
@@ -1058,6 +1199,30 @@ class MultiCameraTaskExecutor:
             self.stop()
 
         logger.debug(f"[MultiCameraExecutor-{self.task_id}] 任务执行器已退出")
+
+    def _wait_batch_drain(self, timeout: float = 30.0):
+        """批处理结束：等待事件队列排空与事件处理完成（带超时）
+
+        批处理工作进程处理完文件后退出，但 detected_objects_queue 中可能仍有
+        待 TrackedObjectProcessor 消费的事件。直接停止会丢失事件，故先等待队列
+        排空，再给事件处理（LLM/GIF/MQTT 异步）额外的 settle 时间。
+        """
+        deadline = time.time() + timeout
+        queue = self.detected_objects_queue
+
+        # 1. 等待检测结果队列排空
+        while time.time() < deadline:
+            try:
+                size = queue.qsize()
+                if size <= 0:
+                    break
+            except Exception:
+                break  # multiprocessing.Queue.qsize 部分平台不可靠，退化为固定等待
+            time.sleep(0.5)
+
+        # 2. 事件处理（LLM/GIF/MQTT 异步）额外 settle 时间
+        time.sleep(3.0)
+        logger.debug(f"[MultiCameraExecutor-{self.task_id}] 批处理事件排空等待完成")
 
     def stop(self):
         """停止所有摄像机检测"""

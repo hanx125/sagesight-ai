@@ -804,13 +804,14 @@ def get_system_config():
     try:
         config = _load_system_config()
         # 节点管理配置统一通过 loader 归一化字段类型，避免前端处理字符串/整数混用
-        from src.system.system_config_loader import get_node_management_config
+        from src.system.system_config_loader import get_node_management_config, get_event_dedup_config
         return jsonify({
             'storage': config.get('storage', {}),
             'mqtt': config.get('mqtt', {}),
             'web_server': config.get('web_server', {}),
             'database': config.get('database', {}),
             'node_management': get_node_management_config(),
+            'event_dedup': get_event_dedup_config(),
             'video_file_upload': config.get('video_file_upload', {
                 'max_file_size_mb': 100,
                 'allowed_formats': ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv'],
@@ -936,6 +937,30 @@ def update_system_config():
                 nm_cfg['video_root'] = str(nm['video_root']).strip()
             if 'media_cluster_root' in nm and nm['media_cluster_root']:
                 nm_cfg['media_cluster_root'] = str(nm['media_cluster_root']).strip()
+
+        # 更新事件规则去重配置（事件管理功能，独立于大模型，不消耗 token）
+        if 'event_dedup' in data:
+            ed = data['event_dedup'] or {}
+            ed_cfg = config.setdefault('event_dedup', {})
+
+            if 'enabled' in ed:
+                ed_cfg['enabled'] = bool(ed['enabled'])
+            if 'window_seconds' in ed:
+                try:
+                    window = int(ed['window_seconds'])
+                    if window < 1:
+                        return jsonify({'error': '去重时间窗口必须大于 0 秒'}), 400
+                    ed_cfg['window_seconds'] = window
+                except (ValueError, TypeError):
+                    return jsonify({'error': '去重时间窗口必须为整数（秒）'}), 400
+            if 'iou_threshold' in ed:
+                try:
+                    iou = float(ed['iou_threshold'])
+                    if not (0.0 < iou <= 1.0):
+                        return jsonify({'error': 'IoU 阈值必须在 (0, 1] 范围内'}), 400
+                    ed_cfg['iou_threshold'] = iou
+                except (ValueError, TypeError):
+                    return jsonify({'error': 'IoU 阈值必须为 0-1 之间的小数'}), 400
 
         _save_system_config(config)
         # 强制重新加载配置缓存，使后续请求（包括节点管理服务自身）能立即读到最新配置

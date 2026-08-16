@@ -27,6 +27,36 @@ var totalTasks = 0;
 var totalPages = 1;
 
 // ========================================
+// 检测类型辅助
+// ========================================
+
+// 检测类型 → 中文显示
+function getDetectionTypeText(detection_type) {
+    if (detection_type === 'polling') return '轮询检测';
+    if (detection_type === 'motion_gated') return '运动门控检测';
+    if (detection_type === 'file') return '离线文件检测';
+    if (detection_type === 'scheduled') return '定时批量检测';
+    return '实时检测';
+}
+
+// 检测类型切换：动态显示对应参数
+function onDetectionTypeChange() {
+    const type = document.getElementById('detectionType').value;
+    const pollingGroup = document.getElementById('pollingIntervalGroup');
+    const motionGroup = document.getElementById('motionGateFallbackGroup');
+    const cronGroup = document.getElementById('scheduleCronGroup');
+    const sourceGroup = document.getElementById('scheduleSourceGroup');
+    const filePathGroup = document.getElementById('batchFilePathGroup');
+    const fileLoopGroup = document.getElementById('fileLoopGroup');
+    if (pollingGroup) pollingGroup.style.display = type === 'polling' ? '' : 'none';
+    if (motionGroup) motionGroup.style.display = type === 'motion_gated' ? '' : 'none';
+    if (cronGroup) cronGroup.style.display = type === 'scheduled' ? '' : 'none';
+    if (sourceGroup) sourceGroup.style.display = type === 'scheduled' ? '' : 'none';
+    if (filePathGroup) filePathGroup.style.display = (type === 'file' || type === 'scheduled') ? '' : 'none';
+    if (fileLoopGroup) fileLoopGroup.style.display = type === 'file' ? '' : 'none';
+}
+
+// ========================================
 // 页面初始化
 // ========================================
 
@@ -848,7 +878,7 @@ function renderTaskCard(task) {
     const channelCount = task.channel_count || 0;
     
     // 检测类型文本
-    const detectionTypeText = task.detection_type === 'polling' ? '轮询检测' : '实时检测';
+    const detectionTypeText = getDetectionTypeText(task.detection_type);
     
     // 目标类别
     const targetClasses = task.target_classes || [];
@@ -953,7 +983,7 @@ function renderTaskTableRow(task) {
     const channelCount = task.channel_count || 0;
     
     // 检测类型文本
-    const detectionTypeText = task.detection_type === 'polling' ? '轮询检测' : '实时检测';
+    const detectionTypeText = getDetectionTypeText(task.detection_type);
     
     // 目标类别
     const targetClasses = task.target_classes || [];
@@ -1190,6 +1220,16 @@ function openCreateModal() {
 
     // 设置默认值
     document.getElementById('detectionType').value = 'realtime';  // 检测类型默认实时检测
+    document.getElementById('pollingIntervalFrames').value = 5;
+    document.getElementById('motionGateFallbackInterval').value = 30;
+    document.getElementById('scheduleCron').value = '';
+    document.getElementById('scheduleSource').value = '';
+    document.getElementById('batchFilePaths').value = '';
+    document.getElementById('fileLoop').value = 'false';
+    document.getElementById('dedupEnabled').value = 'true';
+    document.getElementById('dedupWindowSeconds').value = 300;
+    document.getElementById('dedupIouThreshold').value = 0.85;
+    onDetectionTypeChange();  // 刷新动态参数显示
     document.getElementById('motionDetectionEnabled').value = 'true';  // 运动检测默认启用
     document.getElementById('trackingEnabled').value = 'true';  // 跟踪功能默认启用
     document.getElementById('taskEnabled').value = 'true';
@@ -1257,6 +1297,18 @@ async function openEditModal(taskId, event) {
 
         // 填充检测类型
         document.getElementById('detectionType').value = task.detection_type || 'realtime';
+
+        // 填充检测类型参数
+        document.getElementById('pollingIntervalFrames').value = task.polling_interval_frames || 5;
+        document.getElementById('motionGateFallbackInterval').value = task.motion_gate_fallback_interval || 30;
+        document.getElementById('scheduleCron').value = task.schedule_cron || '';
+        document.getElementById('scheduleSource').value = task.schedule_source || '';
+        document.getElementById('batchFilePaths').value = (Array.isArray(task.file_paths) ? task.file_paths : []).join('\n');
+        document.getElementById('fileLoop').value = task.file_loop ? 'true' : 'false';
+        document.getElementById('dedupEnabled').value = task.dedup_enabled !== false ? 'true' : 'false';
+        document.getElementById('dedupWindowSeconds').value = task.dedup_window_seconds || 300;
+        document.getElementById('dedupIouThreshold').value = task.dedup_iou_threshold ?? 0.85;
+        onDetectionTypeChange();  // 根据检测类型刷新动态参数显示
 
         // 填充功能开关
         document.getElementById('motionDetectionEnabled').value = task.motion_detection_enabled ? 'true' : 'false';
@@ -1964,6 +2016,18 @@ async function saveTask() {
         task_name: document.getElementById('taskName').value,
         enabled: document.getElementById('taskEnabled').value === 'true',
         detection_type: document.getElementById('detectionType').value,  // 检测类型（新增）
+        polling_interval_frames: parseInt(document.getElementById('pollingIntervalFrames').value, 10) || 5,
+        motion_gate_fallback_interval: parseInt(document.getElementById('motionGateFallbackInterval').value, 10) || 30,
+        schedule_cron: document.getElementById('scheduleCron').value || '',
+        schedule_source: document.getElementById('scheduleSource').value || '',
+        file_paths: (() => {
+            const raw = document.getElementById('batchFilePaths').value || '';
+            return raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+        })(),
+        file_loop: document.getElementById('fileLoop').value === 'true',
+        dedup_enabled: document.getElementById('dedupEnabled').value === 'true',
+        dedup_window_seconds: parseInt(document.getElementById('dedupWindowSeconds').value, 10) || 300,
+        dedup_iou_threshold: parseFloat(document.getElementById('dedupIouThreshold').value) || 0.85,
         algorithm: document.getElementById('algorithm').value,
         model_path: document.getElementById('modelPath').value,
         target_classes: (() => {
@@ -2411,6 +2475,7 @@ return {
     taskChangePageSize: taskChangePageSize,
     taskGoToPage: taskGoToPage,
     onAlgorithmConfigChange: onAlgorithmConfigChange,
+    onDetectionTypeChange: onDetectionTypeChange,
     openClassesSelectDialog: openClassesSelectDialog,
     closeClassesSelectDialog: closeClassesSelectDialog,
     selectAllClasses: selectAllClasses,
