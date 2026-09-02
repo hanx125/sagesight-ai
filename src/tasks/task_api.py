@@ -40,12 +40,14 @@ def _load_default_dedup():
 
 
 def _normalize_detector_gpu_mem_limit(detector_config: dict) -> dict:
-    """归一化 detector_config.gpu_mem_limit 为字节单位（入库前调用）。
+    """归一化 detector_config.gpu_mem_limit 为 int（统一字节单位，入库前调用）。
 
-    前端表单以 MB 为单位输入，后端入库时统一转字节存储（单源真相）。
-    启发式：< 1GB（1024^3 字节）的值视为 MB，乘以 1024*1024 转字节；
-    >= 1GB 的值视为已是字节（配置文件默认值或已转换），保持不变；
-    0 或空值保持不变（ONNX 用 0 表示不限制）。
+    单位契约（统一传字节）：所有调用方——AI 前端 config_modal.js 与边缘平台——
+    提交时均已将 MB 乘以 1024*1024 转成字节，因此这里不再做单位猜测：
+      - > 0 的值视为已是字节，保持原值（仅转 int）；
+      - 0 或 None 表示不限制，保持不变。
+    禁止再做"< 1GB 视为 MB 再乘"的启发式，否则会把已转字节的小值
+    （如 512MB=536870912）误判为 MB 二次放大。
     """
     if not isinstance(detector_config, dict):
         return detector_config
@@ -55,12 +57,9 @@ def _normalize_detector_gpu_mem_limit(detector_config: dict) -> dict:
     if val is None:
         return detector_config
     try:
-        val = int(val)
+        detector_config['gpu_mem_limit'] = int(val)
     except (TypeError, ValueError):
-        return detector_config
-    ONE_GB = 1024 * 1024 * 1024
-    if 0 < val < ONE_GB:
-        detector_config['gpu_mem_limit'] = val * 1024 * 1024
+        pass
     return detector_config
 
 

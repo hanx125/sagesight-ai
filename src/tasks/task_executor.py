@@ -732,6 +732,31 @@ class MultiCameraTaskExecutor:
             logger.info(f"[MultiCameraExecutor-{self.task_id}] 算法={self.algorithm}, 模型路径={detector_config['model_path']}, 标签文件={detector_config['labels_file'] or '未配置'}")
 
             # ========================================
+            # 步骤2.5：PT 模型自动转换
+            # 若算法上传的是 PyTorch (.pt/.pth) 模型，则在任务启动时按后端自动转换为
+            # ONNX 或 RKNN，转换结果按（源文件内容 + 目标格式 + 参数）缓存，避免重复转换。
+            # ========================================
+            if detector_config['model_path'].lower().endswith(('.pt', '.pth')):
+                try:
+                    from src.utils.model_converter import ensure_converted_model
+                    _input_size = algorithm_config.get('input_size') or '640x640'
+                    detector_config['model_path'] = ensure_converted_model(
+                        model_path=detector_config['model_path'],
+                        backend=detector_config['backend'],
+                        input_size=_input_size,
+                        rknn_target=detector_config.get('rknn_target', 'rk3588'),
+                        model_type=algorithm_config.get('model_type') or 'yolo11',
+                    )
+                    logger.info(
+                        f"[MultiCameraExecutor-{self.task_id}] PT 模型转换完成, 实际使用模型: "
+                        f"{detector_config['model_path']}"
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"[MultiCameraExecutor-{self.task_id}] PT 模型自动转换失败: {e}"
+                    ) from e
+
+            # ========================================
             # 步骤3：从标签文件加载类别名称
             # ========================================
             class_names = []
