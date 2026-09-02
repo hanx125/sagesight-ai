@@ -169,7 +169,10 @@ class TrackedObjectProcessor(mp.Process):
         # {event_id: {camera_id, gif_required, llm_required, gif_done, llm_done,
         #             final_status, dedup_status, dedup_reason, emitted}}
         self._event_terminal: dict[str, dict] = {}
-        self._terminal_lock = threading.Lock()
+        # 终态门闩锁：懒加载（子进程 run() 内创建）。
+        # 必须在 __init__ 里保持 None，否则父进程 spawn 序列化本对象会因无法 pickle
+        # _thread.lock 而失败（gif/llm_executor、_http_session 等不可序列化成员均同理）。
+        self._terminal_lock = None
         # GIF 任务暂存：{event_id: {...}} 终态门闩登记后将帧参数提交给异步 GIF 生成
         self._pending_gif_jobs: dict[str, dict] = {}
         # 宽限期（秒）：目标消失后多久才真正结束事件
@@ -1694,7 +1697,7 @@ class TrackedObjectProcessor(mp.Process):
             - 复核确认重复 → 维持 duplicate，未提交的 GIF 直接标记完成，不推 MQTT
             - 复核推翻（规则去重错误）→ 纠正为 final，重新生成描述 + GIF，单推终态
         """
-        with self._terminal_lock:
+        with self._get_terminal_lock():
             self._event_terminal[event_id] = {
                 'camera_id': camera_id,
                 'gif_required': gif_required,
@@ -1710,7 +1713,7 @@ class TrackedObjectProcessor(mp.Process):
 
     def _mark_gif_done(self, event_id: str) -> None:
         """标记 GIF 生成完成，检查并触发终态推送"""
-        with self._terminal_lock:
+        with self._get_terminal_lock():
             entry = self._event_terminal.get(event_id)
             if entry is None:
                 return
@@ -1720,7 +1723,7 @@ class TrackedObjectProcessor(mp.Process):
     def _mark_llm_done(self, event_id: str, final_status: str,
                        dedup_status: str, dedup_reason: str) -> None:
         """记录 LLM 处理结果并标记完成，检查并触发终态推送"""
-        with self._terminal_lock:
+        with self._get_terminal_lock():
             entry = self._event_terminal.get(event_id)
             if entry is None:
                 return
@@ -1733,6 +1736,12 @@ class TrackedObjectProcessor(mp.Process):
                 entry['gif_done'] = True
         self._check_event_terminal(event_id)
 
+    def _get_terminal_lock(self) -> threading.Lock:
+        """获取终态门闩锁（子进程内懒加载，避免 spawn 序列化本对象时 pickling Lock 失败）"""
+        if self._terminal_lock is None:
+            self._terminal_lock = threading.Lock()
+        return self._terminal_lock
+
     def _check_event_terminal(self, event_id: str) -> None:
         """终态检查：GIF 与 LLM 均完成后，切换 DB 状态并单推 MQTT
 
@@ -1741,7 +1750,7 @@ class TrackedObjectProcessor(mp.Process):
           消息供第三方撤销/忽略——绝不提前推送未定态事件。
         - 规则去重（创建即 duplicate，不经过本门闩）不推送 MQTT。
         """
-        with self._terminal_lock:
+        with self._get_terminal_lock():
             entry = self._event_terminal.get(event_id)
             if entry is None:
                 return
