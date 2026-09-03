@@ -389,17 +389,18 @@ def run_detector(
                 # 归还 glibc 堆碎片，防止检测器进程 RSS 缓慢增长
                 _malloc_trim()
 
-                # 系统内存监控：使用率超过阈值主动退出，由 check_and_restart_dead 自动重启
-                # 用于释放 RKNN C 层可能累积的内存（gc/malloc_trim 无法回收）
+                # 系统内存健康监测：不再在此自退出。
+                # 内存过高的整任务重启统一由 task_executor 主循环检测并提交 TaskMonitor 重启整个任务，
+                # 避免"单检测器自行退出→check_and_restart_dead 立即重启→仍超阈值再退出"陷入死循环，
+                # 且整任务重启能同时释放检测器之外的子进程（解码/跟踪/事件处理）内存。
                 _mem_usage = _get_system_mem_usage_percent()
                 _rss = _get_process_rss_mb()
                 if _mem_usage > _MEM_USAGE_LIMIT:
                     proc_logger.warning(
                         f"系统内存使用率={_mem_usage:.1f}% 超过阈值 {_MEM_USAGE_LIMIT}%,"
-                        f"本进程RSS={_rss:.1f}MB,主动退出等待重启 "
-                        f"(已处理 {detection_count} 次检测, model_type={model_type})"
+                        f"检测器不再自行退出(整任务重启由 executor 统一处理), "
+                        f"本进程RSS={_rss:.1f}MB"
                     )
-                    break
 
                 proc_logger.debug(
                     f"已处理 {detection_count} 次检测 (model_type={model_type}, "

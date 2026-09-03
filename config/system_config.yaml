@@ -12,6 +12,11 @@ monitoring:
   cpu_monitoring: true
   memory_monitoring: true
   data_path: logs/monitoring
+system:
+  # 系统内存使用率阈值（%）超过时重启整个任务（非仅重启检测器）
+  memory_restart_threshold: 90
+  # 内存触发整任务重启的冷却期（秒），防止反复重启
+  memory_restart_cooldown_seconds: 600
 database:
   type: sqlite
   path: data/tasks.db

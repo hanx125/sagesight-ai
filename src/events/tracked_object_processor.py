@@ -56,6 +56,28 @@ from src.events.camera_state import CameraState
 
 logger = logging.getLogger(__name__)
 
+# 事件终态门闩的大模型兜底超时（秒）：大模型调用异常/失联时，
+# 避免事件无限悬在 initial 状态。优先级：系统配置 llm.terminal_timeout_seconds > 默认 120s。
+_DEFAULT_LLM_TERMINAL_TIMEOUT = 120.0
+_llm_terminal_timeout_cache: Optional[float] = None
+
+
+def _get_llm_terminal_timeout() -> float:
+    """获取事件终态门闩的大模型兜底超时（秒），带进程内缓存（worker 子进程内只读一次）"""
+    global _llm_terminal_timeout_cache
+    if _llm_terminal_timeout_cache is not None:
+        return _llm_terminal_timeout_cache
+    try:
+        from src.system.system_config_loader import load_system_config
+        t = float(load_system_config().get('llm', {}).get('terminal_timeout_seconds', 0) or 0)
+        if t > 0:
+            _llm_terminal_timeout_cache = t
+            return t
+    except Exception:
+        pass
+    _llm_terminal_timeout_cache = _DEFAULT_LLM_TERMINAL_TIMEOUT
+    return _llm_terminal_timeout_cache
+
 
 def _get_process_rss_mb() -> float:
     """获取当前进程 RSS 内存（MB），失败返回 0.0"""
@@ -1711,6 +1733,38 @@ class TrackedObjectProcessor(mp.Process):
                 'dedup_reason': '',
             }
 
+            # 大模型兜底超时：LLM 需要参与终态判定时启动看门狗。
+            # 大模型调用异常/失联时，超时后强制完成门闩，避免事件无限悬在 initial。
+            if llm_required:
+                threading.Timer(
+                    _get_llm_terminal_timeout(),
+                    self._timeout_llm_gate,
+                    args=(event_id,),
+                    daemon=True,
+                ).start()
+
+    def _timeout_llm_gate(self, event_id: str) -> None:
+        """大模型兜底超时回调：LLM 未在超时内完成时，强制收尾终态门闩
+
+        - 普通事件：降级为 final（LLM 去重/描述缺席，事件正常收尾推送）
+        - 规则去重复核：维持 rule 去重结论（duplicate），不推 MQTT（符合"规则去重不推送"约定）
+        """
+        with self._get_terminal_lock():
+            entry = self._event_terminal.get(event_id)
+            if entry is None or entry['llm_done']:
+                return  # 已由 LLM 线程完成或门闩已 pop，无需处理
+        final_status, dedup_status, dedup_reason = "final", "normal", "llm 处理超时降级"
+        if entry.get('review_mode'):
+            final_status, dedup_status = "duplicate", "duplicate"
+            dedup_reason = "复核超时,维持规则去重"
+            # 复核不会生成 GIF：清理可能残留的预备帧，避免泄漏
+            self._pending_gif_jobs.pop(event_id, None)
+        logger.warning(
+            f"[Event] LLM 处理超时,强制收尾终态: event={event_id[:8]}, "
+            f"status={final_status}, review_mode={entry.get('review_mode', False)}"
+        )
+        self._mark_llm_done(event_id, final_status, dedup_status, dedup_reason)
+
     def _mark_gif_done(self, event_id: str) -> None:
         """标记 GIF 生成完成，检查并触发终态推送"""
         with self._get_terminal_lock():
@@ -1777,8 +1831,11 @@ class TrackedObjectProcessor(mp.Process):
         )
 
         # MQTT：单推终态消息（final / duplicate）
+        # 规则去重复核确认重复（review_mode + duplicate）：维持规则去重结论，不推 MQTT
+        # （与"规则去重不推送"约定一致，事件仅以 DB duplicate 状态记录）
+        is_review_dup = gate.get('review_mode', False) and final_status == "duplicate"
         event_output = self.event_outputs.get(gate['camera_id'])
-        if event_output is not None:
+        if event_output is not None and not is_review_dup:
             try:
                 event_output.push_terminal_to_mqtt(event_id)
             except Exception as e:
