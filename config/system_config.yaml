@@ -14,7 +14,9 @@ monitoring:
   data_path: logs/monitoring
 system:
   # 系统内存使用率阈值（%）超过时重启整个任务（非仅重启检测器）
-  memory_restart_threshold: 90
+  # 注意：4G 无 swap 的盒子上，内存逼近该值时分配会卡顿，检测可能先于该阈值静默冻结，
+  # 阈值应低于"静默冻结"发生的占用点并留余量。正常基线约 52%，冻结点约 82%，取 80%。
+  memory_restart_threshold: 80
   # 内存触发整任务重启的冷却期（秒），防止反复重启
   memory_restart_cooldown_seconds: 600
 database:
