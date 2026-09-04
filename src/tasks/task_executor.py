@@ -1277,6 +1277,10 @@ class MultiCameraTaskExecutor:
         logger.warning(
             f"[MultiCameraExecutor-{self.task_id}] 任务子进程已停止，退出进程等待 TaskMonitor 重启"
         )
+        # 关键：stop() 仅对子进程执行异步 terminate，若存在未及时退出的非守护子进程（如 Manager/工作进程），
+        # 解释器收尾阶段 join 会卡住，导致本进程不退出、父进程 is_alive() 恒为 True，
+        # TaskMonitor 永远检测不到崩溃而无法自动重启。这里强制立即退出本进程以保证父进程能识别其结束。
+        os._exit(0)
 
     def run(self):
         """运行任务执行器（主循环）"""
