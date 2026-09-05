@@ -175,7 +175,10 @@ def run_pipeline(
                     proc_logger.warning(
                         f"解码器 {idle:.0f}s 无新帧，检测管道空转等待..."
                     )
-                if first_frame is False and idle > DECODER_STALL_THRESHOLD:
+                # 只要解码器持续超过阈值无新帧即判定失效并退出。注意：不能加
+                # "first_frame is False" 条件——若解码器自启动起就从没出过第一帧，
+                # 该标志恒为 True，会导致永远空转而不退出、无法被 TaskMonitor 拉起。
+                if idle > DECODER_STALL_THRESHOLD:
                     proc_logger.warning(
                         f"解码停滞 {idle:.0f}s 无新帧（>阈值 {DECODER_STALL_THRESHOLD}s），"
                         f"判定解码器失效，退出检测管道等待任务重启"
