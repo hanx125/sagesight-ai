@@ -1273,7 +1273,7 @@ class MultiCameraTaskExecutor:
         logger.warning(
             f"[MultiCameraExecutor-{self.task_id}] 停止全部子进程并重启整个任务..."
         )
-        self.stop()  # 仅停止子进程并置 running=False，不修改 DB 任务状态
+        self.stop(reason="memory_threshold")  # 仅停止子进程并置 running=False，不修改 DB 任务状态
         logger.warning(
             f"[MultiCameraExecutor-{self.task_id}] 任务子进程已停止，退出进程等待 TaskMonitor 重启"
         )
@@ -1334,10 +1334,10 @@ class MultiCameraTaskExecutor:
 
         except KeyboardInterrupt:
             logger.debug(f"[MultiCameraExecutor-{self.task_id}] 收到中断信号，停止任务")
-            self.stop()
+            self.stop(reason="keyboard_interrupt")
         except Exception as e:
             logger.debug(f"[MultiCameraExecutor-{self.task_id}] 主循环异常: {e}")
-            self.stop()
+            self.stop(reason=f"run_loop_error: {e}")
 
         logger.debug(f"[MultiCameraExecutor-{self.task_id}] 任务执行器已退出")
 
@@ -1365,8 +1365,14 @@ class MultiCameraTaskExecutor:
         time.sleep(3.0)
         logger.debug(f"[MultiCameraExecutor-{self.task_id}] 批处理事件排空等待完成")
 
-    def stop(self):
-        """停止所有摄像机检测"""
+    def stop(self, reason: str = "unknown"):
+        """停止所有摄像机检测
+
+        Args:
+            reason: 停止原因（用于日志定位静默停止问题，如 manual / memory_threshold /
+                    keyboard_interrupt / run_loop_error / stop_all / process_manager 等）
+        """
+        logger.info(f"[MultiCameraExecutor-{self.task_id}] 停止任务，原因: {reason}")
         self.running = False
 
         # 1. 通知所有进程退出
@@ -1462,7 +1468,7 @@ class TaskScheduler:
                 return False
 
             executor = self.executors[task_id]
-            executor.stop()
+            executor.stop(reason="manual")
             del self.executors[task_id]
 
             logger.debug(f"[TaskScheduler] 任务 {task_id} 已停止")
@@ -1472,7 +1478,7 @@ class TaskScheduler:
         """停止所有任务"""
         with self._lock:
             for task_id, executor in self.executors.items():
-                executor.stop()
+                executor.stop(reason="stop_all")
 
             self.executors.clear()
             logger.debug("[TaskScheduler] 所有任务已停止")
@@ -1579,14 +1585,14 @@ def main():
 
     # 等待信号
     try:
-        signal.signal(signal.SIGINT, lambda signum, frame: executor.stop())
-        signal.signal(signal.SIGTERM, lambda signum, frame: executor.stop())
+        signal.signal(signal.SIGINT, lambda signum, frame: executor.stop(reason="sigint"))
+        signal.signal(signal.SIGTERM, lambda signum, frame: executor.stop(reason="sigterm"))
 
         while executor.running:
             time.sleep(1)
 
     except KeyboardInterrupt:
-        executor.stop()
+        executor.stop(reason="keyboard_interrupt")
 
 
 if __name__ == '__main__':
