@@ -109,8 +109,18 @@ class MQTTOutputter:
         Args:
             event: 事件字典
         """
-        payload = json.dumps(event, ensure_ascii=False)
         topic = self._render_topic(event)
+        # 云平台主题（/sys/...）按 Alink 协议包装：method + version(1.0) + params
+        # identifier 取事件类型（如 tracking → thing.event.tracking.post）
+        if topic.startswith('/sys/'):
+            payload = json.dumps({
+                'method': f"thing.event.{event.get('type') or 'event'}.post",
+                'version': '1.0',
+                'params': event,
+            }, ensure_ascii=False)
+        else:
+            # 旧单一主题保持原始负载（向后兼容）
+            payload = json.dumps(event, ensure_ascii=False)
         info = self.client.publish(topic, payload, qos=self.qos, retain=self.retain)
         # paho 1.x 返回 (rc, mid) 元组；paho 2.x 返回 MQTTMessageInfo 对象（含 .rc 属性）
         rc = info[0] if isinstance(info, tuple) else getattr(info, 'rc', 0)
