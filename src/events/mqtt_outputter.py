@@ -5,6 +5,7 @@ MQTT 输出器
 """
 
 import json
+import datetime
 from typing import Dict
 from urllib.parse import urlparse
 import paho.mqtt.client as mqtt
@@ -114,13 +115,21 @@ class MQTTOutputter:
             event: 事件字典
         """
         topic = self._render_topic(event)
-        # 云平台主题（/sys/...）按 Alink 协议包装：method + version(1.0) + params
-        # identifier 取事件类型（如 tracking → thing.event.tracking.post）
+        # 云平台主题（/sys/...）按 Alink 标准事件上报格式包装：
+        #   method 固定 thing.event.post；事件标识符放 params.identifier；
+        #   输出参数放 params.value（信封闭包）；time 取事件发生时间。
         if topic.startswith('/sys/'):
+            event_time = (event.get('start_time') or event.get('timestamp')
+                          or datetime.datetime.now().isoformat())
             payload = json.dumps({
-                'method': f"thing.event.{event.get('type') or 'event'}.post",
+                'id': event.get('event_id', ''),
                 'version': '1.0',
-                'params': event,
+                'method': 'thing.event.post',
+                'params': {
+                    'identifier': event.get('type') or 'event',
+                    'time': str(event_time).replace('T', ' '),
+                    'value': event,
+                },
             }, ensure_ascii=False)
         else:
             # 旧单一主题保持原始负载（向后兼容）
