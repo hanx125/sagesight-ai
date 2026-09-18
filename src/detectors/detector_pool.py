@@ -287,14 +287,6 @@ class DetectorPool:
         )
         return True
 
-    def check_and_restart_dead(self):
-        """检查并重启已死的检测器进程"""
-        for proc in self.detectors:
-            if proc.restart_if_dead():
-                logger.warning(
-                    f"[DetectorPool-{self.model_type}] 检测器进程 {proc.name} 已重启"
-                )
-
     def stop(self):
         """停止所有检测器进程,清理共享内存"""
         logger.info(f"[DetectorPool-{self.model_type}] 正在停止...")
@@ -471,11 +463,6 @@ class DetectorPoolManager:
                 logger.warning(f"[DetectorPoolManager] 池 {model_type} 就绪超时")
                 all_ready = False
         return all_ready
-
-    def check_and_restart_dead(self):
-        """检查并重启所有池中已死的检测器进程"""
-        for pool in self.pools.values():
-            pool.check_and_restart_dead()
 
     def get_detector(self, model_type: str, camera_id: str) -> Optional[RemoteObjectDetector]:
         """

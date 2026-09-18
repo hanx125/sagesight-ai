@@ -32,48 +32,9 @@ from pathlib import Path
 # 配置日志
 logger = logging.getLogger(__name__)
 
-# 系统内存使用率阈值（%）：超过时重启整个任务（TaskMonitor 拉起全新进程）。
-# 不再由检测器进程单独自退出（避免单检测器重启死循环），统一在此集中处理，
-# 整任务重启可同时释放检测器/解码/跟踪/事件处理等全部子进程内存。
-_MEM_USAGE_LIMIT = 90
-
-# 内存触发整任务重启的冷却期（秒）：距上次内存重启不足该时长则跳过，防止反复重启。
-# 冷却时间戳写入共享文件（进程重启后仍可读），全局唯一，避免多任务同时重启。
-_MEM_RESTART_COOLDOWN = 600
-
-# 内存重启冷却时间戳文件（项目 output 目录下）；需在下面 project_root 定义之后使用
-_MEM_RESTART_COOLDOWN_FILE = None
-
-# 内存重启参数缓存（worker/执行器进程内只解析一次配置）
-_MEM_RESTART_CFG_CACHE: Optional[tuple] = None
-
-
-def _get_mem_restart_cfg() -> tuple:
-    """获取内存重启参数 (threshold_percent, cooldown_seconds)
-
-    优先级：system_config.yaml 的 system.memory_restart_threshold /
-    system.memory_restart_cooldown_seconds > 默认值。
-    """
-    global _MEM_RESTART_CFG_CACHE
-    if _MEM_RESTART_CFG_CACHE is not None:
-        return _MEM_RESTART_CFG_CACHE
-    threshold, cooldown = _MEM_USAGE_LIMIT, _MEM_RESTART_COOLDOWN
-    try:
-        from src.system.system_config_loader import load_system_config
-        s = load_system_config().get('system', {}) or {}
-        threshold = float(s.get('memory_restart_threshold', 0) or 0) or threshold
-        cooldown = float(s.get('memory_restart_cooldown_seconds', 0) or 0) or cooldown
-    except Exception:
-        pass
-    _MEM_RESTART_CFG_CACHE = (threshold, cooldown)
-    return _MEM_RESTART_CFG_CACHE
-
 # 添加项目路径
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
-
-# 内存重启冷却时间戳文件（在 project_root 确定后再赋值）
-_MEM_RESTART_COOLDOWN_FILE = os.path.join(project_root, 'output', 'mem_restart_cooldown')
 
 
 def _camera_worker_process_wrapper(
@@ -1212,76 +1173,6 @@ class MultiCameraTaskExecutor:
         logger.debug(f"[MultiCameraExecutor-{self.task_id}] 所有摄像机已启动")
         return True
 
-    def _is_system_mem_high(self) -> bool:
-        """判断是否触发"内存过高整任务重启"
-
-        仅当系统内存使用率超过阈值，且距上次内存重启超过冷却期时才返回 True。
-        返回 True 的同时写入冷却时间戳（抢占式认领，避免多任务/相邻检查同时重启）。
-        读取失败或内存不超阈值返回 False，绝不误触发。
-        """
-        try:
-            import psutil
-            mem_pct = psutil.virtual_memory().percent
-        except Exception:
-            return False
-
-        threshold, cooldown = _get_mem_restart_cfg()
-        if mem_pct <= threshold:
-            return False
-
-        now = time.time()
-        last = self._read_mem_restart_stamp()
-        if now - last < cooldown:
-            logger.warning(
-                f"[MultiCameraExecutor-{self.task_id}] 系统内存={mem_pct:.1f}%>阈值 "
-                f"({threshold:.0f}%)，但距上次内存重启不足冷却期 {cooldown:.0f}s，跳过本次重启"
-            )
-            return False
-
-        # 抢占冷却：记录本次重启时间戳
-        self._write_mem_restart_stamp(now)
-        logger.warning(
-            f"[MultiCameraExecutor-{self.task_id}] 系统内存={mem_pct:.1f}%>阈值 "
-            f"({threshold:.0f}%)，进入内存重启冷却期 {cooldown:.0f}s"
-        )
-        return True
-
-    def _read_mem_restart_stamp(self) -> float:
-        """读取上次内存重启时间戳（秒）；读取失败视为从未重启（返回 0）"""
-        try:
-            with open(_MEM_RESTART_COOLDOWN_FILE) as f:
-                return float(f.read().strip() or 0)
-        except Exception:
-            return 0.0
-
-    def _write_mem_restart_stamp(self, stamp: float) -> None:
-        """写入内存重启时间戳文件（进程重启后仍可读，用于全局冷却）"""
-        try:
-            os.makedirs(os.path.dirname(_MEM_RESTART_COOLDOWN_FILE), exist_ok=True)
-            with open(_MEM_RESTART_COOLDOWN_FILE, 'w') as f:
-                f.write(f"{stamp:.0f}")
-        except Exception:
-            pass
-
-    def _restart_task_on_memory(self) -> None:
-        """系统内存超过阈值：停止所有子进程后退出本进程，交由 TaskMonitor 重启整个任务
-
-        注意：不得将任务 DB 状态置为 stopped（保持 running），run.py 的 task_monitor_thread
-        检测到本进程异常退出且任务仍为 running 时，才会自动重启整个任务（见 run.py）。
-        冷却时间戳已在 _is_system_mem_high 认领时写入，此处无需重复写。
-        """
-        logger.warning(
-            f"[MultiCameraExecutor-{self.task_id}] 停止全部子进程并重启整个任务..."
-        )
-        self.stop(reason="memory_threshold")  # 仅停止子进程并置 running=False，不修改 DB 任务状态
-        logger.warning(
-            f"[MultiCameraExecutor-{self.task_id}] 任务子进程已停止，退出进程等待 TaskMonitor 重启"
-        )
-        # 关键：stop() 仅对子进程执行异步 terminate，若存在未及时退出的非守护子进程（如 Manager/工作进程），
-        # 解释器收尾阶段 join 会卡住，导致本进程不退出、父进程 is_alive() 恒为 True，
-        # TaskMonitor 永远检测不到崩溃而无法自动重启。这里强制立即退出本进程以保证父进程能识别其结束。
-        os._exit(0)
-
     def run(self):
         """运行任务执行器（主循环）"""
         if not self.start():
@@ -1316,18 +1207,6 @@ class MultiCameraTaskExecutor:
                     logger.debug(f"[MultiCameraExecutor-{self.task_id}] 所有工作进程已停止，退出主循环")
                     self.running = False
                     break
-
-                # 系统内存保护：超过阈值时重启整个任务（而非仅重启检测器进程）
-                # 内存升高可能是检测器之外子进程持有（解码/跟踪/事件处理），单检测器重启无法缓解；
-                # 统一停掉全部子进程并退出本进程，由 run.py 的 TaskMonitor 拉起全新任务进程。
-                if self._is_system_mem_high():
-                    self._restart_task_on_memory()
-                    break
-
-                # 检查并重启死掉的检测器进程
-                # 检测器进程可能因 CUDA 错误、OOM 等原因退出，不重启会导致队列堆积、所有 CameraWorker 超时
-                if self.detector_pool_manager:
-                    self.detector_pool_manager.check_and_restart_dead()
 
                 # 每5秒检查一次进程状态
                 time.sleep(5)
@@ -1369,7 +1248,7 @@ class MultiCameraTaskExecutor:
         """停止所有摄像机检测
 
         Args:
-            reason: 停止原因（用于日志定位静默停止问题，如 manual / memory_threshold /
+            reason: 停止原因（用于日志定位静默停止问题，如 manual /
                     keyboard_interrupt / run_loop_error / stop_all / process_manager 等）
         """
         logger.info(f"[MultiCameraExecutor-{self.task_id}] 停止任务，原因: {reason}")

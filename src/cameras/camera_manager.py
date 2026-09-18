@@ -70,6 +70,10 @@ class Camera:
     # 目录分组
     directory_id: Optional[int] = None  # 所属目录ID
     
+    # 物联网坐标（同步自边缘平台，AI 事件回传物联网解析依据）
+    iot_product_key: str = ""  # 物联网产品标识 productKey
+    iot_device_name: str = ""  # 物联网设备名称
+    
     # 其他
     description: str = ""  # 描述
     enabled: bool = True  # 是否启用
@@ -111,6 +115,8 @@ class Camera:
             'connection_status': self.connection_status,
             'directory_id': self.directory_id,
             'description': self.description,
+            'iot_product_key': self.iot_product_key,
+            'iot_device_name': self.iot_device_name,
             'enabled': self.enabled,
             'online': self.status == 'online',
             'created_at': self.created_at.isoformat() if self.created_at else None,
@@ -160,6 +166,8 @@ class Camera:
             connection_status=data.get('connection_status', ''),
             directory_id=data.get('directory_id'),
             description=data.get('description', ''),
+            iot_product_key=data.get('iot_product_key', ''),
+            iot_device_name=data.get('iot_device_name', ''),
             enabled=data.get('enabled', True),
             created_at=parse_datetime(data.get('created_at')),
             updated_at=parse_datetime(data.get('updated_at'))
@@ -307,6 +315,12 @@ class CameraManager:
                     if 'ai_detection' not in columns:
                         logger.info("[CameraManager] 迁移：添加 ai_detection 字段")
                         cursor.execute("ALTER TABLE cameras ADD COLUMN ai_detection INTEGER DEFAULT 1")
+                    if 'iot_product_key' not in columns:
+                        logger.info("[CameraManager] 迁移：添加 iot_product_key 字段")
+                        cursor.execute("ALTER TABLE cameras ADD COLUMN iot_product_key TEXT DEFAULT ''")
+                    if 'iot_device_name' not in columns:
+                        logger.info("[CameraManager] 迁移：添加 iot_device_name 字段")
+                        cursor.execute("ALTER TABLE cameras ADD COLUMN iot_device_name TEXT DEFAULT ''")
             
             if not table_exists:
                 cursor.execute('''
@@ -357,6 +371,10 @@ class CameraManager:
                         -- 目录分组
                         directory_id INTEGER,
                         
+                        -- 物联网坐标
+                        iot_product_key TEXT DEFAULT '',
+                        iot_device_name TEXT DEFAULT '',
+
                         -- 其他
                         description TEXT DEFAULT '',
                         enabled INTEGER DEFAULT 1,
@@ -487,8 +505,9 @@ class CameraManager:
                     protocol, ai_detection,
                     rtmp_stream, rtsp_stream, http_stream, ws_stream, enable_forward,
                     status, connection_status, directory_id, description, enabled, created_at, updated_at,
-                    rtc_stream, rtcs_stream
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    rtc_stream, rtcs_stream,
+                    iot_product_key, iot_device_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 camera.id, camera.name, camera.source, camera.ip, camera.port, camera.username, camera.password,
                 camera.mac, camera.manufacturer, camera.model, camera.firmware_version, camera.serial_number, camera.hardware_id,
@@ -496,7 +515,8 @@ class CameraManager:
                 camera.protocol, camera.ai_detection,
                 camera.rtmp_stream, camera.rtsp_stream, camera.http_stream, camera.ws_stream, camera.enable_forward,
                 camera.status, camera.connection_status, camera.directory_id, camera.description, camera.enabled, now.isoformat(), now.isoformat(),
-                camera.rtc_stream, camera.rtcs_stream
+                camera.rtc_stream, camera.rtcs_stream,
+                camera.iot_product_key, camera.iot_device_name
             ))
             
             conn.commit()
@@ -704,7 +724,10 @@ class CameraManager:
             enabled=bool(row[30]) if len(row) > 30 else True,
             # [31-32] 时间戳
             created_at=parse_datetime(row[31]) if len(row) > 31 else None,
-            updated_at=parse_datetime(row[32]) if len(row) > 32 else None
+            updated_at=parse_datetime(row[32]) if len(row) > 32 else None,
+            # [33-34] 物联网坐标
+            iot_product_key=row[33] if len(row) > 33 else '',
+            iot_device_name=row[34] if len(row) > 34 else ''
         )
     
     # ========================================

@@ -1248,6 +1248,93 @@ def scheduled_task_thread():
 
 
 # ========================================
+# 每日定时整系统重启
+# ========================================
+# 项目原先依赖大量"内存过高→子进程退出→监控拉起"的进程级重启策略，导致任务
+# "看着在运行但实际已停止"的问题。统一移除这些策略后，改为每天 23:59:59 整个
+# 系统重启兜底：清理全部任务进程/子进程后退出主进程，由 systemd（Restart=always
+# + RestartSec=10）自动拉起全新进程，从而一次性释放所有累积的内存。
+#
+# 注意：此处刻意不将运行中任务的 DB 状态改为 stopped，run.py 启动时只会自动拉起
+# status == 'running' 的任务，从而保证整系统重启后任务自动恢复运行。
+
+def _daily_restart_and_exit(pm):
+    """清理全部任务进程/子进程后退出主进程，交由 systemd 自动拉起
+
+    与 cleanup_handler 的区别：不把 running 任务的 DB 状态改为 stopped，
+    保证重启后任务能自动恢复。
+    """
+    logger.warning("[DailyRestart] 到达每日重启时间，开始整系统重启...")
+
+    # 1. 停止任务进程（进程树），但保持 DB 任务状态不变
+    try:
+        pm.running = False
+        pm.stop_all_tasks()
+    except Exception as e:
+        logger.error(f"[DailyRestart] 停止任务进程失败: {e}")
+
+    # 2. 停止节点管理服务（心跳线程 + HTTP 服务）
+    try:
+        from src.node_agent import get_node_agent_service
+        get_node_agent_service().stop()
+    except Exception as e:
+        logger.error(f"[DailyRestart] 停止节点管理服务失败: {e}")
+
+    # 3. 停止事件清理后台调度
+    try:
+        from src.events.event_cleanup_service import stop_event_cleanup_scheduler
+        stop_event_cleanup_scheduler()
+    except Exception:
+        pass
+
+    # 4. 强杀所有残留子进程（最后手段）
+    try:
+        import psutil
+        parent = psutil.Process(os.getpid())
+        children = parent.children(recursive=True)
+        if children:
+            logger.warning(f"[DailyRestart] 发现 {len(children)} 个残留子进程，强制清理")
+            _gone, alive = psutil.wait_procs(children, timeout=3)
+            for child in alive:
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.error(f"[DailyRestart] 清理残留子进程失败: {e}")
+
+    # 5. 停止日志监听器（避免退出后残留句柄/日志写入冲突）
+    try:
+        LogManager.get_instance().stop()
+    except Exception:
+        pass
+
+    logger.warning("[DailyRestart] 主进程即将退出，交由 systemd 自动拉起全新进程")
+    # os._exit 强制终止，避免解释器收尾阶段 join 卡住导致的残留；注册的
+    # atexit.cleanup_handler 在此不会执行，任务 DB 状态保持 running 以便重启后恢复。
+    os._exit(0)
+
+
+def daily_restart_thread():
+    """每日定时整系统重启线程
+
+    每天 23:59:59 触发一次，同一自然日只触发一次（避免秒级抖动重复触发）。
+    """
+    logger.info("[DailyRestart] 每日定时重启线程启动（每天 23:59:59）")
+    pm = get_process_manager()
+    triggered_date = None
+
+    while True:
+        now = datetime.now()
+        if (now.hour == 23 and now.minute == 59 and now.second >= 59
+                and triggered_date != now.date()):
+            triggered_date = now.date()
+            _daily_restart_and_exit(pm)
+            return
+        time.sleep(1)
+
+
+# ========================================
 # 自签名证书生成（用于 HTTPS，使语音对讲功能在 IP 访问时可用）
 # ========================================
 
@@ -1446,6 +1533,10 @@ if __name__ == '__main__':
     # 启动定时批量检测调度线程（scheduled 任务 cron 触发）
     scheduler_thread = threading.Thread(target=scheduled_task_thread, daemon=True)
     scheduler_thread.start()
+
+    # 启动每日定时整系统重启线程（每天 23:59:59 清理全部子进程并退出，由 systemd 自动拉起）
+    daily_restart_worker = threading.Thread(target=daily_restart_thread, daemon=True)
+    daily_restart_worker.start()
 
     # 启动事件清理后台线程（按 system_config.yaml 的 events_cleanup 配置定期清理过期事件及存储文件）
     # enabled=false 时不启动后台线程（仍可通过 POST /api/events/clear 手动清理）

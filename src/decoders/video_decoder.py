@@ -224,13 +224,8 @@ class DecoderConfig:
             self.ffmpeg_filters = []
 
 
-# 解码器停滞自动重连相关常量
-# 停滞场景：FFmpeg 进程存活但不再输出帧（如流中断/源无数据），stdout.readinto 一直阻塞，
-# 导致 _decode_loop 永远走不到"进程已退出"分支，重连逻辑无法触发。
-# 由监控线程定期检查 last_frame_time，超时则强制结束 FFmpeg 进程，使 readinto 返回，
-# 触发 _decode_loop 检测到进程退出并执行自动重连。
-DECODER_STALL_THRESHOLD = 120      # 判定为解码器停滞的连续无新帧时长（秒）
-DECODER_STALL_CHECK_INTERVAL = 30  # 停滞监控检查间隔（秒）
+# 解码器停滞监控相关常量已移除：进程级重启/看门狗策略统一移除，
+# 靠每日定时全系统重启兜底，解码停滞仅由 _decode_loop 的阻塞自然挂起。
 
 
 class VideoDecoder:
@@ -268,8 +263,6 @@ class VideoDecoder:
         self.is_running = False
         self.sequence_num = 0
         self.thread: Optional[threading.Thread] = None
-        # 解码器停滞监控线程（检测 FFmpeg 存活但不产帧的静默停滞，强制重连）
-        self.stall_monitor_thread: Optional[threading.Thread] = None
         self.stats = {
             'frames_decoded': 0,
             'decode_errors': 0,
@@ -552,13 +545,6 @@ class VideoDecoder:
             self.thread = threading.Thread(target=self._decode_loop, daemon=True)
             self.thread.start()
 
-            # 启动停滞监控线程（仅当启用重连时生效），后台常驻，
-            # 检测解码器存活但不产帧的静默停滞并强制结束 FFmpeg 以触发自动重连
-            self.stall_monitor_thread = threading.Thread(
-                target=self._stall_monitor_loop, daemon=True, name="decoder-stall-monitor"
-            )
-            self.stall_monitor_thread.start()
-
             logger.debug(f"[VideoDecoder] 启动成功（{self.config.hwaccel_preset or 'CPU'} 硬件加速）")
             return True
 
@@ -736,41 +722,6 @@ class VideoDecoder:
                 else:
                     break
 
-    def _stall_monitor_loop(self):
-        """解码器停滞监控循环（后台线程）
-
-        检测 FFmpeg 进程存活但长时间无新帧的静默停滞：
-        - _decode_loop 会阻塞在 stdout.readinto() 上，永不进入"进程已退出"分支，重连不会触发。
-        - 此处超时后强制结束（kill）FFmpeg 进程，使 readinto 返回 EOF/异常，
-          _decode_loop 随即检测到 poll() != None，按正常重连逻辑恢复。
-        - 仅当 config.reconnect 为 True 时才会干预；reconnect 关闭时保持原行为（不自动拉起）。
-        """
-        while self.is_running:
-            time.sleep(DECODER_STALL_CHECK_INTERVAL)
-            if not self.is_running:
-                break
-            if not self.config.reconnect:
-                continue
-
-            now = time.time()
-            last = self.stats.get('last_frame_time')
-            if last is not None:
-                idle = now - last
-            else:
-                start = self.stats.get('start_time')
-                idle = now - start if start else 0.0
-
-            proc = self.process
-            if idle >= DECODER_STALL_THRESHOLD and proc is not None and proc.poll() is None:
-                logger.warning(
-                    f"[VideoDecoder] 解码器停滞 {idle:.0f}s 无新帧（阈值 {DECODER_STALL_THRESHOLD}s），"
-                    f"强制结束 FFmpeg 进程以触发自动重连"
-                )
-                try:
-                    proc.kill()
-                except Exception as e:
-                    logger.debug(f"[VideoDecoder] 停滞时强制结束 FFmpeg 失败：{e}")
-
     def _write_frame_to_ring_buffer(self, frame_seq: int, timestamp_ns: int,
                                     y: np.ndarray, u: np.ndarray, v: np.ndarray,
                                     camera_id: str = "", task_id: str = ""):
@@ -917,7 +868,7 @@ class VideoDecoder:
                 stderr=subprocess.PIPE,
                 bufsize=self.config.buffer_size,
             )
-            # 重置停滞监控基准，避免刚重连的新进程因旧 last_frame_time 被立即误判停滞（重复 kill）
+            # 重置统计基准
             self.stats['last_frame_time'] = None
             self.stats['start_time'] = time.time()
             logger.debug("[VideoDecoder] FFmpeg 进程已重启")

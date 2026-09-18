@@ -62,30 +62,6 @@ def _malloc_trim():
         pass
 
 
-# 系统内存使用率阈值（%）：超过此值时检测器进程主动退出，由 check_and_restart_dead 自动重启
-# 用于释放 RKNN C 层（rknn-toolkit-lite2）可能累积的内存，Python gc/malloc_trim 无法回收
-# 设 90%：给系统留 10% 余量，避免触发 OOM Killer
-_MEM_USAGE_LIMIT = 90
-
-
-def _get_process_rss_mb() -> float:
-    """获取当前进程 RSS 内存（MB），失败返回 0.0"""
-    try:
-        import psutil
-        return psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
-    except Exception:
-        return 0.0
-
-
-def _get_system_mem_usage_percent() -> float:
-    """获取系统内存使用率（%），失败返回 0.0"""
-    try:
-        import psutil
-        return psutil.virtual_memory().percent
-    except Exception:
-        return 0.0
-
-
 def get_input_shm_name(model_type: str, camera_id: str, task_id: str = "") -> str:
     """输入共享内存名称
 
@@ -388,49 +364,18 @@ def run_detector(
             if detection_count % 100 == 0 or (now - last_log_time).total_seconds() > 60:
                 # 归还 glibc 堆碎片，防止检测器进程 RSS 缓慢增长
                 _malloc_trim()
-
-                # 系统内存健康监测：不再在此自退出。
-                # 内存过高的整任务重启统一由 task_executor 主循环检测并提交 TaskMonitor 重启整个任务，
-                # 避免"单检测器自行退出→check_and_restart_dead 立即重启→仍超阈值再退出"陷入死循环，
-                # 且整任务重启能同时释放检测器之外的子进程（解码/跟踪/事件处理）内存。
-                _mem_usage = _get_system_mem_usage_percent()
-                _rss = _get_process_rss_mb()
-                if _mem_usage > _MEM_USAGE_LIMIT:
-                    proc_logger.warning(
-                        f"系统内存使用率={_mem_usage:.1f}% 超过阈值 {_MEM_USAGE_LIMIT}%,"
-                        f"检测器不再自行退出(整任务重启由 executor 统一处理), "
-                        f"本进程RSS={_rss:.1f}MB"
-                    )
-
                 proc_logger.debug(
-                    f"已处理 {detection_count} 次检测 (model_type={model_type}, "
-                    f"系统内存={_mem_usage:.1f}%, RSS={_rss:.1f}MB)"
+                    f"已处理 {detection_count} 次检测 (model_type={model_type})"
                 )
                 last_log_time = now
 
         except Exception as e:
-            error_msg = str(e)
             proc_logger.error(f"检测失败 (camera_id={cam_id}): {e}", exc_info=True)
             # 即使失败也要 set event,避免 CameraWorker 永久等待
             try:
                 out_events[cam_id].set()
             except Exception:
                 pass
-
-            # CUDA 错误（handle 损坏/执行失败）后会话不可恢复，退出进程让监控重启
-            # 否则后续每次推理都会重复失败，检测器变成空转
-            cuda_error_keywords = [
-                'cudaErrorInvalidResourceHandle',
-                'CUDNN_STATUS_EXECUTION_FAILED',
-                'CUDA error',
-                'out of memory',
-                'cudaErrorLaunchFailure',
-            ]
-            if any(kw in error_msg for kw in cuda_error_keywords):
-                proc_logger.error(
-                    f"检测到不可恢复的 CUDA 错误,退出进程等待监控重启: {error_msg}"
-                )
-                break
 
     # 清理
     proc_logger.info("检测器进程正在清理资源...")

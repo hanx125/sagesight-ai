@@ -11,7 +11,7 @@ import uuid
 import os
 import time
 from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 import cv2
 import numpy as np
 import logging
@@ -37,6 +37,8 @@ class EventOutput:
         self.camera_id = config.get('camera_id', 'default')
         # 摄像机名称缓存（MQTT 推送时附带真实名称，供第三方映射设备；避免每次推送查库）
         self._camera_name_cache: Optional[str] = None
+        # 摄像机物联网坐标缓存（iot_product_key / iot_device_name）
+        self._camera_iot_cache: Optional[Tuple[str, str]] = None
 
         # 任务关联（可选）
         self.task_id = config.get('task_id')
@@ -513,14 +515,36 @@ class EventOutput:
         回退为 camera_id，保证第三方仍能定位设备。
         """
         if self._camera_name_cache is None:
-            try:
-                from src.cameras.camera_manager import get_camera_manager
-                camera = get_camera_manager().get_camera(self.camera_id)
-                self._camera_name_cache = camera.name if camera else ''
-            except Exception as e:
-                logger.debug(f"[EventOutput] 获取摄像机名称失败: {e}")
-                self._camera_name_cache = ''
+            self._load_camera_cache()
         return self._camera_name_cache or self.camera_id
+
+    def _get_camera_iot(self) -> Tuple[str, str]:
+        """获取摄像机物联网坐标（iot_product_key / iot_device_name）。
+
+        供物联网平台按 productKey+deviceName 解析 AI 事件；结果随名称一并缓存。
+        """
+        if self._camera_name_cache is None:
+            self._load_camera_cache()
+        return self._camera_iot_cache
+
+    def _load_camera_cache(self):
+        """一次性加载摄像机名称与物联网坐标并缓存（查询失败或相机已删除时空值）"""
+        try:
+            from src.cameras.camera_manager import get_camera_manager
+            camera = get_camera_manager().get_camera(self.camera_id)
+            if camera:
+                self._camera_name_cache = camera.name
+                self._camera_iot_cache = (
+                    camera.iot_product_key or '',
+                    camera.iot_device_name or '',
+                )
+            else:
+                self._camera_name_cache = ''
+                self._camera_iot_cache = ('', '')
+        except Exception as e:
+            logger.debug(f"[EventOutput] 获取摄像机信息失败: {e}")
+            self._camera_name_cache = ''
+            self._camera_iot_cache = ('', '')
 
     def emit(self, event_type: str, data: Dict, image: Optional[np.ndarray] = None,
             frame_id: int = 0, task_id: int = None, algorithm: str = None,
@@ -608,6 +632,8 @@ class EventOutput:
             'type': event_type,
             'camera_id': self.camera_id,
             'camera_name': self._get_camera_name(),  # 摄像机真实名称（供第三方映射设备）
+            'iot_product_key': self._get_camera_iot()[0],  # 物联网产品标识（供物联网解析）
+            'iot_device_name': self._get_camera_iot()[1],  # 物联网设备名称（供物联网解析）
             'task_id': actual_task_id,
             'algorithm': actual_algorithm,
             'frame_id': frame_id,
@@ -1122,6 +1148,8 @@ class EventOutput:
                 'dedup_reason': d['dedup_reason'] or '',
                 'camera_id': d['camera_id'],
                 'camera_name': self._get_camera_name(),  # 摄像机真实名称（供第三方映射设备）
+                'iot_product_key': self._get_camera_iot()[0],  # 物联网产品标识（供物联网解析）
+                'iot_device_name': self._get_camera_iot()[1],  # 物联网设备名称（供物联网解析）
                 'task_id': d['task_id'],
                 'algorithm': d['algorithm'],
                 'class_name': d['class_name'],

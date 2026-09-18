@@ -154,7 +154,9 @@ def create_camera():
             ai_detection=data.get('ai_detection', False),  # 默认未检测，只有添加到任务池才启用
             description=data.get('description', ''),
             enabled=data.get('enabled', True),
-            directory_id=data.get('directory_id')
+            directory_id=data.get('directory_id'),
+            iot_product_key=data.get('iot_product_key', ''),
+            iot_device_name=data.get('iot_device_name', '')
         )
         
         camera_id = manager.add_camera(camera)

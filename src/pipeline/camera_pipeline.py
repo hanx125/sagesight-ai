@@ -44,11 +44,9 @@ logger = logging.getLogger(__name__)
 # 最大 region 数量限制（避免过多 region 导致检测超时）
 MAX_REGIONS = 20
 
-# 解码停滞看门狗：解码器持续未产出新帧时，get_frame_index()==None 分支原本静默空转
-# （零日志、进程存活），导致"检测停、无报错"。这里主动打点并超时退出，
-# 交由 executor/TaskMonitor 重启整个任务自愈。
+# 解码停滞提示：解码器持续无新帧时空转，仅低频打点提示（进程级重启策略已移除，
+# 靠每日定时全系统重启兜底，不再超时退出自愈）
 DECODER_STALL_LOG_INTERVAL = 30   # 停滞期间告警的间隔（秒）
-DECODER_STALL_THRESHOLD = 120     # 判为解码器失效的连续无新帧时长（秒）
 
 
 def _malloc_trim():
@@ -167,23 +165,14 @@ def run_pipeline(
 
             if frame_index is None:
                 # 解码器本次未产出新帧。原实现静默空转（零日志），导致解码器失效时
-                # "检测停、进程活、无报错"。看门狗：间隔打点 + 超时退出自愈。
+                # "检测停、进程活、无报错"。此处仅低频打点提示空转，不再超时退出
+                # （进程级重启策略已移除，靠每日定时全系统重启兜底）。
                 idle = time.time() - last_frame_time
-                if idle > DECODER_STALL_LOG_INTERVAL and \
-                        time.time() - last_stall_log_time >= DECODER_STALL_LOG_INTERVAL:
+                if time.time() - last_stall_log_time >= DECODER_STALL_LOG_INTERVAL:
                     last_stall_log_time = time.time()
                     proc_logger.warning(
                         f"解码器 {idle:.0f}s 无新帧，检测管道空转等待..."
                     )
-                # 只要解码器持续超过阈值无新帧即判定失效并退出。注意：不能加
-                # "first_frame is False" 条件——若解码器自启动起就从没出过第一帧，
-                # 该标志恒为 True，会导致永远空转而不退出、无法被 TaskMonitor 拉起。
-                if idle > DECODER_STALL_THRESHOLD:
-                    proc_logger.warning(
-                        f"解码停滞 {idle:.0f}s 无新帧（>阈值 {DECODER_STALL_THRESHOLD}s），"
-                        f"判定解码器失效，退出检测管道等待任务重启"
-                    )
-                    break
                 time.sleep(0.05)
                 continue
 
