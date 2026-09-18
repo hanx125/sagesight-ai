@@ -82,6 +82,26 @@ class MQTTOutputter:
             except Exception as e:
                 logger.warning(f"[MQTTOutputter] 重连失败: {e}")
 
+    def _render_topic(self, event: Dict) -> str:
+        """
+        按事件动态渲染发布主题。
+
+        支持占位符替换，用于对接物联网平台（如阿里云 IoT 的
+        /sys/{productKey}/{deviceName}/thing/event/post）：
+          - {productKey}  ← 事件的 iot_product_key
+          - {deviceName}  ← 事件的 iot_device_name
+        模板不含占位符时保持原主题不变（兼容原有单一主题用法）；
+        含占位符但事件未配置对应字段时，替换为空字符串。
+        """
+        topic = self.topic
+        if '{productKey}' not in topic and '{deviceName}' not in topic:
+            return topic
+        product_key = (event.get('iot_product_key') or '').strip()
+        device_name = (event.get('iot_device_name') or '').strip()
+        return (topic
+                .replace('{productKey}', product_key)
+                .replace('{deviceName}', device_name))
+
     def send(self, event: Dict):
         """
         发送事件到 MQTT
@@ -90,7 +110,8 @@ class MQTTOutputter:
             event: 事件字典
         """
         payload = json.dumps(event, ensure_ascii=False)
-        info = self.client.publish(self.topic, payload, qos=self.qos, retain=self.retain)
+        topic = self._render_topic(event)
+        info = self.client.publish(topic, payload, qos=self.qos, retain=self.retain)
         # paho 1.x 返回 (rc, mid) 元组；paho 2.x 返回 MQTTMessageInfo 对象（含 .rc 属性）
         rc = info[0] if isinstance(info, tuple) else getattr(info, 'rc', 0)
         event_id = event.get('event_id', '')[:8] if isinstance(event, dict) else ''
@@ -98,11 +119,11 @@ class MQTTOutputter:
         if rc != 0:
             logger.warning(
                 f"[MQTTOutputter] 发布失败 rc={rc}: {mqtt.error_string(rc)}, "
-                f"event_id={event_id}, update_type={update_type}"
+                f"event_id={event_id}, update_type={update_type}, topic={topic}"
             )
         else:
             logger.debug(
-                f"[MQTTOutputter] 已发布: topic={self.topic}, "
+                f"[MQTTOutputter] 已发布: topic={topic}, "
                 f"update_type={update_type}, event_id={event_id}"
             )
 
