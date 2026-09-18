@@ -87,20 +87,24 @@ class MQTTOutputter:
         按事件动态渲染发布主题。
 
         支持占位符替换，用于对接物联网平台（如阿里云 IoT 的
-        /sys/{productKey}/{deviceName}/thing/event/post）：
+        /sys/{productKey}/{deviceName}/thing/event/{identifier}/post）：
           - {productKey}  ← 事件的 iot_product_key
           - {deviceName}  ← 事件的 iot_device_name
+          - {identifier}  ← 事件类型（type，如 tracking → thing/event/tracking/post），与 method 保持一致
         模板不含占位符时保持原主题不变（兼容原有单一主题用法）；
         含占位符但事件未配置对应字段时，替换为空字符串。
         """
         topic = self.topic
-        if '{productKey}' not in topic and '{deviceName}' not in topic:
+        if ('{productKey}' not in topic and '{deviceName}' not in topic
+                and '{identifier}' not in topic):
             return topic
         product_key = (event.get('iot_product_key') or '').strip()
         device_name = (event.get('iot_device_name') or '').strip()
+        identifier = event.get('type') or 'event'
         return (topic
                 .replace('{productKey}', product_key)
-                .replace('{deviceName}', device_name))
+                .replace('{deviceName}', device_name)
+                .replace('{identifier}', identifier))
 
     def send(self, event: Dict):
         """
