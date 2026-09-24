@@ -407,6 +407,62 @@
                     </div>
                 </div>
 
+                <!-- 报警语音播报配置 -->
+                <div class="config-section">
+                    <h4 class="config-section-title">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+                        报警语音播报配置
+                    </h4>
+                    <p class="config-section-desc">检测任务触发区域入侵/徘徊报警时，服务端通过本地音频设备播放任务指定的 MP3 预置文件。此处为全局默认配置与 MP3 文件管理，每个任务可在其表单中单独指定语音与播放参数。</p>
+
+                    <div class="config-subsection">
+                        <div class="config-subsection-header">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="voiceEnabled">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <h5>全局语音播报总开关</h5>
+                        </div>
+                        <div class="config-form-grid" id="voiceForm">
+                            <div class="form-group">
+                                <label>默认 MP3 语音</label>
+                                <select id="voiceMp3">
+                                    <option value="">（未选择）</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>循环次数</label>
+                                <input type="number" id="voiceLoopCount" min="1" max="100" value="1">
+                            </div>
+                            <div class="form-group">
+                                <label>播放时间间隙（毫秒）</label>
+                                <input type="number" id="voiceIntervalMs" min="0" step="100" value="1000">
+                            </div>
+                            <div class="form-group">
+                                <label>音量（0-1）</label>
+                                <input type="number" id="voiceVolume" min="0" max="1" step="0.1" value="1.0">
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:10px;margin-top:12px;">
+                            <button class="btn btn-primary btn-sm" onclick="System.saveVoiceConfig()">保存语音配置</button>
+                            <button class="btn btn-sm" onclick="System.testVoice()">按当前配置试听</button>
+                        </div>
+                    </div>
+
+                    <div class="config-subsection">
+                        <div class="config-subsection-header">
+                            <h5>MP3 预置文件管理</h5>
+                        </div>
+                        <div class="voice-upload">
+                            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+                                <input type="file" id="voiceFileInput" accept=".mp3" style="flex:1;" onchange="System.uploadVoiceFile()">
+                                <button class="btn btn-sm" onclick="document.getElementById('voiceFileInput').click()">选择并上传</button>
+                            </div>
+                            <div id="voiceFilesList"></div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 实时通信配置已迁移至「Web服务配置」标签页，此处不再重复 -->
             </div>
 
@@ -985,5 +1041,5 @@
 
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/chart.umd.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/system.js') }}?v=20260814e"></script>
+<script src="{{ url_for('static', filename='js/system.js') }}?v=20260924d"></script>
 {% endblock %}

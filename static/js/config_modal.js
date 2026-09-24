@@ -125,6 +125,9 @@ async function openConfigModal(taskId, event) {
         document.getElementById('configModalTitle').textContent = `参数配置 - ${task.task_name}`;
         document.getElementById('configTaskId').value = taskId;
 
+        // 先加载报警语音 MP3 预置选项，再回填表单（保证选中的 MP3 能正确显示）
+        await loadVoiceMp3List();
+
         // 加载当前配置到表单
         loadConfigToForm(task);
 
@@ -282,6 +285,33 @@ function loadConfigToForm(task) {
     document.getElementById('displayMotionRegionThickness').value = motionRegionObj.thickness || 1;
     _setColorInput('displayMotionRegionFillColor', motionRegionObj.fill_color, '#00ffff', '0,255,255');
     document.getElementById('displayMotionRegionFillAlpha').value = motionRegionObj.fill_alpha ?? 50;
+
+    // 报警语音播报配置（任务级独立字段）
+    document.getElementById('voiceEnabled').value = task.voice_enabled ? 'true' : 'false';
+    document.getElementById('voiceMp3').value = task.voice_mp3 || '';
+    document.getElementById('voiceLoopCount').value = task.voice_loop_count ?? 1;
+    document.getElementById('voiceIntervalMs').value = task.voice_interval_ms ?? 1000;
+    document.getElementById('voiceVolume').value = task.voice_volume ?? 1.0;
+}
+
+// 加载报警语音 MP3 预置列表，填充 voiceMp3 下拉选项
+async function loadVoiceMp3List() {
+    const select = document.getElementById('voiceMp3');
+    if (!select) return;
+    try {
+        const resp = await fetch('/api/system/voice-files');
+        const data = await resp.json();
+        const files = (data && data.files) || [];
+        select.innerHTML = '<option value="">使用全局默认</option>';
+        files.forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = f.name;
+            opt.textContent = f.name;
+            select.appendChild(opt);
+        });
+    } catch (e) {
+        console.warn('加载报警语音 MP3 列表失败:', e);
+    }
 }
 
 // 关闭参数配置模态框
@@ -498,7 +528,16 @@ async function saveConfig() {
                     fill_color: _getColorFromInput('displayMotionRegionFillColor', [0, 255, 255]),
                     fill_alpha: parseInt(document.getElementById('displayMotionRegionFillAlpha').value) ?? 50
                 }
-            }
+            },
+
+            // 报警语音播报配置（任务级独立字段）
+            voice_enabled: document.getElementById('voiceEnabled').value === 'true',
+            voice_mp3: document.getElementById('voiceMp3').value || '',
+            voice_loop_count: parseInt(document.getElementById('voiceLoopCount').value, 10) || 1,
+            voice_interval_ms: parseInt(document.getElementById('voiceIntervalMs').value, 10) || 1000,
+            voice_volume: parseFloat(document.getElementById('voiceVolume').value) != null
+                ? parseFloat(document.getElementById('voiceVolume').value)
+                : 1.0
         };
 
         // 发送更新请求

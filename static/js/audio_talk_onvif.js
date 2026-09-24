@@ -34,12 +34,12 @@ let echoCancellationEnabled = true;  // 回声消除启用状态
  * 检测语音对讲能力
  */
 function checkAudioTalkCapabilities() {
-    if (!currentSingleCamera) {
+    if (!window.currentSingleCamera) {
         console.error('未选择摄像机');
         return;
     }
     
-    fetch(`/api/audio/talk/capabilities?camera_id=${currentSingleCamera.id}`)
+    fetch(`/api/audio/talk/capabilities?camera_id=${window.currentSingleCamera.id}`)
         .then(response => response.json())
         .then(data => {
             if (data.success) {
@@ -69,13 +69,13 @@ function checkAudioTalkCapabilities() {
  */
 async function startAudioTalk() {
     try {
-        if (!currentSingleCamera) {
+        if (!window.currentSingleCamera) {
             console.error('未选择摄像机');
             updateAudioTalkInfo('请先选择摄像机');
             return;
         }
         
-        console.log('开始ONVIF语音对讲: camera_id=', currentSingleCamera.id);
+        console.log('开始ONVIF语音对讲: camera_id=', window.currentSingleCamera.id);
         updateAudioTalkInfo('正在初始化...');
         
         // 环境检查：getUserMedia 需要 HTTPS 或 localhost
@@ -137,7 +137,7 @@ async function startAudioTalk() {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                camera_id: currentSingleCamera.id,
+                camera_id: window.currentSingleCamera.id,
                 audio_codec: 'PCMU',  // 使用PCMU编码
                 sample_rate: 8000,
                 volume_gain: audioVolume,  // 音量增益（从全局变量获取）
@@ -660,7 +660,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('ONVIF语音对讲模块已加载');
 
     // ✅ 修复：检查变量是否已定义
-    if (typeof currentSingleCamera !== 'undefined' && currentSingleCamera) {
+    if (typeof window.currentSingleCamera !== 'undefined' && window.currentSingleCamera) {
         checkAudioTalkCapabilities();
     }
 });
@@ -673,7 +673,7 @@ function initAudioTalk() {
 
     // 检测语音对讲能力
     // ✅ 修复：检查变量是否已定义
-    if (typeof currentSingleCamera !== 'undefined' && currentSingleCamera) {
+    if (typeof window.currentSingleCamera !== 'undefined' && window.currentSingleCamera) {
         checkAudioTalkCapabilities();
     }
 

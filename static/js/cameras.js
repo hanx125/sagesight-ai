@@ -1305,7 +1305,7 @@ function renderDirectoryCameras(directoryName) {
                 <input type="checkbox" 
                        id="camera_${camera.id}" 
                        value="${camera.id}"
-                       onchange="toggleCameraSelection('${camera.id}')">
+                       onchange="Cameras.toggleCameraSelection('${camera.id}')">
             </div>
             <div class="directory-camera-info">
                 <div class="directory-camera-icon">
@@ -1543,7 +1543,8 @@ return {
     editCurrentCamera: editCurrentCamera,
     showCameraDetail: showCameraDetail,
     closeCameraDetailModal: closeCameraDetailModal,
-    toggleStream: toggleStream
+    toggleStream: toggleStream,
+    toggleCameraSelection: toggleCameraSelection
 };
 
 })();

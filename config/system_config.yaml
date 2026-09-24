@@ -74,8 +74,6 @@ events_cleanup:
 event_dedup:
   enabled: true
   window_seconds: 300
-  # IoU 阈值：检测框重叠度超过该值才判定为重复（固定摄像头下 0.3 过敏感，
-  # 会把反复经过同一位置的目标全部拦截；0.85 仅拦截高度重合的明显重复）
   iou_threshold: 0.85
 node_management:
   enabled: false

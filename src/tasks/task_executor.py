@@ -232,7 +232,7 @@ class CameraWorker:
                                     logger.debug(f"[CameraWorker-{self.camera_id}] ZLM 推流已启动")
                                     stream_exists = True
                                 else:
-                                    logger.debug(f"[CameraWorker-{self.camera_id}] ZLM 推流启动失败: {result.get('message', '未知错误')}")
+                                    logger.warning(f"[CameraWorker-{self.camera_id}] ZLM 推流启动失败: {result.get('message', '未知错误')}")
 
                             # 获取 ZLM 流的原始尺寸（用于坐标映射）
                             if stream_exists:
@@ -251,11 +251,11 @@ class CameraWorker:
                                 except Exception as e:
                                     logger.debug(f"[CameraWorker-{self.camera_id}] 获取 ZLM 原始尺寸失败: {e}")
                         else:
-                            logger.debug(f"[CameraWorker-{self.camera_id}] 警告: 没有配置流媒体服务器")
+                            logger.error(f"[CameraWorker-{self.camera_id}] 没有配置流媒体服务器，无法注册 AI 流")
                     else:
-                        logger.debug(f"[CameraWorker-{self.camera_id}] 警告: 摄像机信息获取失败")
+                        logger.warning(f"[CameraWorker-{self.camera_id}] 摄像机信息获取失败，跳过 ZLM 推流注册")
                 except Exception as stream_err:
-                    logger.debug(f"[CameraWorker-{self.camera_id}] ZLM 推流检查异常: {stream_err}")
+                    logger.warning(f"[CameraWorker-{self.camera_id}] ZLM 推流检查异常: {stream_err}")
 
             # ========================================
             # 初始化解码器（区分 RTSP 流和视频文件）
@@ -988,6 +988,11 @@ class MultiCameraTaskExecutor:
 
             for cam in self.cameras:
                 cam_id = cam['camera_id']
+                # 人员统计：读取本相机（通道）关联的本任务计数区域，并标注相机在
+                # direction 模式下的角色（in/out）；line 模式仅当通道匹配时携带。
+                counting_zones_for_cam = []
+                if self.task_config.get('detection_type') == 'people_counting':
+                    counting_zones_for_cam = self._load_counting_zones_for_camera(cam)
                 camera_configs_for_processor[cam_id] = {
                     'frame_shape': (
                         decoder_cfg.get('height', 640),
@@ -1002,6 +1007,9 @@ class MultiCameraTaskExecutor:
                     'class_names': list(class_names),
                     'fps': decoder_cfg.get('fps', 25),
                     'dedup_config': _dedup_cfg,  # 事件规则去重配置（任务级）
+                    'detection_type': self.task_config.get('detection_type', 'realtime'),
+                    'event_type': self.task_config.get('event_type', 'tracking'),  # 语义检测类型（事件类型）
+                    'counting_zones': counting_zones_for_cam,
                 }
 
             # ========================================
@@ -1034,6 +1042,31 @@ class MultiCameraTaskExecutor:
             import traceback
             traceback.print_exc()
             return False
+
+    def _load_counting_zones_for_camera(self, cam: Dict) -> list:
+        """人员统计：读取本相机（通道）关联的本任务计数区域并标注角色
+
+        委托 task_manager.get_counting_zones(task_id, channel_id)：
+        - line 模式：channel_id 匹配才返回，role='line'
+        - direction 模式：in/out_channels 含本通道时返回，role='in'/'out'
+        返回 row 字典列表，供 TrackedObjectProcessor 构建 CountingZone。
+        """
+        try:
+            channel_id = cam.get('channel_id')
+            if not channel_id:
+                return []
+            from src.tasks.task_manager import TaskManager
+            tm = TaskManager()
+            zones = tm.get_counting_zones(self.task_id, int(channel_id))
+            # direction 模式：zone.channel_id 在表内为 null，
+            # 补充为本相机（通道）的 channel_id，保证计数归属到正确的通道明细
+            for z in zones:
+                if z.get('mode') == 'direction':
+                    z['channel_id'] = int(channel_id)
+            return zones
+        except Exception as e:
+            logger.error(f"[TaskExecutor] 加载计数区域失败 channel={cam.get('channel_id')}: {e}")
+            return []
 
     def _build_ai_stream_config(self) -> dict:
         """

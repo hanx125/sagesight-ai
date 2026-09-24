@@ -168,7 +168,10 @@ def run_pipeline(
                 # "检测停、进程活、无报错"。此处仅低频打点提示空转，不再超时退出
                 # （进程级重启策略已移除，靠每日定时全系统重启兜底）。
                 idle = time.time() - last_frame_time
-                if time.time() - last_stall_log_time >= DECODER_STALL_LOG_INTERVAL:
+                # 注意：循环轮询频率高于帧率，"本次无新帧"是常态，不能仅凭此告警。
+                # 必须同时满足"确实已停滞 idle 秒"和"距上次告警满节流间隔"才输出，
+                # 否则会把正常解码误报成"解码器 0s 无新帧"。
+                if idle >= DECODER_STALL_LOG_INTERVAL and time.time() - last_stall_log_time >= DECODER_STALL_LOG_INTERVAL:
                     last_stall_log_time = time.time()
                     proc_logger.warning(
                         f"解码器 {idle:.0f}s 无新帧，检测管道空转等待..."

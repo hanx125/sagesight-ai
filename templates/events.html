@@ -4,54 +4,6 @@
 
 {% block content %}
 <div class="page-container">
-    <!-- 统计卡片 -->
-    <div class="stats-cards" id="statsCards">
-        <div class="stat-card">
-            <div class="stat-icon stat-icon-total">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
-                </svg>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="statTotal">0</div>
-                <div class="stat-label">总事件数</div>
-            </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon stat-icon-detection">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-                </svg>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="statTrackStart">0</div>
-                <div class="stat-label">初始事件</div>
-            </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon stat-icon-track">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
-                </svg>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="statTrackEnd">0</div>
-                <div class="stat-label">最终事件</div>
-            </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon stat-icon-end">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
-                </svg>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="statDuplicate">0</div>
-                <div class="stat-label">去重统计</div>
-            </div>
-        </div>
-    </div>
-
     <!-- 筛选区域 -->
     <div class="filter-section">
         <div class="filter-left">
@@ -68,6 +20,7 @@
                     <option value="tracking">目标跟踪</option>
                     <option value="zone">区域检测</option>
                     <option value="loitering">徘徊检测</option>
+                    <option value="people_counting">人员统计</option>
                 </select>
             </div>
             <div class="filter-group">
@@ -625,11 +578,6 @@
         opacity: 0.5;
     }
 
-    /* 统计图标颜色 */
-    .stat-icon-detection { background: rgba(76, 175, 80, 0.1); color: #4caf50; }
-    .stat-icon-track { background: rgba(33, 150, 243, 0.1); color: #2196f3; }
-    .stat-icon-end { background: rgba(255, 152, 0, 0.1); color: #ff9800; }
-
     /* 清理模态框输入框样式 */
     #customDays {
         width: 100%;
@@ -687,12 +635,7 @@ window.Events = (function() {
         try {
             const response = await fetch('/api/events/stats');
             const data = await response.json();
-            
-            document.getElementById('statTotal').textContent = data.total || 0;
-            document.getElementById('statTrackStart').textContent = data.by_status?.initial || 0;
-            document.getElementById('statTrackEnd').textContent = data.by_status?.final || 0;
-            document.getElementById('statDuplicate').textContent = data.by_status?.duplicate || 0;
-            
+
             if (data.by_class) {
                 const classSelect = document.getElementById('filterClass');
                 classSelect.innerHTML = '<option value="">全部类别</option>';

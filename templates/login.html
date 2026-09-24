@@ -224,6 +224,17 @@
             box-shadow: 0 0 0 3px rgba(0, 137, 123, 0.15);
         }
 
+        /* 修复浏览器自动填充（autofill）后输入框背景变为浅色的问题 */
+        .input-group input:-webkit-autofill,
+        .input-group input:-webkit-autofill:hover,
+        .input-group input:-webkit-autofill:focus,
+        .input-group input:-webkit-autofill:active {
+            -webkit-box-shadow: 0 0 0 1000px rgba(10, 26, 46, 0.95) inset !important;
+            -webkit-text-fill-color: #ffffff !important;
+            caret-color: #ffffff;
+            transition: background-color 9999s ease-in-out 0s;
+        }
+
         .input-group input:focus + svg,
         .input-group input:focus ~ svg {
             color: #00897b;

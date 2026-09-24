@@ -84,6 +84,28 @@
             <!-- 画面格子将通过 JavaScript 动态生成 -->
         </div>
 
+        <!-- 电视墙下方可视化图表 -->
+        <div class="monitor-charts">
+            <div class="chart-panel">
+                <div class="chart-panel-title">设备统计</div>
+                <div class="chart-panel-body">
+                    <canvas id="deviceStatsChart"></canvas>
+                </div>
+            </div>
+            <div class="chart-panel">
+                <div class="chart-panel-title">事件趋势</div>
+                <div class="chart-panel-body">
+                    <canvas id="eventTrendChart"></canvas>
+                </div>
+            </div>
+            <div class="chart-panel">
+                <div class="chart-panel-title">人员统计</div>
+                <div class="chart-panel-body people-stats-body">
+                    <canvas id="peopleStatsChart"></canvas>
+                </div>
+            </div>
+        </div>
+
         <!-- 屏幕闪烁报警叠加层（进入区域红色 / 徘徊橙色） -->
         <div id="alarmOverlay" class="alarm-overlay"></div>
         <!-- 顶部报警横幅 -->
@@ -693,11 +715,55 @@
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/ZLMRTCClient.js') }}"></script>
 <script src="{{ url_for('static', filename='js/jessibuca/jessibuca.js') }}"></script>
-<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260814f"></script>
-<script src="{{ url_for('static', filename='js/ptz_joystick.js') }}"></script>
-<script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}?v=20260801"></script>
+<script src="{{ url_for('static', filename='js/chart.umd.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260923ptz"></script>
+<script src="{{ url_for('static', filename='js/ptz_joystick.js') }}?v=20260923ptz"></script>
+<script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}?v=20260923ptz"></script>
 
 <style>
+/* 电视墙下方可视化图表区域 */
+.monitor-charts {
+    display: flex;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--bg-white);
+    border-top: 1px solid var(--border-color);
+    height: 220px;
+    flex-shrink: 0;
+}
+
+.chart-panel {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-color);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+}
+
+.chart-panel-title {
+    padding: 8px 12px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: var(--bg-white);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.chart-panel-body {
+    flex: 1;
+    min-height: 0;
+    padding: 8px;
+    position: relative;
+}
+
+.chart-panel-body canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
 /* 右侧事件列表样式 */
 .event-sidebar {
     width: 260px;

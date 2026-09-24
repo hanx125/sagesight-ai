@@ -675,7 +675,10 @@ class EventOutput:
             # 跟踪事件（defer_db=True）不在创建阶段写库，仅在跟踪完成并通过
             # 区域过滤后由 create_tracking_event 落库为 initial/duplicate，
             # 保证事件列表只有 initial/final/duplicate 三种状态。
-            if (self.save_to_db or event.get('task_id')) and not event.get('defer_db'):
+            # 人员计数（type=people_counting）不落 events 表，仅保留 MQTT 直发
+            # 与统计，避免产生事件记录。
+            _is_counting = event.get('type') == 'people_counting'
+            if not _is_counting and (self.save_to_db or event.get('task_id')) and not event.get('defer_db'):
                 self._save_to_database(event)
         except Exception as e:
             logger.error(f"[EventOutput] 异步 I/O 任务失败: {e}")

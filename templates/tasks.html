@@ -4,54 +4,6 @@
 
 {% block content %}
 <div class="page-container">
-    <!-- 统计卡片 -->
-    <div class="stats-cards">
-        <div class="stat-card">
-            <div class="stat-icon stat-icon-total">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
-                </svg>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="statTotal">0</div>
-                <div class="stat-label">总任务数</div>
-            </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon stat-icon-running">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M8 5v14l11-7z"/>
-                </svg>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="statRunning">0</div>
-                <div class="stat-label">运行中</div>
-            </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon stat-icon-cameras">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
-                </svg>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="statCameras">0</div>
-                <div class="stat-label">摄像机数</div>
-            </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon stat-icon-bindings">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M17 20.41L18.41 19 17 17.59 15.59 19 17 20.41zM7.5 17h6l2-2H7.5v2zm0-4h6l2-2H7.5v2zm0-4h6l2-2H7.5v2z"/>
-                </svg>
-            </div>
-            <div class="stat-content">
-                <div class="stat-value" id="statBindings">0</div>
-                <div class="stat-label">绑定数</div>
-            </div>
-        </div>
-    </div>
-
     <!-- 筛选区域 -->
     <div class="filter-section">
         <div class="filter-left">
@@ -189,6 +141,32 @@
                                     <option value="">-- 请选择算法配置 --</option>
                                 </select>
                                 <input type="hidden" id="algorithm" name="algorithm">
+                            </div>
+                        </div>
+                        <!-- 事件类型（语义检测类型）：检测什么，就出什么类型的事件 -->
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="eventType">事件类型</label>
+                                <select id="eventType" name="event_type" onchange="Tasks.onEventTypeChange()">
+                                    <option value="tracking">目标跟踪</option>
+                                    <option value="zone">区域入侵</option>
+                                    <option value="loitering">徘徊检测</option>
+                                    <option value="people_counting">人员统计</option>
+                                </select>
+                            </div>
+                            <div class="form-group" id="countAlarmThresholdGroup" style="display: none;">
+                                <label for="countAlarmThreshold">人数报警阈值 <span class="required">*</span></label>
+                                <input type="number" id="countAlarmThreshold" name="count_alarm_threshold" min="0" step="1" value="0" placeholder="当前区域人数达到该值触发语音报警">
+                            </div>
+                        </div>
+                        <!-- 人员统计：计数区域配置（单机画线从通道图标进入，多机进出为任务级配置） -->
+                        <div class="form-row" id="countingConfigGroup" style="display: none;">
+                            <div class="form-group" style="flex: 1 1 100%;">
+                                <label>计数区域配置</label>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <input type="text" id="countingConfigSummary" readonly placeholder="单机画线请在通道上点击计数图标配置">
+                                    <button type="button" class="btn btn-sm btn-primary" onclick="Tasks.openCountingZoneDirectionConfig()" title="多机进出模式不绑定单个通道，从任务通道池勾选入口机/出口机">多机进出配置</button>
+                                </div>
                             </div>
                         </div>
                         <!-- 轮询检测参数 -->
@@ -832,6 +810,36 @@
                             <input type="number" id="dedupIouThreshold" name="dedup_iou_threshold" step="0.01" min="0.01" max="1" value="0.85">
                         </div>
                     </div>
+                    <!-- 报警语音播报（触发区域入侵/徘徊报警时，服务端播放任务指定的 MP3） -->
+                    <div class="form-row" style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+                        <div class="form-group">
+                            <label for="voiceEnabled">报警语音播报</label>
+                            <select id="voiceEnabled" name="voice_enabled">
+                                <option value="false">不播报（默认）</option>
+                                <option value="true">播报</option>
+                            </select>
+                            <small style="color: #888; font-size: 12px;">区域入侵/徘徊报警时服务端播放语音；未指定MP3时回退到全局默认语音</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="voiceMp3">播放语音（MP3）</label>
+                            <select id="voiceMp3" name="voice_mp3">
+                                <option value="">使用全局默认</option>
+                            </select>
+                            <small style="color: #888; font-size: 12px;">来源于系统管理-报警语音播报配置的预置文件</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="voiceLoopCount">循环次数</label>
+                            <input type="number" id="voiceLoopCount" name="voice_loop_count" min="1" max="100" value="1">
+                        </div>
+                        <div class="form-group">
+                            <label for="voiceIntervalMs">播放时间间隙（毫秒）</label>
+                            <input type="number" id="voiceIntervalMs" name="voice_interval_ms" min="0" step="100" value="1000">
+                        </div>
+                        <div class="form-group">
+                            <label for="voiceVolume">音量（0-1）</label>
+                            <input type="number" id="voiceVolume" name="voice_volume" min="0" max="1" step="0.1" value="1.0">
+                        </div>
+                    </div>
                 </div>
 
                 <!-- 显示配置 -->
@@ -1192,6 +1200,104 @@
     </div>
 </div>
 
+<!-- 人员统计计数区域配置模态框 -->
+<div id="countingZoneConfigModal" class="modal">
+    <div class="modal-content modal-large" style="max-width: 1100px;">
+        <div class="modal-header">
+            <h3><span id="countingZoneConfigTitle">单机画线计数配置</span> - 任务 <span id="countingZoneTaskName"></span></h3>
+            <button class="modal-close" onclick="closeCountingZoneConfig()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="zone-config-layout">
+                <!-- 左侧：区域列表 -->
+                <div class="zone-panel-section">
+                    <div class="zone-panel-block zone-panel-block-fill">
+                        <div class="zone-panel-header">
+                            <h4>计数区域</h4>
+                            <div class="zone-panel-actions">
+                                <button type="button" class="btn btn-sm btn-primary" onclick="addCountingZone()" title="新增一个计数区域">＋</button>
+                                <button type="button" class="btn btn-sm btn-danger" onclick="deleteCountingZone()" title="删除选中区域">✕</button>
+                            </div>
+                        </div>
+                        <div id="countingZoneList" class="zone-list">
+                            <div class="zone-list-empty">暂无计数区域，请点击“添加区域”</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 中间：Canvas 画布（模式A 画分界线用） -->
+                <div class="zone-canvas-section">
+                    <div class="zone-canvas-toolbar">
+                        <span class="zone-canvas-hint" id="countingZoneCanvasHint">先选中“模式A：单机画线”区域并选择摄像机，再在画布上点击两个点绘制分界线（再次点击按钮可调整进入侧）</span>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="resetCountingLine()" style="display:none;" id="resetCountingLineBtn">重置分界线</button>
+                    </div>
+                    <canvas id="countingZoneCanvas" width="640" height="480" style="border: 1px solid var(--border-color); background: #2a2a2a; cursor: crosshair; max-width: 100%;"></canvas>
+                </div>
+
+                <!-- 右侧：区域属性 -->
+                <div class="zone-panel-section">
+                    <div class="zone-panel-block zone-panel-block-fill">
+                        <h4>区域属性</h4>
+                        <div class="zone-prop-form">
+                            <div class="form-group">
+                                <label for="countingZonePropName">区域名称</label>
+                                <input type="text" id="countingZonePropName" placeholder="输入区域名称" oninput="onCountingZonePropChange()">
+                            </div>
+                            <div class="form-group">
+                                <label for="countingZoneMode">计数模式</label>
+                                <select id="countingZoneMode" onchange="onCountingZoneModeChange()">
+                                    <option value="line">单机画分界线（进出相减）</option>
+                                    <option value="direction">多机进出方向汇总</option>
+                                </select>
+                            </div>
+                            <!-- 模式A：单机画线 -->
+                            <div id="countingZoneLineFields">
+                                <div class="form-group">
+                                    <label for="countingZoneLineChannel">画线摄像机</label>
+                                    <select id="countingZoneLineChannel" onchange="onCountingZoneChannelChange()"></select>
+                                </div>
+                                <div class="form-group">
+                                    <label>进入侧方向（分界线一侧）</label>
+                                    <select id="countingZoneInSide" onchange="onCountingZonePropChange()">
+                                        <option value="1">上方 / 左侧进入（当前摄像机画面视图中减去）</option>
+                                    </select>
+                                    <input type="hidden" id="countingZoneInSideVal" value="1">
+                                </div>
+                            </div>
+                            <!-- 模式B：多机进出方向 -->
+                            <div id="countingZoneDirectionFields" style="display:none;">
+                                <div class="form-group">
+                                    <label>入口机（检测到人 +1）</label>
+                                    <div id="countingZoneInChannels" class="counting-role-channels"></div>
+                                </div>
+                                <div class="form-group">
+                                    <label>出口机（检测到人 -1）</label>
+                                    <div id="countingZoneOutChannels" class="counting-role-channels"></div>
+                                </div>
+                                <div style="color:#888; font-size:12px; margin-top:4px;">选中的摄像机在所选入口/出口列表中出现时，将按其角色增减计数。当前区域人数=进入-离开。</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="countingZoneInertia">进入惯性（帧）</label>
+                                <input type="number" id="countingZoneInertia" min="1" max="60" value="3" onchange="onCountingZonePropChange()">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="refreshCountingSnapshot()">
+                <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;margin-right:4px;">
+                    <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                </svg>
+                刷新快照
+            </button>
+            <button type="button" class="btn btn-secondary" onclick="closeCountingZoneConfig()">取消</button>
+            <button type="button" class="btn btn-primary" id="countingZoneSaveBtn" onclick="saveCountingZones()">保存配置</button>
+        </div>
+    </div>
+</div>
+
 <style>
     .zone-config-layout {
         display: flex;
@@ -1303,6 +1409,22 @@
         background: rgba(0, 122, 255, 0.1);
         border: 1px solid var(--primary-color);
     }
+    .zone-list-name {
+        flex: 1;
+        font-size: 13px;
+        color: var(--text-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .zone-list-mode {
+        font-size: 10px;
+        padding: 1px 5px;
+        border-radius: 3px;
+        flex-shrink: 0;
+        background: #e3f2fd;
+        color: #1976d2;
+    }
     .zone-color-dot {
         width: 12px;
         height: 12px;
@@ -1380,6 +1502,29 @@
         opacity: 0.5;
         cursor: not-allowed;
     }
+    .counting-role-channels {
+        max-height: 120px;
+        overflow-y: auto;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        padding: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .counting-role-channels label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--text-primary);
+        margin-bottom: 0;
+        cursor: pointer;
+    }
+    .counting-role-channels input[type="checkbox"] {
+        width: auto;
+        flex-shrink: 0;
+    }
     /* 颜色管理器组件样式 */
     .color-picker-wrapper {
         display: flex;
@@ -1417,8 +1562,9 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{{ url_for('static', filename='js/tasks.js') }}?v=20260804b"></script>
-<script src="{{ url_for('static', filename='js/config_modal.js') }}"></script>
+<script src="{{ url_for('static', filename='js/tasks.js') }}?v=20260924g"></script>
+<script src="{{ url_for('static', filename='js/config_modal.js') }}?v=20260924i"></script>
 <script src="{{ url_for('static', filename='js/zone_canvas_editor.js') }}?v=20260801a"></script>
 <script src="{{ url_for('static', filename='js/channel_zone_config.js') }}?v=20260801a"></script>
+<script src="{{ url_for('static', filename='js/counting_zone_config.js') }}?v=20260924a"></script>
 {% endblock %}

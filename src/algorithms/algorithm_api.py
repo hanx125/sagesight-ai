@@ -257,6 +257,7 @@ def upload_labels():
         
         # 如果指定了算法ID，更新算法配置
         if algorithm_id:
+            from src.algorithms.algorithm_manager import get_algorithm_manager
             manager = get_algorithm_manager()
             algorithm = manager.get_algorithm(int(algorithm_id))
             

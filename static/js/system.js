@@ -37,6 +37,7 @@ SageSight.registerPage('/system', function() {
     loadUsers();
     loadStreamingServers();
     loadLLMConfigs();
+    loadVoiceConfig();
     initWebSocket();
 });
 
@@ -72,6 +73,135 @@ function initWebSocket() {
         socket.on('llm_config_deleted', function(data) {
             loadLLMConfigs();
         });
+    }
+}
+
+// ========================================
+// 报警语音播报配置（全局 + MP3 预置文件管理）
+// ========================================
+
+// 加载全局语音配置与 MP3 文件列表
+async function loadVoiceConfig() {
+    try {
+        const resp = await fetch('/api/system/voice-config');
+        const data = await resp.json();
+        const cfg = data.config || {};
+        document.getElementById('voiceEnabled').checked = (String(cfg.enabled) === '1');
+        document.getElementById('voiceLoopCount').value = cfg.loop_count || 1;
+        document.getElementById('voiceIntervalMs').value = cfg.interval_ms || 1000;
+        document.getElementById('voiceVolume').value = cfg.volume || 1.0;
+        renderVoiceMp3Select(cfg.mp3 || '', data.files || []);
+        renderVoiceFiles(data.files || []);
+    } catch (e) {
+        console.error('加载报警语音配置失败:', e);
+        showNotification('加载报警语音配置失败', 'error');
+    }
+}
+
+// 渲染默认 MP3 下拉选项
+function renderVoiceMp3Select(current, files) {
+    const select = document.getElementById('voiceMp3');
+    select.innerHTML = '<option value="">（未选择）</option>';
+    files.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f.name;
+        opt.textContent = f.name;
+        if (f.name === current) opt.selected = true;
+        select.appendChild(opt);
+    });
+}
+
+// 渲染 MP3 文件列表
+function renderVoiceFiles(files) {
+    const list = document.getElementById('voiceFilesList');
+    if (!files || files.length === 0) {
+        list.innerHTML = '<p class="form-hint">暂无 MP3 预置文件，请上传。</p>';
+        return;
+    }
+    list.innerHTML = files.map(f => `
+        <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border,#e5e7eb);">
+            <span style="flex:1;">${f.name} <span class="form-hint">(${f.size_display})</span></span>
+            <audio controls preload="none" style="height:32px;" src="${f.url}"></audio>
+            <button class="btn btn-sm btn-danger" onclick="System.deleteVoiceFile('${f.name}')">删除</button>
+        </div>`).join('');
+}
+
+// 保存全局语音配置
+async function saveVoiceConfig() {
+    const payload = {
+        enabled: document.getElementById('voiceEnabled').checked,
+        mp3: document.getElementById('voiceMp3').value,
+        loop_count: parseInt(document.getElementById('voiceLoopCount').value, 10) || 1,
+        interval_ms: parseInt(document.getElementById('voiceIntervalMs').value, 10) || 1000,
+        volume: parseFloat(document.getElementById('voiceVolume').value) || 1.0,
+    };
+    try {
+        const resp = await fetch('/api/system/voice-config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { showNotification(data.error || '保存失败', 'error'); return; }
+        showNotification('全局报警语音配置已保存', 'success');
+        loadVoiceConfig();
+    } catch (e) {
+        showNotification('保存失败', 'error');
+    }
+}
+
+// 按当前表单配置试听
+async function testVoice() {
+    const payload = {
+        mp3: document.getElementById('voiceMp3').value,
+        loop_count: parseInt(document.getElementById('voiceLoopCount').value, 10) || 1,
+        interval_ms: parseInt(document.getElementById('voiceIntervalMs').value, 10) || 1000,
+        volume: parseFloat(document.getElementById('voiceVolume').value) || 1.0,
+    };
+    if (!payload.mp3) { showNotification('请先选择默认 MP3 语音或上传预置文件', 'error'); return; }
+    try {
+        const resp = await fetch('/api/system/voice-test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { showNotification(data.error || '试听失败', 'error'); return; }
+        showNotification('已触发服务端试听', 'success');
+    } catch (e) {
+        showNotification('试听失败', 'error');
+    }
+}
+
+// 上传 MP3 预置文件
+async function uploadVoiceFile() {
+    const input = document.getElementById('voiceFileInput');
+    if (!input.files || input.files.length === 0) return;
+    const formData = new FormData();
+    formData.append('file', input.files[0]);
+    try {
+        const resp = await fetch('/api/system/voice-files', { method: 'POST', body: formData });
+        const data = await resp.json();
+        if (!resp.ok) { showNotification(data.error || '上传失败', 'error'); return; }
+        showNotification(data.message || '上传成功', 'success');
+        input.value = '';
+        loadVoiceConfig();
+    } catch (e) {
+        showNotification('上传失败', 'error');
+    }
+}
+
+// 删除 MP3 预置文件
+async function deleteVoiceFile(name) {
+    if (!confirm(`确定删除 MP3 预置文件「${name}」？`)) return;
+    try {
+        const resp = await fetch(`/api/system/voice-files/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const data = await resp.json();
+        if (!resp.ok) { showNotification(data.error || '删除失败', 'error'); return; }
+        showNotification('已删除', 'success');
+        loadVoiceConfig();
+    } catch (e) {
+        showNotification('删除失败', 'error');
     }
 }
 
@@ -1996,7 +2126,11 @@ return {
     confirmDeleteLLMConfig: confirmDeleteLLMConfig,
     setDefaultLLMConfig: setDefaultLLMConfig,
     testLLMConfig: testLLMConfig,
-    toggleLLMEnabled: toggleLLMEnabled
+    toggleLLMEnabled: toggleLLMEnabled,
+    saveVoiceConfig: saveVoiceConfig,
+    testVoice: testVoice,
+    uploadVoiceFile: uploadVoiceFile,
+    deleteVoiceFile: deleteVoiceFile
 };
 
 })();

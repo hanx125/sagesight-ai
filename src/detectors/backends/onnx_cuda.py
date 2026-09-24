@@ -158,6 +158,10 @@ class ONNXCUDADetector(BaseDetector):
             # ========================================
             # 创建推理会话
             # ========================================
+            # 注册 CUDA/cuDNN 运行库目录：缺少 cuDNN 时卷积等算子会退化为兜底实现
+            from src.utils.platform_utils import register_cuda_dll_dirs
+            register_cuda_dll_dirs()
+
             self.session = ort.InferenceSession(
                 model_path,
                 sess_options=session_options,
@@ -185,11 +189,11 @@ class ONNXCUDADetector(BaseDetector):
             
             # 验证 CUDA Provider 是否生效
             if 'CUDAExecutionProvider' not in active_providers:
-                logger.debug(f"[ONNXCUDADetector] [警告] CUDA EP 未激活！实际使用：{active_providers}")
-                logger.debug(f"[ONNXCUDADetector] 可能原因：")
-                logger.debug(f"    1. CUDA 未正确安装")
-                logger.debug(f"    2. ONNX Runtime GPU 版本未安装")
-                logger.debug(f"    3. GPU 驱动版本不兼容")
+                logger.warning(f"[ONNXCUDADetector] CUDA EP 未激活，推理已回退到 CPU！实际使用：{active_providers}")
+                logger.warning(f"[ONNXCUDADetector] 可能原因：")
+                logger.warning(f"    1. CUDA 未正确安装")
+                logger.warning(f"    2. ONNX Runtime GPU 版本未安装")
+                logger.warning(f"    3. GPU 驱动版本不兼容")
             else:
                 logger.debug(f"[ONNXCUDADetector] [OK] CUDA EP 已确认激活")
             

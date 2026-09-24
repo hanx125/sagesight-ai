@@ -9,7 +9,7 @@ window.Monitor = (function() {
 
 var cameras = [];
 var directories = [];
-var currentLayout = 1;
+var currentLayout = 2;
 var screens = [];
 var selectedScreenIndex = 0;
 var currentSingleCamera = null;
@@ -20,6 +20,9 @@ var snapshotData = null;
 var expandedDirs = new Set(); // 记录展开的目录ID
 var ptzSpeed = 3;  // 云台速度（1-5）
 var ptzMoving = false;  // 云台是否正在移动
+// 供 ptz_joystick.js / audio_talk_onvif.js 等外部脚本共享（本文件为 IIFE 闭包作用域，需挂到 window）
+window.currentSingleCamera = null;
+window.ptzMoving = false;
 var streamStatusInterval = null;  // 流状态更新定时器
 
 // AI 视频流相关
@@ -50,7 +53,7 @@ var aiStats = {
 // 注册页面初始化函数（支持 pjax 局部加载）
 SageSight.registerPage('/', function() {
     loadCameras();
-    setLayout(1);
+    setLayout(2);
     initWebSocket();
     initDragDrop();
     fetchAlarmConfig();
@@ -58,6 +61,8 @@ SageSight.registerPage('/', function() {
     initPtzSlider();
     // 初始化事件列表（已合并到本 IIFE 内，直接调用）
     initMonitorEventList();
+    // 初始化电视墙下方可视化图表
+    initCharts();
 });
 
 // ========================================
@@ -1428,6 +1433,9 @@ function cleanupMonitorPage() {
     if (_alarmBlinkTimer) { clearInterval(_alarmBlinkTimer); _alarmBlinkTimer = null; }
     if (_alarmStopTimer) { clearTimeout(_alarmStopTimer); _alarmStopTimer = null; }
 
+    // 清理可视化图表刷新定时器，避免离开页面后继续请求
+    if (_chartsRefreshTimer) { clearInterval(_chartsRefreshTimer); _chartsRefreshTimer = null; }
+
     // 事件推送监听器（new_event/event_update/gif_ready）由 navigation.js 的
     // resetSocket → socket.removeAllListeners() 统一清理，此处无需处理
 }
@@ -1704,6 +1712,7 @@ function openSingleScreen(cameraId, event) {
     if (!camera) return;
 
     currentSingleCamera = camera;
+    window.currentSingleCamera = currentSingleCamera;
     singleScreenAIMode = false;  // 默认普通模式
     updateSingleAIModeButton(false);
 
@@ -1875,6 +1884,7 @@ function closeSingleScreen() {
     stopStreamStatusUpdate();
 
     currentSingleCamera = null;
+    window.currentSingleCamera = null;
 }
 
 function toggleSingleFullscreen() {
@@ -2632,6 +2642,7 @@ document.querySelectorAll('.ptz-direction-btn').forEach(btn => {
 // 更新单画面对话框的摄像机信息
 function updateSingleScreenInfo(camera) {
     currentSingleCamera = camera;
+    window.currentSingleCamera = currentSingleCamera;
 
     const singleCameraName = document.getElementById('singleCameraName');
     const singleChName = document.getElementById('singleChName');
@@ -3464,6 +3475,250 @@ function formatEventTime(timestamp) {
 // 播放提示音
 function playEventNotificationSound() {
     // 可选：播放音频提示
+}
+
+// ========================================
+// 电视墙下方可视化图表
+// ========================================
+
+// 图表实例缓存
+var _deviceStatsChart = null;
+var _eventTrendChart = null;
+var _peopleStatsChart = null;
+var _chartsRefreshTimer = null;
+var _chartsThemeObserver = null;
+
+// 图表主题色（与页面主色一致）
+var _chartColors = {
+    primary: '#266cfb',
+    success: '#2ecc71',
+    danger: '#e74c3c',
+    warning: '#f39c12',
+    muted: '#95a5a6'
+};
+
+// 从 computed style 读取 CSS 变量，供 canvas 图表使用（canvas 不识别 var(--x)）
+function _chartsCssVar(name, fallback) {
+    try {
+        var v = getComputedStyle(document.body).getPropertyValue(name);
+        return (v && v.trim()) ? v.trim() : fallback;
+    } catch (e) {
+        return fallback;
+    }
+}
+
+// 读取当前主题下的图表文字/边框/网格颜色
+function _chartsTheme() {
+    return {
+        text: _chartsCssVar('--text-secondary', '#9fc2dc'),
+        textStrong: _chartsCssVar('--text-primary', '#e8f2ff'),
+        grid: _chartsCssVar('--border-color', '#1a3250'),
+        border: _chartsCssVar('--border-color', '#1a3250')
+    };
+}
+
+// 当 body 主题 class 变化时重建图表（canvas 色值是创建时固化，需重建才跟随主题）
+function _initChartsThemeObserver() {
+    if (_chartsThemeObserver) return;
+    _chartsThemeObserver = new MutationObserver(function() {
+        if (_deviceStatsChart) { _deviceStatsChart.destroy(); _deviceStatsChart = null; }
+        if (_eventTrendChart) { _eventTrendChart.destroy(); _eventTrendChart = null; }
+        if (_peopleStatsChart) { _peopleStatsChart.destroy(); _peopleStatsChart = null; }
+        renderDeviceStatsChart();
+        renderEventTrendChart();
+        renderPeopleStatsChart();
+    });
+    _chartsThemeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+}
+
+// 初始化图表
+function initCharts() {
+    renderDeviceStatsChart();
+    renderEventTrendChart();
+    renderPeopleStatsChart();
+    _initChartsThemeObserver();
+    // 定期刷新（30 秒），保持设备/人员统计实时性
+    if (_chartsRefreshTimer) clearInterval(_chartsRefreshTimer);
+    _chartsRefreshTimer = setInterval(function() {
+        renderDeviceStatsChart();
+        renderEventTrendChart();
+        renderPeopleStatsChart();
+    }, 30000);
+}
+
+// 设备统计（设备总数 / 在线 / 离线）
+async function renderDeviceStatsChart() {
+    var canvas = document.getElementById('deviceStatsChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+    var total = 0, online = 0, offline = 0;
+    try {
+        var resp = await fetch('/api/cameras/statistics');
+        var data = await resp.json();
+        total = data.total || 0;
+        online = data.online || 0;
+        offline = data.offline || 0;
+    } catch (e) {
+        console.error('加载设备统计失败，使用空数据:', e);
+    }
+    var th = _chartsTheme();
+
+    if (_deviceStatsChart) {
+        _deviceStatsChart.data.datasets[0].data = [online, offline];
+        _deviceStatsChart.update();
+        return;
+    }
+    _deviceStatsChart = new Chart(canvas, {
+        type: 'doughnut',
+        data: {
+            labels: ['在线', '离线'],
+            datasets: [{
+                data: [online, offline],
+                backgroundColor: [_chartColors.success, _chartColors.danger],
+                borderWidth: 2,
+                borderColor: th.border
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '60%',
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    labels: { boxWidth: 12, padding: 12, font: { size: 12 }, color: th.text }
+                },
+                title: {
+                    display: true,
+                    text: '设备总数: ' + total,
+                    font: { size: 13 },
+                    color: th.textStrong
+                }
+            }
+        }
+    });
+}
+
+// 事件趋势（最近 7 天事件数量折线图）
+async function renderEventTrendChart() {
+    var canvas = document.getElementById('eventTrendChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+    var labels = [];
+    var values = [];
+    try {
+        var resp = await fetch('/api/events/stats');
+        var data = await resp.json();
+        var daily = (data.daily || []).slice().reverse();  // 按日期升序
+        labels = daily.map(function(item) { return item.date; });
+        values = daily.map(function(item) { return item.count; });
+    } catch (e) {
+        console.error('加载事件趋势失败，使用空数据:', e);
+    }
+    var th = _chartsTheme();
+
+    if (_eventTrendChart) {
+        _eventTrendChart.data.labels = labels;
+        _eventTrendChart.data.datasets[0].data = values;
+        _eventTrendChart.update();
+        return;
+    }
+    _eventTrendChart = new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: '事件数量',
+                data: values,
+                borderColor: _chartColors.primary,
+                backgroundColor: 'rgba(38, 108, 251, 0.12)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+                pointBackgroundColor: _chartColors.primary
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                x: {
+                    ticks: { font: { size: 11 }, maxRotation: 0, color: th.text },
+                    grid: { color: th.grid }
+                },
+                y: {
+                    beginAtZero: true,
+                    ticks: { precision: 0, font: { size: 11 }, color: th.text },
+                    grid: { color: th.grid }
+                }
+            }
+        }
+    });
+}
+
+// 人员统计（各区域进入/离开人数柱状图）
+async function renderPeopleStatsChart() {
+    var canvas = document.getElementById('peopleStatsChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+    var zones = [];
+    var totalZones = 0;
+    try {
+        var resp = await fetch('/api/events/people-stats');
+        var data = await resp.json();
+        zones = data.zones || [];
+        totalZones = data.total_zones || 0;
+    } catch (e) {
+        console.error('加载人员统计失败，使用空数据:', e);
+    }
+    var labels = zones.map(function(z) { return z.zone_name || '未知区域'; });
+    var entered = zones.map(function(z) { return z.entered; });
+    var left = zones.map(function(z) { return z.left; });
+    var th = _chartsTheme();
+
+    if (_peopleStatsChart) {
+        _peopleStatsChart.data.labels = labels;
+        _peopleStatsChart.data.datasets[0].data = entered;
+        _peopleStatsChart.data.datasets[1].data = left;
+        _peopleStatsChart.options.plugins.title.text = '区域总数: ' + totalZones;
+        _peopleStatsChart.update();
+        return;
+    }
+    _peopleStatsChart = new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: '进入人数',
+                    data: entered,
+                    backgroundColor: _chartColors.primary
+                },
+                {
+                    label: '离开人数',
+                    data: left,
+                    backgroundColor: _chartColors.warning
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'bottom', labels: { boxWidth: 12, padding: 8, font: { size: 11 }, color: th.text } },
+                title: {
+                    display: true,
+                    text: '区域总数: ' + totalZones,
+                    font: { size: 13 },
+                    color: th.textStrong
+                }
+            },
+            scales: {
+                x: { ticks: { font: { size: 11 }, maxRotation: 40, minRotation: 0, color: th.text }, grid: { color: th.grid } },
+                y: { beginAtZero: true, ticks: { precision: 0, font: { size: 11 }, color: th.text }, grid: { color: th.grid } }
+            }
+        }
+    });
 }
 
 // ========================================

@@ -426,6 +426,7 @@ class DetectionTask:
     enabled: bool = True
     status: str = "stopped"
     detection_type: str = "realtime"  # realtime（实时检测）, polling（轮询检测）, motion_gated（运动门控检测）, file（离线文件检测）, scheduled（定时批量检测）
+    event_type: str = "tracking"  # 语义检测类型（事件类型）：tracking（目标跟踪）, zone（区域入侵）, loitering（徘徊检测）, people_counting（人员统计）
     # 轮询检测（polling）：每 N 帧推理一次，其余帧跳过推理仅保留跟踪状态
     polling_interval_frames: int = 5
     # 运动门控检测（motion_gated）：无运动时跳过推理，每 N 帧补抽一次以防漏检静止目标
@@ -443,6 +444,17 @@ class DetectionTask:
     dedup_window_seconds: int = 300
     dedup_iou_threshold: float = 0.85
     status: str = "stopped"  # running, stopped, error
+
+    # 报警语音播报配置（任务级，独立字段）
+    # 触发时由服务端通过本地音频设备播放任务指定的 MP3 预置文件
+    voice_enabled: bool = False  # 是否启用语音播报
+    voice_mp3: str = ""  # 选定的 MP3 预置文件名（static/alarm_mp3/ 下的文件名）
+    voice_loop_count: int = 1  # 循环播放次数
+    voice_interval_ms: int = 1000  # 循环播放时间间隙（毫秒）
+    voice_volume: float = 1.0  # 播放音量（0-1）
+    # 区域人数报警阈值（仅人员统计检测生效）：当前区域人数达到该值时触发语音报警；
+    # 0 表示不使用人数阈值触发（维持检测到目标即触发的默认行为）
+    count_alarm_threshold: int = 0
 
     # 检测算法配置
     algorithm: str = "yolov11"
@@ -494,6 +506,7 @@ class DetectionTask:
             'enabled': self.enabled,
             'status': self.status,
             'detection_type': self.detection_type,  # 检测类型（新增）
+            'event_type': self.event_type,  # 语义检测类型（事件类型）
             'polling_interval_frames': self.polling_interval_frames,  # 轮询抽样间隔
             'motion_gate_fallback_interval': self.motion_gate_fallback_interval,  # 运动门控兜底补抽间隔
             'schedule_cron': self.schedule_cron,  # 定时批量 cron 表达式
@@ -503,6 +516,12 @@ class DetectionTask:
             'dedup_enabled': self.dedup_enabled,  # 事件规则去重开关
             'dedup_window_seconds': self.dedup_window_seconds,  # 去重时间窗口（秒）
             'dedup_iou_threshold': self.dedup_iou_threshold,  # 去重 IoU 阈值
+            'voice_enabled': self.voice_enabled,  # 报警语音播报开关
+            'voice_mp3': self.voice_mp3,  # 报警语音 MP3 预置文件名
+            'voice_loop_count': self.voice_loop_count,  # 播放循环次数
+            'voice_interval_ms': self.voice_interval_ms,  # 循环播放时间间隙（毫秒）
+            'voice_volume': self.voice_volume,  # 播放音量
+            'count_alarm_threshold': self.count_alarm_threshold,  # 区域人数报警阈值（仅人员统计）
             'algorithm': self.algorithm,
             'model_path': self.model_path,
             'model_type': self.model_type,  # 模型类型字段
@@ -529,6 +548,7 @@ class DetectionTask:
             enabled=data.get('enabled', True),
             status=data.get('status', 'stopped'),
             detection_type=data.get('detection_type', 'realtime'),  # 检测类型（新增）
+            event_type=cls._resolve_event_type(data),  # 语义检测类型（事件类型）
             polling_interval_frames=data.get('polling_interval_frames', 5),  # 轮询抽样间隔
             motion_gate_fallback_interval=data.get('motion_gate_fallback_interval', 30),  # 运动门控兜底补抽间隔
             schedule_cron=data.get('schedule_cron', ''),  # 定时批量 cron 表达式
@@ -538,6 +558,12 @@ class DetectionTask:
             dedup_enabled=data.get('dedup_enabled', True),  # 事件规则去重开关
             dedup_window_seconds=data.get('dedup_window_seconds', 300),  # 去重时间窗口（秒）
             dedup_iou_threshold=data.get('dedup_iou_threshold', 0.85),  # 去重 IoU 阈值
+            voice_enabled=data.get('voice_enabled', False),  # 报警语音播报开关
+            voice_mp3=data.get('voice_mp3', ''),  # 报警语音 MP3 预置文件名
+            voice_loop_count=data.get('voice_loop_count', 1),  # 播放循环次数
+            voice_interval_ms=data.get('voice_interval_ms', 1000),  # 循环播放时间间隙（毫秒）
+            voice_volume=data.get('voice_volume', 1.0),  # 播放音量
+            count_alarm_threshold=int(data.get('count_alarm_threshold', 0) or 0),  # 区域人数报警阈值（仅人员统计）
             algorithm=data.get('algorithm', 'yolov11'),
             model_path=data.get('model_path', 'models/yolov11n.onnx'),
             model_type=data.get('model_type', 'yolov11n'),  # 模型类型字段
@@ -554,7 +580,21 @@ class DetectionTask:
             created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None,
             updated_at=datetime.fromisoformat(data['updated_at']) if data.get('updated_at') else None
         )
-    
+
+    @classmethod
+    def _resolve_event_type(cls, data: Dict) -> str:
+        """解析语义检测类型（事件类型）。
+
+        显式指定时优先采用；人员统计任务未显式指定时兜底为 people_counting，
+        其余未指定时默认 tracking。
+        """
+        event_type = data.get('event_type')
+        if not event_type:
+            if data.get('detection_type') == 'people_counting':
+                return 'people_counting'
+            return 'tracking'
+        return event_type
+
     def get_full_config(self) -> Dict:
         """获取完整配置（用于任务执行器）"""
         return {
@@ -566,6 +606,7 @@ class DetectionTask:
             'labels_file': self.labels_file,  # 标签文件路径（task_executor 经 task_config 取此值）
             'target_classes': self.target_classes,
             'detection_type': self.detection_type,  # 检测类型
+            'event_type': self.event_type,  # 语义检测类型（事件类型）
             'polling_interval_frames': self.polling_interval_frames,  # 轮询抽样间隔
             'motion_gate_fallback_interval': self.motion_gate_fallback_interval,  # 运动门控兜底补抽间隔
             'schedule_cron': self.schedule_cron,  # 定时批量 cron 表达式
@@ -721,6 +762,7 @@ class TaskManager:
                     enabled BOOLEAN DEFAULT 1,
                     status VARCHAR(20) DEFAULT 'stopped',
                     detection_type VARCHAR(20) DEFAULT 'realtime',
+                    event_type VARCHAR(20) DEFAULT 'tracking',  -- 语义检测类型（事件类型）
 
                     -- 检测算法配置
                     algorithm VARCHAR(50) DEFAULT 'yolov11',
@@ -755,6 +797,15 @@ class TaskManager:
                     dedup_enabled BOOLEAN DEFAULT 1,
                     dedup_window_seconds INTEGER DEFAULT 300,
                     dedup_iou_threshold REAL DEFAULT 0.85,
+
+                    -- 报警语音播报（任务级）
+                    voice_enabled BOOLEAN DEFAULT 0,
+                    voice_mp3 VARCHAR(255) DEFAULT '',
+                    voice_loop_count INTEGER DEFAULT 1,
+                    voice_interval_ms INTEGER DEFAULT 1000,
+                    -- 区域人数报警阈值（仅人员统计检测生效）
+                    count_alarm_threshold INTEGER DEFAULT 0,
+                    voice_volume REAL DEFAULT 1.0,
 
                     -- 时间戳
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -1000,6 +1051,47 @@ class TaskManager:
                 logger.debug("[TaskManager] events 表添加 dedup_reason 字段")
 
             # ========================================
+            # 人员统计（people counting）数据表
+            # counting_zones: 任务级计数区域定义（与通道级 zones_config 多边形隔离）
+            # counting_stats: 按天复位的计数状态（唯一键 task_id+zone_name+channel_id+count_date）
+            # 按天复位：所有读写都以 count_date 为键，跨天即视为从零开始。
+            # ========================================
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS counting_zones (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER NOT NULL,
+                    zone_name VARCHAR(100) NOT NULL,
+                    mode VARCHAR(10) NOT NULL,
+                    channel_id INTEGER,
+                    cross_line TEXT,
+                    in_side INTEGER DEFAULT 1,
+                    inertia INTEGER DEFAULT 3,
+                    min_displacement FLOAT DEFAULT 0.02,
+                    in_channels TEXT,
+                    out_channels TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS counting_stats (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER NOT NULL,
+                    zone_name VARCHAR(100) NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    count_date VARCHAR(10) NOT NULL,
+                    in_count INTEGER DEFAULT 0,
+                    out_count INTEGER DEFAULT 0,
+                    current_count INTEGER DEFAULT 0,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_counting_stats_unique
+                ON counting_stats (task_id, zone_name, channel_id, count_date)
+            ''')
+
+            # ========================================
             # 迁移：历史事件状态归一化（保证事件列表只有 initial/final/duplicate 三种状态）
             # 事件状态机升级为"跟踪中不写库"后，事件首次落库即为 initial/duplicate，
             # 再切换为 final/duplicate。旧逻辑可能残留 tracking_start / tracking_update
@@ -1105,6 +1197,31 @@ class TaskManager:
             if 'labels_file' not in columns:
                 cursor.execute("ALTER TABLE detection_tasks ADD COLUMN labels_file VARCHAR(500) DEFAULT ''")
                 logger.info("数据库迁移: 添加 labels_file 字段到 detection_tasks 表")
+
+            # 添加报警语音播报字段（任务级）
+            if 'voice_enabled' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN voice_enabled BOOLEAN DEFAULT 0")
+                logger.info("数据库迁移: 添加 voice_enabled 字段到 detection_tasks 表")
+            if 'voice_mp3' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN voice_mp3 VARCHAR(255) DEFAULT ''")
+                logger.info("数据库迁移: 添加 voice_mp3 字段到 detection_tasks 表")
+            if 'voice_loop_count' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN voice_loop_count INTEGER DEFAULT 1")
+                logger.info("数据库迁移: 添加 voice_loop_count 字段到 detection_tasks 表")
+            if 'voice_interval_ms' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN voice_interval_ms INTEGER DEFAULT 1000")
+                logger.info("数据库迁移: 添加 voice_interval_ms 字段到 detection_tasks 表")
+            if 'voice_volume' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN voice_volume REAL DEFAULT 1.0")
+                logger.info("数据库迁移: 添加 voice_volume 字段到 detection_tasks 表")
+            if 'count_alarm_threshold' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN count_alarm_threshold INTEGER DEFAULT 0")
+                logger.info("数据库迁移: 添加 count_alarm_threshold 字段到 detection_tasks 表")
+
+            # 添加语义检测类型（事件类型）字段
+            if 'event_type' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN event_type VARCHAR(20) DEFAULT 'tracking'")
+                logger.info("数据库迁移: 添加 event_type 字段到 detection_tasks 表")
             
             # algorithms 表保留（不删除），避免旧触发器/外键引用失败
             # 实际算法配置已迁移到 algorithm_configs 表
@@ -1132,20 +1249,22 @@ class TaskManager:
 
             cursor.execute('''
                 INSERT INTO detection_tasks
-                (task_name, enabled, status, detection_type, polling_interval_frames, motion_gate_fallback_interval,
+                (task_name, enabled, status, detection_type, event_type, polling_interval_frames, motion_gate_fallback_interval,
                  schedule_cron, schedule_source, file_paths, file_loop,
                  dedup_enabled, dedup_window_seconds, dedup_iou_threshold,
+                 voice_enabled, voice_mp3, voice_loop_count, voice_interval_ms, voice_volume, count_alarm_threshold,
                  algorithm, model_path, model_type, labels_file, target_classes,
                  motion_detection_enabled, tracking_enabled,
                  decoder_config, detector_config,
                  tracker_config, motion_config, event_config, display_config,
                  created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 task.task_name,
                 task.enabled,
                 task.status,
                 task.detection_type,
+                task.event_type,
                 task.polling_interval_frames,
                 task.motion_gate_fallback_interval,
                 task.schedule_cron,
@@ -1155,6 +1274,12 @@ class TaskManager:
                 task.dedup_enabled,
                 task.dedup_window_seconds,
                 task.dedup_iou_threshold,
+                task.voice_enabled,
+                task.voice_mp3,
+                task.voice_loop_count,
+                task.voice_interval_ms,
+                task.voice_volume,
+                task.count_alarm_threshold,
                 task.algorithm,
                 task.model_path,
                 task.model_type,  # 模型类型字段
@@ -1190,7 +1315,10 @@ class TaskManager:
                               created_at, updated_at,
                               polling_interval_frames, motion_gate_fallback_interval,
                               schedule_cron, schedule_source, file_paths, file_loop,
-                              dedup_enabled, dedup_window_seconds, dedup_iou_threshold
+                              dedup_enabled, dedup_window_seconds, dedup_iou_threshold,
+                              voice_enabled, voice_mp3, voice_loop_count, voice_interval_ms, voice_volume,
+                              event_type,
+                              count_alarm_threshold
                               FROM detection_tasks WHERE id = ?''', (task_id,))
             row = cursor.fetchone()
 
@@ -1221,7 +1349,10 @@ class TaskManager:
                        created_at, updated_at,
                        polling_interval_frames, motion_gate_fallback_interval,
                        schedule_cron, schedule_source, file_paths, file_loop,
-                       dedup_enabled, dedup_window_seconds, dedup_iou_threshold
+                       dedup_enabled, dedup_window_seconds, dedup_iou_threshold,
+                       voice_enabled, voice_mp3, voice_loop_count, voice_interval_ms, voice_volume,
+                       event_type,
+                       count_alarm_threshold
                        FROM detection_tasks WHERE 1=1'''
             params = []
 
@@ -1260,6 +1391,7 @@ class TaskManager:
                 'enabled': 'enabled',
                 'status': 'status',
                 'detection_type': 'detection_type',
+                'event_type': 'event_type',  # 语义检测类型（事件类型）
                 'polling_interval_frames': 'polling_interval_frames',
                 'motion_gate_fallback_interval': 'motion_gate_fallback_interval',
                 'schedule_cron': 'schedule_cron',
@@ -1269,6 +1401,12 @@ class TaskManager:
                 'dedup_enabled': 'dedup_enabled',
                 'dedup_window_seconds': 'dedup_window_seconds',
                 'dedup_iou_threshold': 'dedup_iou_threshold',
+                'voice_enabled': 'voice_enabled',  # 报警语音播报开关
+                'voice_mp3': 'voice_mp3',  # 报警语音 MP3 预置文件名
+                'voice_loop_count': 'voice_loop_count',  # 播放循环次数
+                'voice_interval_ms': 'voice_interval_ms',  # 循环播放时间间隙（毫秒）
+                'voice_volume': 'voice_volume',  # 播放音量
+                'count_alarm_threshold': 'count_alarm_threshold',  # 区域人数报警阈值（仅人员统计）
                 'algorithm': 'algorithm',
                 'model_path': 'model_path',
                 'model_type': 'model_type',  # 模型类型字段支持更新
@@ -1407,7 +1545,14 @@ class TaskManager:
             file_loop=bool(row[25]) if len(row) > 25 else False,  # 索引 25
             dedup_enabled=bool(row[26]) if len(row) > 26 and row[26] is not None else True,  # 索引 26
             dedup_window_seconds=row[27] if len(row) > 27 and row[27] is not None else 300,  # 索引 27
-            dedup_iou_threshold=float(row[28]) if len(row) > 28 and row[28] is not None else 0.85  # 索引 28
+            dedup_iou_threshold=float(row[28]) if len(row) > 28 and row[28] is not None else 0.85,  # 索引 28
+            voice_enabled=bool(row[29]) if len(row) > 29 and row[29] is not None else False,  # 索引 29
+            voice_mp3=row[30] if len(row) > 30 and row[30] else '',  # 索引 30
+            voice_loop_count=row[31] if len(row) > 31 and row[31] is not None else 1,  # 索引 31
+            voice_interval_ms=row[32] if len(row) > 32 and row[32] is not None else 1000,  # 索引 32
+            voice_volume=float(row[33]) if len(row) > 33 and row[33] is not None else 1.0,  # 索引 33
+            event_type=row[34] if len(row) > 34 and row[34] else 'tracking',  # 索引 34（语义检测类型/事件类型）
+            count_alarm_threshold=int(row[35]) if len(row) > 35 and row[35] is not None else 0  # 索引 35（区域人数报警阈值）
         )
     
     # ========================================
@@ -2024,6 +2169,168 @@ class TaskManager:
             是否删除成功
         """
         return self.save_channel_zones(channel_id, [])
+
+    # ========================================
+    # 人员统计计数区域（任务级，独立于通道级 zones_config）
+    # ========================================
+
+    def get_counting_zones(self, task_id: int, channel_id: int = None) -> List[Dict]:
+        """获取任务的计数区域配置
+
+        Args:
+            task_id: 任务ID
+            channel_id: 可选。提供时按通道过滤并标注相机角色：
+                - line 模式：仅当 channel_id 等于区域画线相机时返回，role='line'
+                - direction 模式：in/out_channels 含该通道时返回，role='in'/'out'
+            不提供时返回任务全部区域行（role 留空）。
+
+        Returns:
+            计数区域字典列表
+        """
+        rows = []
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM counting_zones WHERE task_id = ?", (task_id,))
+            cols = [d[0] for d in cursor.description]
+            for r in cursor.fetchall():
+                rows.append(dict(zip(cols, r)))
+
+        if channel_id is not None:
+            filtered = []
+            for z in rows:
+                mode = z.get('mode')
+                if mode == 'line':
+                    if int(z.get('channel_id') or 0) == int(channel_id):
+                        z['role'] = 'line'
+                        filtered.append(z)
+                elif mode == 'direction':
+                    in_chs = [int(x) for x in safe_json_loads(z.get('in_channels'), [])]
+                    out_chs = [int(x) for x in safe_json_loads(z.get('out_channels'), [])]
+                    if int(channel_id) in in_chs:
+                        z['role'] = 'in'
+                        filtered.append(z)
+                    elif int(channel_id) in out_chs:
+                        z['role'] = 'out'
+                        filtered.append(z)
+            return filtered
+        return rows
+
+    def save_counting_zones(self, task_id: int, zones: List[Dict]) -> bool:
+        """保存任务的计数区域配置（清空替换 + task_id 内 zone_name 唯一校验）
+
+        Args:
+            task_id: 任务ID
+            zones: 计数区域列表，每项含：
+                {zone_name, mode, channel_id, cross_line, in_side, inertia,
+                 min_displacement, in_channels, out_channels}
+
+        Returns:
+            是否保存成功
+        """
+        try:
+            # 校验：mode 合法、zone_name 非空且任务内唯一
+            names = set()
+            for z in zones:
+                name = (z.get('zone_name') or '').strip()
+                if not name:
+                    raise ValueError("计数区域名称不能为空")
+                if name in names:
+                    raise ValueError(f"计数区域名称重复: {name}")
+                names.add(name)
+                mode = z.get('mode', 'line')
+                if mode not in ('line', 'direction'):
+                    raise ValueError(f"非法计数模式: {mode}")
+
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM counting_zones WHERE task_id = ?", (task_id,))
+                for z in zones:
+                    cursor.execute('''
+                        INSERT INTO counting_zones
+                            (task_id, zone_name, mode, channel_id, cross_line, in_side,
+                             inertia, min_displacement, in_channels, out_channels, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ''', (
+                        task_id,
+                        (z.get('zone_name') or '').strip(),
+                        z.get('mode', 'line'),
+                        z.get('channel_id'),
+                        z.get('cross_line') and json.dumps(z.get('cross_line')) or None,
+                        int(z.get('in_side', 1)),
+                        int(z.get('inertia', 3)),
+                        float(z.get('min_displacement', 0.02)),
+                        json.dumps(z.get('in_channels', []) or []),
+                        json.dumps(z.get('out_channels', []) or []),
+                    ))
+                conn.commit()
+                # 强制 WAL checkpoint，确保任务子进程能立即读到最新配置
+                try:
+                    cursor.execute("PRAGMA wal_checkpoint(FULL)")
+                except Exception:
+                    pass
+                logger.info(f"计数区域已保存: task_id={task_id}, zones_count={len(zones)}")
+                return True
+        except Exception as e:
+            logger.error(f"保存计数区域失败: {e}")
+            return False
+
+    def get_counting_stats(self, task_id: int = None,
+                           count_date: str = None) -> List[Dict]:
+        """查询计数统计（默认今天；task_id 为空查询全部）
+
+        Returns:
+            [{task_id, zone_name, channel_id, in_count, out_count, current_count, count_date}]
+        """
+        where = []
+        params = []
+        if task_id is not None:
+            where.append("task_id = ?")
+            params.append(task_id)
+        if count_date:
+            where.append("count_date = ?")
+            params.append(count_date)
+        sql = "SELECT * FROM counting_stats"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        else:
+            sql += " WHERE count_date = ?"
+            params.append(count_date or datetime.now().strftime('%Y-%m-%d'))
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, tuple(params))
+            cols = [d[0] for d in cursor.description]
+            return [dict(zip(cols, r)) for r in cursor.fetchall()]
+
+    def get_task_counting_total(self, task_id: int, count_date: str = None) -> Dict:
+        """任务级计数汇总（按区域 group by，含任务总人数）"""
+        d = count_date or datetime.now().strftime('%Y-%m-%d')
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT zone_name, SUM(in_count), SUM(out_count), SUM(current_count)
+                FROM counting_stats
+                WHERE task_id = ? AND count_date = ?
+                GROUP BY zone_name
+            ''', (task_id, d))
+            rows = cursor.fetchall()
+        zones = [
+            {'zone_name': r[0], 'in_count': int(r[1]), 'out_count': int(r[2]),
+             'current_count': int(r[3])}
+            for r in rows
+        ]
+        total = sum(z['current_count'] for z in zones)
+        return {'zones': zones, 'task_total': total, 'date': d}
+
+    def reset_task_counting_day(self, task_id: int, count_date: str = None) -> int:
+        """手动复位指定任务当日计数，返回删除行数"""
+        d = count_date or datetime.now().strftime('%Y-%m-%d')
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM counting_stats WHERE task_id = ? AND count_date = ?",
+                (task_id, d))
+            conn.commit()
+            return cursor.rowcount
 
 
 # 全局任务管理器实例

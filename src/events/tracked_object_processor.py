@@ -225,6 +225,14 @@ class TrackedObjectProcessor(mp.Process):
         # PTZ 自动跟踪:每个相机当前跟踪的目标 obj_id（None 表示无跟踪目标）
         self.ptz_tracked_object: dict[str, Optional[str]] = {}
 
+        # 人员统计（people counting）：
+        # counting_managers: {camera_id: CountingManager}（子进程 _init 内创建，不可 picklable）
+        # counting_only: {camera_id: bool} True 时抑制常规跟踪/区域事件，只产 people_counting 事件
+        # counting_stats: 跨相机的计数状态存储（单例，子进程内懒创建，SQLite 连接不可 picklable）
+        self.counting_managers: dict[str, object] = {}
+        self.counting_only: dict[str, bool] = {}
+        self.counting_stats = None
+
         logger.info(
             f"[TrackedObjectProcessor] 初始化: "
             f"cameras={len(camera_configs)}, "
@@ -594,6 +602,43 @@ class TrackedObjectProcessor(mp.Process):
             # 初始化 PTZ 跟踪目标
             self.ptz_tracked_object[cam_id] = None
 
+            # 人员统计（people counting）：事件类型为 people_counting（人员统计 = 实时检测 + 事件类型=人员统计，
+            # 兼容旧任务的 detection_type=people_counting）即硬性抑制常规跟踪/区域事件（只产计数事件）；
+            # 该相机参与计数区域时才创建 CountingManager 真正产出计数事件
+            is_people_counting = (config.get('event_type') == 'people_counting'
+                                  or config.get('detection_type') == 'people_counting')
+            if is_people_counting:
+                self.counting_only[cam_id] = True
+                if config.get('counting_zones'):
+                    try:
+                        from src.counting.counting_processor import CountingManager
+                        from src.counting.counting_stats import CountingStatsStore
+                        from src.counting.zone_config import CountingZone
+
+                        if self.counting_stats is None:
+                            self.counting_stats = CountingStatsStore()
+                        zones = [CountingZone.from_row(z) for z in config.get('counting_zones', [])]
+                        frame_shape = tuple(config.get('frame_shape')) or (640, 640)
+                        self.counting_managers[cam_id] = CountingManager(
+                            camera_id=cam_id,
+                            counting_zones=zones,
+                            stats_store=self.counting_stats,
+                            frame_shape=frame_shape,
+                            emit=lambda payload, cid=cam_id: self._emit_counting_event(cid, payload),
+                        )
+                        line_n = sum(1 for z in zones if z.is_line())
+                        dir_n = sum(1 for z in zones if z.is_direction())
+                        proc_logger.info(
+                            f"[{cam_id}] CountingManager 已创建: "
+                            f"line_zones={line_n}, direction_zones={dir_n}, 仅输出计数事件"
+                        )
+                    except Exception as e:
+                        proc_logger.error(f"[{cam_id}] CountingManager 创建失败: {e}")
+                else:
+                    proc_logger.info(
+                        f"[{cam_id}] 人员统计任务未配置计数区域，已抑制常规事件，不产生任何图片事件"
+                    )
+
             # AI 视频流默认不推送，由前端点击 AI 播放后通过
             # /api/ai-stream/enable 创建 {flag_dir}/{camera_id}.flag 标记文件，
             # 本进程通过 os.path.exists 检测标记文件决定是否推送 AI 帧。
@@ -709,6 +754,14 @@ class TrackedObjectProcessor(mp.Process):
             regions=regions,
         )
 
+        # 人员统计：驱动计数（依赖跟踪轨迹做分界线跨越判定 / 方向去重）
+        counting_manager = self.counting_managers.get(camera_id)
+        if counting_manager is not None:
+            try:
+                counting_manager.step(frame_time, tracked_objects_dict or {})
+            except Exception as e:
+                logger.error(f"[Counting] step 失败 camera_id={camera_id}: {e}")
+
         # 事件层合并：清理超宽限期的 pending_end 事件（每帧检查，开销可忽略）
         # _on_object_end 时事件进入宽限期，超时则在此处真正结束
         # 注意：必须在 CameraState.update 之后调用，确保本帧的 end 回调已先入 pending
@@ -731,6 +784,72 @@ class TrackedObjectProcessor(mp.Process):
         # 清理当前帧引用
         self._current_frame = None
         self._current_frame_aligned = True
+
+    def _emit_counting_event(self, camera_id: str, payload: dict) -> None:
+        """发送人员统计计数事件（type=people_counting）
+
+        满足"不生成图片、无大模型描述、无去重、直接入库 + MQTT 直发"：
+        - image=None            → 跳过图片压缩/保存/上传链路
+        - lifecycle=False       → 创建阶段即推 MQTT（不入终态状态机）
+        - defer_db=False        → 立即写 events 表（不入跟踪状态机）
+        计数事件复用 events 表（type=people_counting），字段沿用 zone_name/metadata。
+        """
+        event_output = self.event_outputs.get(camera_id)
+        if event_output is None:
+            return
+        from datetime import datetime as _dt
+        now = _dt.utcnow()
+        data = {
+            'class_name': 'person',
+            'confidence': 1.0,
+            'bbox': [0, 0, 0, 0],
+            'start_time': now.isoformat() + 'Z',
+            'direction': payload.get('direction', ''),
+            'in_count': payload.get('in_count', 0),
+            'out_count': payload.get('out_count', 0),
+            'current_count': payload.get('current_count', 0),
+            'task_total': payload.get('task_total', 0),
+            'date': payload.get('date', ''),
+            'current_zones': [payload.get('zone_name', '')] if payload.get('zone_name') else [],
+        }
+        metadata = {
+            'zone_name': payload.get('zone_name', ''),
+            'channel_id': payload.get('channel_id', 0),
+            'direction': payload.get('direction', ''),
+            'in_count': payload.get('in_count', 0),
+            'out_count': payload.get('out_count', 0),
+            'current_count': payload.get('current_count', 0),
+            'task_total': payload.get('task_total', 0),
+            'date': payload.get('date', ''),
+        }
+        event_output.emit(
+            event_type=self._get_task_event_type(camera_id),
+            data=data,
+            image=None,
+            frame_id=0,
+            task_id=payload.get('task_id'),
+            algorithm=None,
+            metadata=metadata,
+            lifecycle=False,
+            defer_db=False,
+        )
+        # 报警语音播报：人员统计任务按"当前区域人数达到阈值"触发服务端语音。
+        # 阈值>0 且当前人数未达标时不播报；阈值<=0 维持原本触发行为。
+        _threshold = self._get_count_alarm_threshold(camera_id)
+        if _threshold <= 0 or int(payload.get('current_count', 0) or 0) >= _threshold:
+            self._trigger_alarm_voice(camera_id)
+
+    def _get_count_alarm_threshold(self, camera_id: str) -> int:
+        """获取人员统计任务配置的区域人数报警阈值；未配置或无任务时返回 0。"""
+        task_id = self.camera_configs.get(camera_id, {}).get("task_id")
+        if not task_id:
+            return 0
+        try:
+            from src.tasks.task_manager import get_task_manager
+            task = get_task_manager().get_task(int(task_id))
+            return int(getattr(task, 'count_alarm_threshold', 0) or 0) if task else 0
+        except Exception:
+            return 0
 
     def _emit_tracking_start(self, camera_id: str, obj_dict: dict, wall_time: float) -> Optional[str]:
         """创建跟踪事件（type=tracking, status=tracking_start）并返回 event_id
@@ -784,7 +903,7 @@ class TrackedObjectProcessor(mp.Process):
         }
 
         return event_output.emit(
-            event_type=self._derive_event_type(obj_dict),
+            event_type=self._get_task_event_type(camera_id),
             data=event_data,
             image=image,
             frame_id=obj_dict.get("frame_time", 0),
@@ -792,18 +911,32 @@ class TrackedObjectProcessor(mp.Process):
             defer_db=True,   # 跟踪中不写库：事件仅在跟踪完成并通过区域过滤后首次落库
         )
 
-    def _derive_event_type(self, obj_dict: dict) -> str:
-        """从跟踪元数据派生事件类型（优先级：徘徊 > 区域 > 跟踪）
+    def _get_task_event_type(self, camera_id: str) -> str:
+        """获取任务配置的语义检测类型（事件类型）
 
-        - loitered_zones 非空 → "loitering"（徘徊检测）
-        - entered_zones 非空 → "zone"（区域检测）
-        - 否则              → "tracking"（目标跟踪）
+        事件类型由任务配置决定（tracking/zone/loitering/people_counting），
+        保证"检测什么，就出什么类型的事件"。
         """
-        if obj_dict.get("loitered_zones"):
-            return "loitering"
-        if obj_dict.get("entered_zones"):
-            return "zone"
-        return "tracking"
+        return self.camera_configs.get(camera_id, {}).get('event_type', 'tracking')
+
+    def _trigger_alarm_voice(self, camera_id: str):
+        """触发当前摄像机所属任务的报警语音播报
+
+        依据任务配置（voice_*）与全局配置解析播放参数，由 VoiceBroadcaster
+        在后台线程通过服务器音频设备播放。任务禁用且全局关闭时不播报。
+        """
+        try:
+            task_id = self.camera_configs.get(camera_id, {}).get("task_id")
+            if not task_id:
+                return
+            from src.tasks.task_manager import get_task_manager
+            task = get_task_manager().get_task(int(task_id))
+            if task is None:
+                return
+            from src.system.voice_broadcaster import get_voice_broadcaster
+            get_voice_broadcaster().trigger(task.to_dict())
+        except Exception as e:
+            logger.debug(f"[Voice] 触发报警语音播报失败 camera={camera_id}: {e}")
 
     def _on_object_start(self, camera_id: str, obj_dict: dict, frame_time: float):
         """新目标出现回调 - 创建跟踪事件（type=tracking, status=tracking_start）
@@ -813,6 +946,9 @@ class TrackedObjectProcessor(mp.Process):
 
         必需区域过滤：延迟创建到目标首次进入必需区域（start 阶段 entered_zones 为空无法判定）。
         """
+        # 人员统计模式：只输出计数事件，抑制常规跟踪/区域事件
+        if self.counting_only.get(camera_id):
+            return
         # 诊断：统计 start 回调触发次数（无论后续是否被过滤）
         self._start_triggered_count = getattr(self, "_start_triggered_count", 0) + 1
 
@@ -894,6 +1030,9 @@ class TrackedObjectProcessor(mp.Process):
         单一事件模型：update 阶段不写数据库、不保存图片、不推送前端。
         只在内存中更新 best_thumbnail，等 _on_object_end 时一次性保存置信度最高的图片。
         """
+        # 人员统计模式：只输出计数事件，抑制常规跟踪/区域事件
+        if self.counting_only.get(camera_id):
+            return
         event_output = self.event_outputs.get(camera_id)
         if event_output is None:
             return
@@ -976,6 +1115,9 @@ class TrackedObjectProcessor(mp.Process):
         特殊处理：
         - pending_required_zones 事件（目标从未进入必需区域）：直接丢弃，不进宽限期
         """
+        # 人员统计模式：只输出计数事件，抑制常规跟踪/区域事件
+        if self.counting_only.get(camera_id):
+            return
         # 诊断：统计 end 回调触发次数
         self._end_triggered_count = getattr(self, "_end_triggered_count", 0) + 1
 
@@ -1514,7 +1656,7 @@ class TrackedObjectProcessor(mp.Process):
                     status="duplicate",
                     data=update_data,
                     image=final_image,
-                    event_type=self._derive_event_type(obj_dict),
+                    event_type=self._get_task_event_type(camera_id),
                     dedup_status=dedup_status,
                     dedup_reason=dedup_reason,
                 )
@@ -1564,7 +1706,7 @@ class TrackedObjectProcessor(mp.Process):
                         'class_name': class_name,
                         'camera_name': cam_cfg.get('camera_name', camera_id),
                         'zone_name': ",".join(entered_zones) if entered_zones else '',
-                        'event_type': self._derive_event_type(obj_dict),
+                        'event_type': self._get_task_event_type(camera_id),
                         'duration': frame_time - event_start_frame_time,
                         'start_time': event_start_time,
                     }
@@ -1594,8 +1736,12 @@ class TrackedObjectProcessor(mp.Process):
                     status="initial",
                     data=update_data,
                     image=final_image,
-                    event_type=self._derive_event_type(obj_dict),
+                    event_type=self._get_task_event_type(camera_id),
                 )
+
+                # 报警语音播报：任务产生非去重初始事件即触发服务端语音
+                # （是否真正播放由任务 voice_enabled 与全局开关共同决定）
+                self._trigger_alarm_voice(camera_id)
 
                 # 终态门闩：GIF / LLM 全部完成后才单推终态 MQTT，绝不提前投递未定态
                 # 事件（若 initial 提前推送，后续被大模型去重时第三方已收到，无法撤回）。
@@ -1640,7 +1786,7 @@ class TrackedObjectProcessor(mp.Process):
                     'class_name': class_name,
                     'camera_name': cam_cfg.get('camera_name', camera_id),
                     'zone_name': ",".join(entered_zones) if entered_zones else '',
-                    'event_type': self._derive_event_type(obj_dict),
+                    'event_type': self._get_task_event_type(camera_id),
                     'duration': frame_time - event_start_frame_time,
                     'start_time': event_start_time,
                 }

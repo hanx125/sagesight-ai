@@ -104,6 +104,36 @@ def create_streaming_server():
     return jsonify({'error': '创建失败'}), 500
 
 
+def _refresh_local_channel_urls(old: StreamingServer, new: StreamingServer) -> int:
+    """流媒体服务器地址/端口变更后，同步刷新本地平台通道已固化的拉流地址
+
+    通道表的 rtsp_url 是注册当时写入的快照，不会自动跟随服务器配置变化，
+    这里仅替换其中的服务器地址与端口、保留原流 ID，使库内数据与实际拉流地址一致。
+
+    Returns:
+        实际更新的通道数量
+    """
+    from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager
+
+    old_prefix = f"rtsp://{old.host}:{old.rtsp_port}"
+    new_prefix = f"rtsp://{new.host}:{new.rtsp_port}"
+    if old_prefix == new_prefix:
+        return 0
+
+    channel_manager = get_device_channel_pool_manager()
+    updated = 0
+    for channel in channel_manager.get_all_device_channels(channel_source='local_platform'):
+        # 只同步指向本平台流媒体服务器的地址，其余（如视频文件、边缘平台）保持原样
+        if not channel.rtsp_url or not channel.rtsp_url.startswith(old_prefix + '/'):
+            continue
+        channel_manager.update_device_channel(
+            channel.id, {'rtsp_url': new_prefix + channel.rtsp_url[len(old_prefix):]}
+        )
+        updated += 1
+
+    return updated
+
+
 @system_bp.route('/streaming-servers/<int:server_id>', methods=['PUT'])
 def update_streaming_server(server_id: int):
     """更新流媒体服务器配置"""
@@ -139,6 +169,14 @@ def update_streaming_server(server_id: int):
     success = manager.update_streaming_server(server_id, server)
     
     if success:
+        # 地址/端口变更后，同步刷新本地平台通道固化的拉流地址
+        try:
+            synced = _refresh_local_channel_urls(existing, server)
+            if synced:
+                logger.info(f"流媒体服务器配置变更，已同步刷新 {synced} 个本地通道的拉流地址")
+        except Exception as e:
+            logger.warning(f"同步刷新本地通道拉流地址失败: {e}")
+
         # WebSocket 通知
         if _socketio:
             _socketio.emit('streaming_server_updated', {'server_id': server_id})
@@ -393,6 +431,140 @@ def set_llm_enabled():
         'message': '大模型功能已' + ('启用' if enabled else '关闭'),
         'llm_enabled': enabled
     })
+
+
+# ========================================
+# 报警语音播报配置 + MP3 预置文件管理
+# ========================================
+
+# 全局语音配置键（与 system_settings 表对应）
+_VOICE_KEYS = {
+    'enabled': ('voice_broadcast_enabled', '0'),   # 全局总开关
+    'mp3': ('voice_mp3', ''),                      # 默认 MP3 文件名
+    'loop_count': ('voice_loop_count', '1'),       # 默认循环次数
+    'interval_ms': ('voice_interval_ms', '1000'),  # 默认循环时间间隙（毫秒）
+    'volume': ('voice_volume', '1.0'),             # 默认音量（0-1）
+}
+
+
+def _get_voice_config_dict():
+    """读取全局语音配置"""
+    manager = get_system_manager()
+    return {
+        name: manager.get_setting(key, default)
+        for name, (key, default) in _VOICE_KEYS.items()
+    }
+
+
+@system_bp.route('/voice-config', methods=['GET'])
+def get_voice_config():
+    """获取全局报警语音配置 + MP3 预置文件列表"""
+    from src.system.voice_broadcaster import list_preset_files
+    return jsonify({
+        'config': _get_voice_config_dict(),
+        'files': list_preset_files(),
+    })
+
+
+@system_bp.route('/voice-config', methods=['PUT'])
+def update_voice_config():
+    """保存全局报警语音配置"""
+    data = request.get_json() or {}
+    manager = get_system_manager()
+
+    # 校验并写入每个字段
+    if 'enabled' in data:
+        manager.set_setting('voice_broadcast_enabled', '1' if bool(data['enabled']) else '0')
+
+    if 'mp3' in data:
+        manager.set_setting('voice_mp3', str(data['mp3']).strip())
+
+    if 'loop_count' in data:
+        try:
+            loop_count = int(data['loop_count'])
+            if loop_count < 1 or loop_count > 100:
+                return jsonify({'error': '循环次数必须在 1-100 之间'}), 400
+            manager.set_setting('voice_loop_count', str(loop_count))
+        except (ValueError, TypeError):
+            return jsonify({'error': '循环次数必须为整数'}), 400
+
+    if 'interval_ms' in data:
+        try:
+            interval = int(data['interval_ms'])
+            if interval < 0 or interval > 600000:
+                return jsonify({'error': '播放时间间隙必须在 0-600000 毫秒之间'}), 400
+            manager.set_setting('voice_interval_ms', str(interval))
+        except (ValueError, TypeError):
+            return jsonify({'error': '播放时间间隙必须为整数（毫秒）'}), 400
+
+    if 'volume' in data:
+        try:
+            volume = float(data['volume'])
+            if not (0.0 <= volume <= 1.0):
+                return jsonify({'error': '音量必须在 0-1 之间'}), 400
+            manager.set_setting('voice_volume', str(volume))
+        except (ValueError, TypeError):
+            return jsonify({'error': '音量必须为 0-1 之间的小数'}), 400
+
+    logger.info("全局报警语音配置已更新")
+    return jsonify({'success': True, 'message': '全局报警语音配置已保存', 'config': _get_voice_config_dict()})
+
+
+@system_bp.route('/voice-test', methods=['POST'])
+def test_voice_config():
+    """测试播放：按当前全局配置播放一次默认 MP3，用于系统管理页试听"""
+    data = request.get_json() or {}
+    from src.system.voice_broadcaster import get_voice_broadcaster
+    task = None
+    if data.get('mp3'):
+        task = {
+            'voice_enabled': True,
+            'voice_mp3': data['mp3'],
+            'voice_loop_count': int(data.get('loop_count', 1)),
+            'voice_interval_ms': int(data.get('interval_ms', 1000)),
+            'voice_volume': float(data.get('volume', 1.0)),
+        }
+    get_voice_broadcaster().trigger(task)
+    return jsonify({'success': True, 'message': '已触发播放测试'})
+
+
+@system_bp.route('/voice-files', methods=['GET'])
+def list_voice_files():
+    """获取 MP3 预置文件列表"""
+    from src.system.voice_broadcaster import list_preset_files
+    return jsonify({'files': list_preset_files()})
+
+
+@system_bp.route('/voice-files', methods=['POST'])
+def upload_voice_file():
+    """上传 MP3 预置文件"""
+    from src.system.voice_broadcaster import ensure_preset_dir, ALLOWED_EXTENSIONS
+    if 'file' not in request.files:
+        return jsonify({'error': '请选择要上传的 MP3 文件'}), 400
+
+    upload_file = request.files['file']
+    filename = upload_file.filename or ''
+    name = filename.split('/')[-1].split('\\')[-1]
+
+    if not name or Path(name).suffix.lower() not in ALLOWED_EXTENSIONS:
+        return jsonify({'error': '仅支持上传 .mp3 文件'}), 400
+
+    ensure_preset_dir()
+    from src.system.voice_broadcaster import PRESET_DIR
+    target = Path(PRESET_DIR) / name
+    upload_file.save(str(target))
+    logger.info(f"已上传报警语音 MP3: {name}, 大小={target.stat().st_size}字节")
+    return jsonify({'success': True, 'message': f'上传成功: {name}', 'name': name})
+
+
+@system_bp.route('/voice-files/<path:filename>', methods=['DELETE'])
+def delete_voice_file(filename):
+    """删除 MP3 预置文件"""
+    from src.system.voice_broadcaster import delete_preset_file
+    if not delete_preset_file(filename):
+        return jsonify({'error': '删除失败：文件不存在或类型不支持'}), 400
+    logger.info(f"已删除报警语音 MP3: {filename}")
+    return jsonify({'success': True, 'message': f'已删除 {filename}'})
 
 
 # ========================================

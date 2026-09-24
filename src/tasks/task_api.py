@@ -303,10 +303,15 @@ def create_task():
     except Exception as e:
         logger.error(f"查询算法库失败: {e}, labels_file/模型尺寸使用默认值")
 
+    # 语义检测类型（事件类型）：人员统计任务未显式指定时自动联动为 people_counting
+    event_type = data.get('event_type', '') or \
+        ('people_counting' if data.get('detection_type') == 'people_counting' else 'tracking')
+
     task = DetectionTask(
         task_name=data.get('task_name', ''),
         enabled=data.get('enabled', True),
         detection_type=data.get('detection_type', 'realtime'),
+        event_type=event_type,
         polling_interval_frames=data.get('polling_interval_frames', 5),
         motion_gate_fallback_interval=data.get('motion_gate_fallback_interval', 30),
         schedule_cron=data.get('schedule_cron', ''),
@@ -316,6 +321,12 @@ def create_task():
         dedup_enabled=data.get('dedup_enabled', _default_dedup.get('enabled', True)),
         dedup_window_seconds=data.get('dedup_window_seconds', _default_dedup.get('window_seconds', 300)),
         dedup_iou_threshold=data.get('dedup_iou_threshold', _default_dedup.get('iou_threshold', 0.85)),
+        voice_enabled=bool(data.get('voice_enabled', False)),  # 报警语音播报开关
+        voice_mp3=data.get('voice_mp3', ''),  # 报警语音 MP3 预置文件名
+        voice_loop_count=int(data.get('voice_loop_count', 1)),  # 播放循环次数
+        voice_interval_ms=int(data.get('voice_interval_ms', 1000)),  # 循环播放时间间隙（毫秒）
+        voice_volume=float(data.get('voice_volume', 1.0)),  # 播放音量
+        count_alarm_threshold=int(data.get('count_alarm_threshold', 0) or 0),  # 区域人数报警阈值（仅人员统计）
         algorithm=data.get('algorithm', 'yolov11'),
         model_path=data.get('model_path', 'models/yolov11n.onnx'),
         model_type=data.get('model_type', 'yolov11n'),  # 模型类型字段
@@ -1185,6 +1196,96 @@ def save_channel_zones(task_id: int, channel_id: int):
 def delete_channel_zones(task_id: int, channel_id: int):
     """删除通道的Zone配置（兼容路由，task_id 忽略）"""
     return delete_channel_zones_by_channel(channel_id)
+
+
+# ========================================
+# 人员统计计数区域 API（任务级）
+# ========================================
+
+@task_bp.route('/tasks/<int:task_id>/counting-zones', methods=['GET'])
+def get_counting_zones(task_id: int):
+    """获取任务的计数区域配置"""
+    task_manager = get_task_manager()
+    zones = task_manager.get_counting_zones(task_id)
+    return jsonify({'task_id': task_id, 'zones': zones})
+
+
+@task_bp.route('/tasks/<int:task_id>/counting-zones', methods=['POST'])
+def save_counting_zones(task_id: int):
+    """保存任务的计数区域配置（清空替换）
+
+    人员统计任务保存计数区域时兜底：
+    - event_config.filter.target_classes 含 person（或空=不限），min_confidence<=1.0，
+      避免 person 计数事件被 should_send 过滤
+    - tracking_enabled=True（分界线跨越需要跟踪轨迹）
+    """
+    data = request.json
+    if not data:
+        return jsonify({'error': '请求数据无效'}), 400
+
+    zones = data.get('zones', [])
+    task_manager = get_task_manager()
+
+    # 校验任务是否存在及检测类型
+    task = task_manager.get_task(task_id)
+    if task is None:
+        return jsonify({'error': f'任务不存在: task_id={task_id}'}), 404
+
+    success = task_manager.save_counting_zones(task_id, zones)
+    if not success:
+        return jsonify({'error': '计数区域保存失败'}), 400
+
+    # people_counting 任务兜底事件过滤与跟踪开关，保证计数事件不被过滤
+    if task and task.detection_type == 'people_counting' and zones:
+        adjusted = False
+        update_data = {}
+        try:
+            event_config = task.event_config or {}
+            ec = dict(event_config)
+            filt = dict(ec.get('filter') or {})
+            target_classes = list(filt.get('target_classes') or [])
+            if target_classes and 'person' not in target_classes:
+                target_classes.append('person')
+                filt['target_classes'] = target_classes
+                adjusted = True
+            mc = filt.get('min_confidence')
+            if mc is None or float(mc) > 1.0:
+                filt['min_confidence'] = 1.0
+                adjusted = True
+            if adjusted:
+                ec['filter'] = filt
+                update_data['event_config'] = ec
+            if not task.tracking_enabled:
+                update_data['tracking_enabled'] = True
+                adjusted = True
+            if update_data:
+                task_manager.update_task(task_id, update_data)
+        except Exception as e:
+            logger.warning(f"人员统计事件过滤兜底配置失败: {e}")
+
+    if _socketio:
+        _socketio.emit('counting_zones_updated', {'task_id': task_id})
+    return jsonify({
+        'message': '计数区域保存成功',
+        'task_id': task_id,
+        'zones_count': len(zones)
+    })
+
+
+@task_bp.route('/tasks/<int:task_id>/counting-stats', methods=['GET'])
+def get_counting_stats(task_id: int):
+    """查询任务当日人员统计（区域明细 + 任务总人数）"""
+    task_manager = get_task_manager()
+    result = task_manager.get_task_counting_total(task_id)
+    return jsonify(result)
+
+
+@task_bp.route('/tasks/<int:task_id>/counting-stats/reset', methods=['POST'])
+def reset_counting_stats(task_id: int):
+    """手动复位任务当日计数"""
+    task_manager = get_task_manager()
+    deleted = task_manager.reset_task_counting_day(task_id)
+    return jsonify({'message': '当日计数已复位', 'task_id': task_id, 'deleted': deleted})
 
 
 # ========================================

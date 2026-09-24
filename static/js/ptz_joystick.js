@@ -13,26 +13,26 @@ function initPtzArrowButtons() {
         arrow.addEventListener('mousedown', function(e) {
             e.preventDefault();
             const direction = this.getAttribute('data-direction');
-            if (direction && currentSingleCamera) {
+            if (direction && window.currentSingleCamera) {
                 ptzControl(direction);
-                ptzMoving = true;
+                window.ptzMoving = true;
             }
         });
 
         // 鼠标释放停止移动
         arrow.addEventListener('mouseup', function(e) {
             e.preventDefault();
-            if (ptzMoving && currentSingleCamera) {
+            if (window.ptzMoving && window.currentSingleCamera) {
                 ptzStop();
-                ptzMoving = false;
+                window.ptzMoving = false;
             }
         });
 
         // 鼠标离开箭头区域停止移动
         arrow.addEventListener('mouseleave', function(e) {
-            if (ptzMoving && currentSingleCamera) {
+            if (window.ptzMoving && window.currentSingleCamera) {
                 ptzStop();
-                ptzMoving = false;
+                window.ptzMoving = false;
             }
         });
 
@@ -40,17 +40,17 @@ function initPtzArrowButtons() {
         arrow.addEventListener('touchstart', function(e) {
             e.preventDefault();
             const direction = this.getAttribute('data-direction');
-            if (direction && currentSingleCamera) {
+            if (direction && window.currentSingleCamera) {
                 ptzControl(direction);
-                ptzMoving = true;
+                window.ptzMoving = true;
             }
         });
 
         arrow.addEventListener('touchend', function(e) {
             e.preventDefault();
-            if (ptzMoving && currentSingleCamera) {
+            if (window.ptzMoving && window.currentSingleCamera) {
                 ptzStop();
-                ptzMoving = false;
+                window.ptzMoving = false;
             }
         });
     });

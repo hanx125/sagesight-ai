@@ -130,6 +130,9 @@ def _run_executor_process(task_config: Dict, ai_stream_enabled_state=None):
     from src.cameras.camera_manager import get_camera_manager
     camera_manager = get_camera_manager()
 
+    # 本地平台通道的拉流地址按当前流媒体服务器配置实时生成（延迟创建，仅首次用到时初始化）
+    stream_service = None
+
     # 将设备通道转换为摄像机配置列表
     cameras = []
     for channel in channels:
@@ -151,6 +154,19 @@ def _run_executor_process(task_config: Dict, ai_stream_enabled_state=None):
             # 视频文件：从cameras表获取source字段，并去除file://前缀
             source = camera_info.source if hasattr(camera_info, 'source') else ''
             rtsp_url = source.replace('file://', '') if source.startswith('file://') else source
+        elif channel.channel_source == 'local_platform':
+            # 本地平台通道：按当前流媒体服务器配置实时生成拉流地址。
+            # 通道表中存的是注册当时的快照，之后修改流媒体服务器地址不会同步，
+            # 直接沿用会导致拉到不存在的地址（解码器无帧）。
+            try:
+                if stream_service is None:
+                    from src.cameras.stream_service import StreamService
+                    stream_service = StreamService(db_path='data/tasks.db')
+                live_rtsp_url = stream_service.get_stream_urls(effective_camera_id).get('rtsp')
+                if live_rtsp_url:
+                    rtsp_url = live_rtsp_url
+            except Exception as e:
+                logger.warning(f"[MultiCameraExecutor-{task_id}] 实时生成拉流地址失败，回退通道表地址: {e}")
 
         camera_config = {
             'camera_id': effective_camera_id,
@@ -703,6 +719,7 @@ if _is_main_process:
         total = tm.get_event_count()
 
         import sqlite3
+        from datetime import date, timedelta
         with sqlite3.connect(tm.db_path) as conn:
             cursor = conn.cursor()
             # 按事件类型统计（tracking/zone/loitering）
@@ -716,8 +733,15 @@ if _is_main_process:
             cursor.execute('SELECT class_name, COUNT(*) FROM events GROUP BY class_name ORDER BY COUNT(*) DESC LIMIT 10')
             class_stats = dict(cursor.fetchall())
 
-            cursor.execute('SELECT DATE(created_at) as date, COUNT(*) FROM events GROUP BY DATE(created_at) ORDER BY date DESC LIMIT 7')
-            daily_stats = [{'date': row[0], 'count': row[1]} for row in cursor.fetchall()]
+            cursor.execute('SELECT DATE(created_at) as date, COUNT(*) FROM events GROUP BY DATE(created_at)')
+            count_by_date = dict(cursor.fetchall())
+
+        # 补齐最近 7 天，无数据的天计为 0（接口保持降序：最新日期在前，前端 .reverse() 后按日期升序）
+        today = date.today()
+        daily_stats = [{
+            'date': (today - timedelta(days=i)).isoformat(),
+            'count': count_by_date.get((today - timedelta(days=i)).isoformat(), 0)
+        } for i in range(0, 7)]
 
         return jsonify({
             'total': total,
@@ -725,6 +749,52 @@ if _is_main_process:
             'by_status': status_stats,
             'by_class': class_stats,
             'daily': daily_stats
+        })
+
+
+    @app.route('/api/events/people-stats', methods=['GET'])
+    def get_people_stats():
+        """获取区域人员统计
+
+        基于 events 表按区域（zone）聚合，用于驾驶舱人员统计可视化。
+        返回字段说明：
+        - datetime: 当前统计时间
+        - total_zones: 当前区域总数（最近窗口内有活动的区域数）
+        - zones: [{'zone_name', 'entered', 'left'}] 每个区域的进入/离开人数
+        """
+        import sqlite3
+        from datetime import datetime, timedelta
+
+        tm = get_task_manager()
+        now = datetime.now()
+
+        zones = []
+        try:
+            with sqlite3.connect(tm.db_path) as conn:
+                cursor = conn.cursor()
+                # 基于计数统计表（counting_stats）聚合今日各区域进出人数
+                cursor.execute(
+                    "SELECT cs.zone_name, SUM(cs.in_count), SUM(cs.out_count) "
+                    "FROM counting_stats cs "
+                    "WHERE cs.count_date = ? "
+                    "AND cs.task_id IN (SELECT id FROM detection_tasks) "
+                    "GROUP BY cs.zone_name ORDER BY cs.zone_name",
+                    (now.strftime('%Y-%m-%d'),)
+                )
+                for r in cursor.fetchall():
+                    zones.append({
+                        'zone_name': r[0],
+                        'entered': int(r[1]),
+                        'left': int(r[2]),
+                        'active': True,
+                    })
+        except Exception as e:
+            logger.error(f"获取人员统计失败: {e}")
+
+        return jsonify({
+            'datetime': now.strftime('%Y-%m-%d %H:%M:%S'),
+            'total_zones': len(zones),
+            'zones': zones,
         })
 
 

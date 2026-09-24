@@ -274,12 +274,12 @@ a:hover {
     padding: 16px;
 }
 
-/* form 两列布局 - 各列高度由内容决定，不强制等高 */
+/* form 两列布局 - 两列等高：如左列内容增高，右列自动拉伸，右侧列表随之填充 */
 #taskForm {
     display: flex;
     width: 100%;
     gap: 20px;
-    align-items: flex-start;
+    align-items: stretch;
 }
 
 /* 左列：任务参数配置 - 高度由内容决定 */
@@ -385,9 +385,10 @@ a:hover {
     height: 16px;
 }
 
-/* 右列：设备通道检测池 - 高度跟随内容自适应 */
+/* 右列：设备通道检测池 - 与左列等高，内部列表自动填满 */
 #taskForm .task-cameras-column {
     min-width: 0;
+    min-height: 0;
     flex: 0 0 calc(55% - 20px);
     display: flex;
     flex-direction: column;
@@ -429,11 +430,10 @@ a:hover {
     font-size: 13px;
 }
 
-/* 设备池列表 - 固定高度，超出滚动显示 */
+/* 设备池列表 - 自动填满右列剩余高度，超出滚动 */
 #taskForm .task-camera-pool {
-    flex: 0 0 204px;
-    height: 204px;
-    min-height: 204px;
+    flex: 1 1 0;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 6px;
@@ -855,14 +855,337 @@ body.theme-light .theme-icon-light {
 }
 
 body.theme-light .top-header {
-    background: linear-gradient(135deg, #fff 0%, #f0f0f0 100%);
-    border-bottom-color: #2196f3;
+    background: linear-gradient(135deg, #0e1f38 0%, #0a1a2e 100%);
+    border-bottom-color: var(--primary-color);
+    box-shadow: 0 2px 8px rgba(4, 14, 30, 0.6);
+}
+
+/* 深色登录页风格科技蓝主题（theme-light 覆盖） */
+body.theme-light {
+    --primary-color: #0a5fd9;
+    --primary-hover: #084ba8;
+    --primary-light: #4c9ff0;
+    --bg-light: #0a1a2e;
+    --bg-white: #10233e;
+    --bg-color: #0e1f38;
+    --card-bg: rgba(10, 26, 46, 0.75);
+    --text-primary: #e8f2ff;
+    --text-secondary: #9fc2dc;
+    --text-muted: #7898b4;
+    --border-color: #1a3250;
 }
 
 body.theme-light {
-    --primary-color: #2196f3;
-    --primary-hover: #1976d2;
-    --primary-light: #64b5f6;
+    background: var(--bg-light);
+    color: var(--text-primary);
+}
+
+/* 页面容器/卡片深色玻璃 */
+body.theme-light .page-container,
+body.theme-light .page-body,
+body.theme-light .card,
+body.theme-light .content-card,
+body.theme-light .panel {
+    background: var(--bg-color);
+}
+
+body.theme-light .page-footer {
+    background: #0d1c33;
+    border-top-color: var(--border-color);
+}
+
+/* 滚动条深色 */
+body.theme-light ::-webkit-scrollbar-track {
+    background: #0d1c33;
+}
+body.theme-light ::-webkit-scrollbar-thumb {
+    background: #1a3250;
+}
+body.theme-light ::-webkit-scrollbar-thumb:hover {
+    background: #0a5fd9;
+}
+
+/* 下拉选择器下拉面板深色 */
+body.theme-light select option {
+    background: #0e1f38;
+    color: var(--text-primary);
+}
+
+/* 通用输入控件：深色玻璃底 + 亮字 + 科技蓝描边 */
+body.theme-light input,
+body.theme-light select,
+body.theme-light textarea {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+body.theme-light input::placeholder,
+body.theme-light textarea::placeholder {
+    color: var(--text-muted);
+}
+body.theme-light input:focus,
+body.theme-light select:focus,
+body.theme-light textarea:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(10, 95, 217, 0.25);
+}
+
+/* 头部的辅助操作/搜索图标区域深色玻璃 */
+body.theme-light .header-search,
+body.theme-light .header-notify,
+body.theme-light .serial-search {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-secondary);
+}
+body.theme-light .header-search:hover,
+body.theme-light .header-notify:hover,
+body.theme-light .serial-search:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: var(--primary-color);
+}
+
+/* 表单/过滤/任务配置区域的硬编码白色卡片与控件 */
+body.theme-light .form-group input,
+body.theme-light .form-group select,
+body.theme-light .form-group textarea,
+body.theme-light .filter-group select,
+body.theme-light .filter-group input,
+body.theme-light #taskForm .form-section,
+body.theme-light #taskForm .task-config-column,
+body.theme-light #taskForm .task-form-column-content,
+body.theme-light #taskForm .camera-pool-item,
+body.theme-light #taskForm .cameras-column,
+body.theme-light #taskForm .param-config-group textarea {
+    background-color: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+}
+
+/* 深色主题下已填/自动填充输入框保持深色背景（覆盖浏览器 -webkit-autofill 白底） */
+body.theme-light input:-webkit-autofill,
+body.theme-light input:-webkit-autofill:hover,
+body.theme-light input:-webkit-autofill:focus,
+body.theme-light textarea:-webkit-autofill,
+body.theme-light select:-webkit-autofill {
+    -webkit-box-shadow: 0 0 0 10000px #0d1c33 inset !important;
+    -webkit-text-fill-color: var(--text-primary) !important;
+    caret-color: var(--text-primary) !important;
+    border-color: var(--border-color) !important;
+    color: var(--text-primary) !important;
+    transition: none !important;
+}
+body.theme-light .form-group input,
+body.theme-light .form-group select,
+body.theme-light .form-group textarea {
+    background: rgba(255, 255, 255, 0.06) !important;
+    color: var(--text-primary) !important;
+}
+
+/* 目标类别选择对话框：覆盖内联白底（面板框/滚动容器/条目/文字） */
+body.theme-light #classesSelectDialog > div {
+    background-color: #0d1c33 !important;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5) !important;
+}
+body.theme-light #classesSelectDialog > div > div {
+    border-color: var(--border-color) !important;
+}
+body.theme-light #classesSelectDialog h3 {
+    color: var(--text-primary) !important;
+}
+body.theme-light #classesSelectDialog > div > div:first-child button {
+    color: var(--text-secondary) !important;
+}
+body.theme-light #classesSelectContainer,
+body.theme-light #classesSelectContainer > div {
+    background-color: rgba(255, 255, 255, 0.06) !important;
+    border-color: var(--border-color) !important;
+}
+body.theme-light #classesSelectContainer .class-select-item,
+body.theme-light #classesSelectContainer .checkbox-item {
+    background-color: rgba(255, 255, 255, 0.06) !important;
+    border-color: var(--border-color) !important;
+    color: var(--text-primary) !important;
+}
+body.theme-light #classesSelectContainer p {
+    color: var(--text-secondary) !important;
+}
+
+/* 颜色选择/工具面板 */
+body.theme-light .panel-header,
+body.theme-light .card-header,
+body.theme-light .res-card,
+body.theme-light .logs-toolbar {
+    background: var(--bg-color);
+}
+
+/* 通知与提示条 */
+body.theme-light .notification {
+    background: var(--bg-color);
+    color: var(--text-primary);
+}
+body.theme-light .empty-state {
+    color: var(--text-muted);
+}
+
+/* 表格样式（深色底 + 亮字） */
+body.theme-light .data-table,
+body.theme-light table {
+    color: var(--text-primary);
+}
+body.theme-light .data-table thead th,
+body.theme-light table thead th {
+    background: #0d1c33;
+    color: var(--text-secondary);
+}
+body.theme-light .data-table tbody tr:hover,
+body.theme-light table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* 硬编码浅色底卡片/区域：改为深色玻璃 */
+body.theme-light .camera-add-section,
+body.theme-light .camera-select-list,
+body.theme-light .param-item,
+body.theme-light .param-config-group,
+body.theme-light .camera-card,
+body.theme-light .server-card,
+body.theme-light .directory-left .directory-panel,
+body.theme-light .directory-body,
+body.theme-light .directory-left,
+body.theme-light .directory-right,
+body.theme-light .directory-item {
+    background: var(--bg-color);
+    color: var(--text-primary);
+}
+
+/* 分页按钮与下拉框深色 */
+body.theme-light .pagination-btn,
+body.theme-light .page-size-select {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+body.theme-light .pagination-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: var(--primary-color);
+}
+
+/* 任务表单内滚动条轨道深色 */
+body.theme-light #taskForm .task-config-column::-webkit-scrollbar-track,
+body.theme-light #taskForm .task-camera-pool::-webkit-scrollbar-track {
+    background: #0d1c33;
+}
+
+/* 次级按钮与目录头深色 */
+body.theme-light .btn-secondary {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+body.theme-light .directory-cameras-header {
+    background: #0d1c33;
+}
+
+/* 任务添加对话框右列设备池柱体漏覆盖（真实类名为 .task-cameras-column）废弃的 .cameras-column 选择器不生效 */
+body.theme-light #taskForm .task-cameras-column {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+/* 任务添加对话框左右列滚动条 thumb（原为 #c1c1c1 浅灰） */
+body.theme-light #taskForm .task-config-column::-webkit-scrollbar-thumb,
+body.theme-light #taskForm .task-camera-pool::-webkit-scrollbar-thumb {
+    background: #1a3250;
+}
+body.theme-light #taskForm .task-config-column::-webkit-scrollbar-thumb:hover,
+body.theme-light #taskForm .task-camera-pool::-webkit-scrollbar-thumb:hover {
+    background: #0a5fd9;
+}
+
+/* 任务添加子对话框（选择目标类别）—— templates/tasks.html 内联 background-color:white */
+body.theme-light #classesSelectDialog > div {
+    background-color: #0e1f38 !important;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+}
+/* 子对话框内由 tasks.js 内联生成的类别列表容器与条目（background-color:white / #f8f9fa） */
+body.theme-light #classesSelectDialog #classesSelectContainer,
+body.theme-light #classesSelectDialog .class-select-item,
+body.theme-light #classesSelectDialog .checkbox-item {
+    background-color: rgba(255, 255, 255, 0.06) !important;
+    border-color: var(--border-color) !important;
+}
+body.theme-light #classesSelectDialog #classesSelectContainer span,
+body.theme-light #classesSelectDialog .class-select-item span,
+body.theme-light #classesSelectDialog .checkbox-item span {
+    color: var(--text-primary) !important;
+}
+/* 驾驶舱设备树（camera-sidebar）深色 */
+body.theme-light .camera-sidebar {
+    background: var(--bg-white);
+    border-right-color: var(--border-color);
+}
+body.theme-light .sidebar-footer {
+    background: #0e1f38;
+    border-top-color: var(--border-color);
+    color: var(--text-secondary);
+}
+body.theme-light .dir-header:hover {
+    background: rgba(10, 95, 217, 0.12);
+}
+
+/* ===== 目录管理对话框 & 添加视频文件对话框：theme-light 深底补漏 ===== */
+
+/* 目录管理（#directoryModal）硬编码浅底 #f5f7fa / #fff -> 深色玻璃 */
+body.theme-light #directoryModal .directory-left .directory-toolbar,
+body.theme-light #directoryModal .directory-list,
+body.theme-light #directoryModal .directory-cameras-list {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+}
+body.theme-light #directoryModal .directory-list-header {
+    background: #0d1c33;
+    color: var(--text-secondary);
+}
+body.theme-light #directoryModal .directory-camera-item {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+body.theme-light #directoryModal .directory-camera-item:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+body.theme-light #directoryModal .move-select {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+body.theme-light #directoryModal .empty-message,
+body.theme-light #directoryModal .directory-list-header span {
+    color: var(--text-secondary);
+}
+
+/* 添加视频文件（#videoFileModal）：内联浅底 #f5f5f5/边框 #e0e0e0、JS 内联 #f0f0f0 覆盖 */
+body.theme-light #videoFileModal #videoFilePath {
+    background-color: rgba(255, 255, 255, 0.06) !important;
+    color: var(--text-primary);
+}
+body.theme-light #videoFileModal #fileList {
+    border-color: var(--border-color) !important;
+}
+body.theme-light #videoFileModal #fileList > div {
+    background: rgba(255, 255, 255, 0.06);
+    border-bottom-color: var(--border-color) !important;
+    color: var(--text-primary);
+}
+body.theme-light #videoFileModal #fileList strong {
+    color: var(--text-primary);
+}
+body.theme-light #videoFileModal #fileList span,
+body.theme-light #videoFileModal .form-group small {
+    color: var(--text-secondary);
+}
+body.theme-light #videoFileModal .alert.alert-info {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--border-color);
+    color: var(--text-primary);
 }
 
 .header-search,
@@ -1211,13 +1534,13 @@ body.pjax-loading main.main-wrapper {
 .main-wrapper {
     flex: 1;
     margin-top: var(--header-height);
-    margin-bottom: var(--footer-height);
-    padding: 24px;
+    margin-bottom: 4px;
+    padding: 24px 24px 4px;
     overflow-y: auto;
 }
 
 .page-container {
-    padding: 20px 32px;
+    padding: 20px 32px 8px;
     min-height: calc(100vh - var(--header-height) - var(--footer-height) - 40px);
     width: 100%;
 }
@@ -1449,82 +1772,15 @@ body.pjax-loading main.main-wrapper {
     box-shadow: 0 0 0 2px rgba(38, 108, 251, 0.1);
 }
 
+/* 筛选区下拉框自适应宽度：按自身最宽选项收缩/撑开，长选项（通道/目录/算法名等）可完整显示 */
+.filter-group select {
+    width: auto;
+    min-width: min-content;
+    max-width: 320px;
+}
+
 .filter-actions {
     margin-left: auto;
-}
-
-/* ========================================
-   统计卡片
-   ======================================== */
-.stats-cards {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 16px;
-    margin-bottom: 24px;
-}
-
-.stat-card {
-    background: var(--bg-white);
-    padding: 20px;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-    transition: all 0.3s;
-}
-
-.stat-card:hover {
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-    transform: translateY(-2px);
-}
-
-.stat-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.stat-icon svg {
-    width: 24px;
-    height: 24px;
-    color: #fff;
-}
-
-.stat-icon-total {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
-
-.stat-icon-running {
-    background: linear-gradient(135deg, #52c41a 0%, #73d13d 100%);
-}
-
-.stat-icon-stopped {
-    background: linear-gradient(135deg, #faad14 0%, #ffc53d 100%);
-}
-
-.stat-icon-error {
-    background: linear-gradient(135deg, #ff4d4f 0%, #ff7875 100%);
-}
-
-.stat-content {
-    flex: 1;
-}
-
-.stat-value {
-    font-size: 28px;
-    font-weight: 600;
-    color: var(--text-primary);
-    line-height: 1;
-}
-
-.stat-label {
-    font-size: 14px;
-    color: var(--text-secondary);
-    margin-top: 4px;
 }
 
 /* ========================================
@@ -2635,10 +2891,6 @@ body.pjax-loading main.main-wrapper {
    响应式布局补充
    ======================================== */
 @media (max-width: 1024px) {
-    .stats-cards {
-        grid-template-columns: repeat(2, 1fr);
-    }
-    
     .tasks-list {
         grid-template-columns: 1fr;
     }
@@ -2674,10 +2926,6 @@ body.pjax-loading main.main-wrapper {
         width: 100%;
     }
 
-    .stats-cards {
-        grid-template-columns: 1fr;
-    }
-    
     .tasks-list.list-view .task-card {
         flex-direction: column;
     }
@@ -3547,19 +3795,6 @@ body.pjax-loading main.main-wrapper {
     color: #fff;
 }
 
-/* 统计卡片图标 */
-.stat-icon-online {
-    background: linear-gradient(135deg, #52c41a 0%, #73d13d 100%);
-}
-
-.stat-icon-offline {
-    background: linear-gradient(135deg, #faad14 0%, #ffc53d 100%);
-}
-
-.stat-icon-enabled {
-    background: linear-gradient(135deg, #1890ff 0%, #40a9ff 100%);
-}
-
 /* 摄像机详情模态框 */
 .camera-detail-section {
     margin-bottom: 24px;
@@ -3871,6 +4106,8 @@ body.pjax-loading main.main-wrapper {
     font-size: 13px;
     color: var(--text-primary);
     background: #fff;
+    width: auto;
+    min-width: 92px;
 }
 
 .pagination-ellipsis {
@@ -6562,6 +6799,9 @@ body.theme-light .role-badge.role-user {
     background: var(--bg-white);
     color: var(--text-primary);
     cursor: pointer;
+    width: auto;
+    min-width: min-content;
+    max-width: 320px;
 }
 
 .logs-toolbar .btn-sm {
@@ -6720,6 +6960,8 @@ body.theme-light .role-badge.role-user {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: nowrap;
+    gap: 8px;
     margin-bottom: 12px;
 }
 
@@ -6728,11 +6970,18 @@ body.theme-light .role-badge.role-user {
     font-weight: 600;
     margin: 0;
     color: var(--text-primary);
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .monitor-charts-tip {
     font-size: 12px;
     color: var(--text-secondary);
+    white-space: nowrap;
+    flex-shrink: 0;
+    line-height: 1.4;
 }
 
 .monitor-charts-canvas-wrap {

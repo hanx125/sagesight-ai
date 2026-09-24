@@ -114,6 +114,22 @@ detector:
   gpu_mem_limit: null
 
   # ========================================
+  # CUDA / cuDNN 运行库路径（Windows，backend="onnx_cuda" 时使用）
+  # ========================================
+  # 说明：ONNX Runtime 的 CUDA EP 需要 cudart/cublas/cublasLt 和 cuDNN 的 DLL。
+  # Python 3.8+ 收紧了 Windows 的 DLL 搜索策略，仅把目录放进 PATH 并不保证能加载到：
+  #   - 缺 cuDNN 时卷积等算子会退化为兜底实现，日志出现
+  #     "OP Conv ... running in Fallback mode. May be extremely slow."，推理速度大幅下降
+  # 支持空值，会自动探测常见路径（取版本号最高的一个）：
+  #   - CUDA:  C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.*\bin
+  #   - cuDNN: C:\Program Files\NVIDIA\CUDNN\v9*\bin\12.*\x64
+  # 自动探测不准时再手工填写，例如：
+  #   cuda_lib_path: "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.6\\bin"
+  #   cudnn_lib_path: "C:\\Program Files\\NVIDIA\\CUDNN\\v9.20\\bin\\12.9\\x64"
+  cuda_lib_path: ""
+  cudnn_lib_path: ""
+
+  # ========================================
   # TensorRT 配置（backend="onnx_tensorrt" 或 "tensorrt" 时使用）
   # ========================================
 
