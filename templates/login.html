@@ -225,11 +225,13 @@
         }
 
         /* 修复浏览器自动填充（autofill）后输入框背景变为浅色的问题 */
+        /* 覆盖色取密码框默认背景 rgba(255,255,255,0.05) 叠加深色页面的合成实色，
+           保证用户名框被自动填充时与密码框背景颜色一致 */
         .input-group input:-webkit-autofill,
         .input-group input:-webkit-autofill:hover,
         .input-group input:-webkit-autofill:focus,
         .input-group input:-webkit-autofill:active {
-            -webkit-box-shadow: 0 0 0 1000px rgba(10, 26, 46, 0.95) inset !important;
+            -webkit-box-shadow: 0 0 0 1000px rgb(22, 37, 56) inset !important;
             -webkit-text-fill-color: #ffffff !important;
             caret-color: #ffffff;
             transition: background-color 9999s ease-in-out 0s;
