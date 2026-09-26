@@ -22,23 +22,6 @@ _task_manager = None
 _process_manager = None
 _socketio = None
 
-# 事件规则去重默认值（从系统配置 event_dedup 段读取，作为任务级配置的兜底默认）
-_default_dedup = {}
-
-
-def _load_default_dedup():
-    """加载事件规则去重默认值（系统配置 event_dedup 段）"""
-    global _default_dedup
-    if _default_dedup:
-        return _default_dedup
-    try:
-        from src.system.system_config_loader import get_event_dedup_config
-        _default_dedup = get_event_dedup_config()
-    except Exception:
-        _default_dedup = {'enabled': True, 'window_seconds': 300, 'iou_threshold': 0.85}
-    return _default_dedup
-
-
 def _normalize_detector_gpu_mem_limit(detector_config: dict) -> dict:
     """归一化 detector_config.gpu_mem_limit 为 int（统一字节单位，入库前调用）。
 
@@ -194,76 +177,27 @@ def create_task():
     if not data.get('task_name'):
         return jsonify({'error': '缺少必填字段: task_name'}), 400
 
-    # 加载事件规则去重默认值（未提供时使用系统配置 event_dedup 段）
-    _load_default_dedup()
-
-    from src.tasks.task_manager import (
-        DetectionTask,
-        get_default_decoder_config,
-        get_default_detector_config,
-        get_default_tracker_config,
-        get_default_motion_config,
-        get_default_event_config,
-        get_default_display_config
-    )
+    from src.tasks.task_manager import DetectionTask
     from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager, DeviceChannelPool
     from src.cameras.camera_manager import get_camera_manager
 
     # ========================================
-    # 配置合并逻辑（混合方案）
+    # 配置来源（config/*.yaml 为单一真相源）
     # ========================================
-    # 优先级：前端传入值 > 配置文件默认值
-    # 规则：
-    # 1. 先加载配置文件的完整默认值
-    # 2. 如果前端传了配置（非空字典），合并前端配置（前端值覆盖默认值）
-    # 3. 存入数据库（确保所有字段都完整）
+    # 任务表仅保存"按任务动态调整"的少量参数，其余配置一律由 config/*.yaml 提供：
+    #   detector_config -> conf_threshold（另由算法库派生 input_width/input_height）
+    #   event_config    -> enabled
+    #   decoder/tracker/motion/display_config -> 不再写入任务表
+    # TaskManager._row_to_task 读取时会合并 YAML 默认值，因此这里无需补齐默认值，
+    # 避免把 YAML 快照固化到任务表、造成同一参数存在多个来源。
 
-    def deep_merge(default: dict, override: dict) -> dict:
-        """深度合并两个字典"""
-        result = default.copy()
-        for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                # 递归合并嵌套字典
-                result[key] = deep_merge(result[key], value)
-            else:
-                # 直接覆盖
-                result[key] = value
-        return result
-    
-    def merge_config(default_config: dict, frontend_config: dict) -> dict:
-        """
-        合并配置（前端值覆盖默认值）
-
-        Args:
-            default_config: 配置文件默认值
-            frontend_config: 前端传入值（可能为None或空字典）
-
-        Returns:
-            合并后的完整配置
-        """
-        if not frontend_config or not isinstance(frontend_config, dict) or len(frontend_config) == 0:
-            return default_config.copy()
-
-        # 使用深度合并（前端值覆盖默认值）
-        return deep_merge(default_config, frontend_config)
-
-    # 加载配置文件默认值（确保所有字段都存在）
-    default_decoder_config = get_default_decoder_config()
-    default_detector_config = get_default_detector_config()
-    default_tracker_config = get_default_tracker_config()
-    default_motion_config = get_default_motion_config()
-    default_event_config = get_default_event_config()
-    default_display_config = get_default_display_config()
-
-    # 合并前端配置（如果有）
-    decoder_config = merge_config(default_decoder_config, data.get('decoder_config'))
-    detector_config = merge_config(default_detector_config, data.get('detector_config'))
     # gpu_mem_limit 入库前 MB→字节（前端表单单位为 MB，后端统一转字节存储）
-    detector_config = _normalize_detector_gpu_mem_limit(detector_config)
-    tracker_config = merge_config(default_tracker_config, data.get('tracker_config'))
-    motion_config = merge_config(default_motion_config, data.get('motion_config'))
-    event_config = merge_config(default_event_config, data.get('event_config'))
-    display_config = merge_config(default_display_config, data.get('display_config'))
+    detector_config = _normalize_detector_gpu_mem_limit(dict(data.get('detector_config') or {}))
+    event_config = dict(data.get('event_config') or {})
+    decoder_config = data.get('decoder_config') or {}
+    tracker_config = data.get('tracker_config') or {}
+    motion_config = data.get('motion_config') or {}
+    display_config = data.get('display_config') or {}
 
     # 区域配置唯一来源为通道表（device_channel_pool.zones_config），
     # 任务表不再保存区域配置：剥离 event_config.capture.required_zones，防止重复来源
@@ -318,9 +252,6 @@ def create_task():
         schedule_source=data.get('schedule_source', ''),
         file_paths=data.get('file_paths', []),
         file_loop=data.get('file_loop', False),
-        dedup_enabled=data.get('dedup_enabled', _default_dedup.get('enabled', True)),
-        dedup_window_seconds=data.get('dedup_window_seconds', _default_dedup.get('window_seconds', 300)),
-        dedup_iou_threshold=data.get('dedup_iou_threshold', _default_dedup.get('iou_threshold', 0.85)),
         voice_enabled=bool(data.get('voice_enabled', False)),  # 报警语音播报开关
         voice_mp3=data.get('voice_mp3', ''),  # 报警语音 MP3 预置文件名
         voice_loop_count=int(data.get('voice_loop_count', 1)),  # 播放循环次数
@@ -474,10 +405,12 @@ def update_task(task_id: int):
     update_data = data.copy()
 
     # 处理配置字段的合并
+    # 任务表只保存"按任务动态调整"的覆盖值（YAML 提供其余配置），
+    # 因此以库中原始覆盖值为基准合并，避免把 YAML 快照写回任务表
+    raw_overrides = task_manager.get_config_overrides(task_id, config_fields)
     for config_field in config_fields:
         if config_field in update_data:
-            # 获取数据库中的现有配置
-            existing_config = getattr(task, config_field, {})
+            existing_config = raw_overrides.get(config_field, {})
             # 合并前端配置
             merged_config = merge_config_for_update(existing_config, update_data[config_field])
             # 更新到待更新数据

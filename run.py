@@ -689,13 +689,9 @@ if _is_main_process:
 # 通过 register_task_blueprint(app, socketio) 注册蓝图
 # 旧的路由定义已删除，避免覆盖蓝图的正确实现
 #
-# task_api.py 已正确实现配置优先级：
-# - decoder_config: 前端传入 > 配置文件默认值
-# - detector_config: 前端传入 > 配置文件默认值
-# - tracker_config: 前端传入 > 配置文件默认值
-# - motion_config: 前端传入 > 配置文件默认值
-# - event_config: 前端传入 > 配置文件默认值
-# - display_config: 前端传入 > 配置文件默认值
+# 配置来源：任务表仅保存按任务动态调整的少量参数
+# （detector_config.conf_threshold、event_config.enabled 等），
+# 其余配置统一由 config/*.yaml 提供，读取时由 TaskManager._row_to_task 合并默认值
 
 # ========================================
 # 事件管理 API（主要路由在 task_api.py 蓝图中）

@@ -439,7 +439,8 @@ class DetectionTask:
     file_paths: List[str] = field(default_factory=list)
     # 离线文件检测（file）：是否循环处理文件列表（True 时无限循环）
     file_loop: bool = False
-    # 事件规则去重（任务级，独立于大模型，不消耗 token）
+    # 事件规则去重：配置唯一来源为 system_config.yaml 的 event_dedup 段。
+    # 以下三个字段为历史任务表列，保留以兼容既有数据库记录，运行时不再读取。
     dedup_enabled: bool = True
     dedup_window_seconds: int = 300
     dedup_iou_threshold: float = 0.85
@@ -1327,6 +1328,39 @@ class TaskManager:
                 return task
             return None
     
+    def get_config_overrides(self, task_id: int, columns: List[str]) -> Dict[str, Dict]:
+        """读取任务表中配置列的原始覆盖值（不合并 YAML 默认值）
+
+        任务表只保存"按任务动态调整"的少量参数，其余由 config/*.yaml 提供；
+        更新配置时需以库中覆盖值为基准合并，避免把 YAML 快照写回任务表。
+        """
+        allowed = ('decoder_config', 'detector_config', 'tracker_config',
+                   'motion_config', 'event_config', 'display_config')
+        selected = [column for column in columns if column in allowed]
+        if not selected:
+            return {}
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT {', '.join(selected)} FROM detection_tasks WHERE id = ?",
+                (task_id,)
+            )
+            row = cursor.fetchone()
+
+        if not row:
+            return {}
+
+        overrides = {}
+        for index, column in enumerate(selected):
+            raw = row[index]
+            try:
+                loaded = json.loads(raw) if raw else {}
+            except (json.JSONDecodeError, TypeError):
+                loaded = {}
+            overrides[column] = loaded if isinstance(loaded, dict) else {}
+        return overrides
+
     def get_all_tasks(self, enabled_only: bool = False, status: str = None) -> List[DetectionTask]:
         """获取所有任务
 
@@ -1534,7 +1568,7 @@ class TaskManager:
             tracker_config=safe_json_loads_with_defaults(row[14] if len(row) > 14 else None, get_default_tracker_config()),  # 索引 14
             motion_config=safe_json_loads_with_defaults(row[15] if len(row) > 15 else None, get_default_motion_config()),  # 索引 15
             event_config=safe_json_loads_with_defaults(row[16] if len(row) > 16 else None, get_default_event_config()),  # 索引 16
-            display_config=safe_json_loads(row[17] if len(row) > 17 else None, get_default_display_config()),  # 索引 17
+            display_config=safe_json_loads_with_defaults(row[17] if len(row) > 17 else None, get_default_display_config()),  # 索引 17
             created_at=parse_datetime(row[18] if len(row) > 18 else None),  # 索引 18
             updated_at=parse_datetime(row[19] if len(row) > 19 else None),  # 索引 19
             polling_interval_frames=row[20] if len(row) > 20 and row[20] is not None else 5,  # 索引 20
