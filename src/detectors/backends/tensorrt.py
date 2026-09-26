@@ -215,6 +215,8 @@ class TensorRTDetector(BaseDetector):
                     self.input_name = name
                     self._input_shape_trt = shape
                     self.input_shape = tuple(shape)
+                    # 校验模型真实输入尺寸与配置是否一致（不一致会导致推理失败）
+                    self.verify_model_input_size('nchw')
                     logger.debug(f"  [INPUT] {name}: 形状={shape}, 类型={dtype}")
                 else:
                     self._output_name = name

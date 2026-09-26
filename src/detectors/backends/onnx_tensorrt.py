@@ -226,6 +226,9 @@ class ONNXTensorRTDetector(BaseDetector):
             inputs = self.session.get_inputs()
             self.input_name = inputs[0].name
             self.input_shape = tuple(inputs[0].shape)
+
+            # 校验模型真实输入尺寸与配置是否一致（不一致会导致推理失败）
+            self.verify_model_input_size('nchw')
             
             # 获取实际使用的 Provider
             active_providers = self.session.get_providers()

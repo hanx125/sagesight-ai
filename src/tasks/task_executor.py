@@ -881,9 +881,42 @@ class MultiCameraTaskExecutor:
                         input_height = int(parts[1])
                 except Exception:
                     pass
-            # 最终兜底（算法库缺失或解析失败时）
-            input_width = input_width or 640
-            input_height = input_height or 640
+            # 最终兜底（算法库缺失或解析失败时），并统一为整数类型
+            try:
+                input_width = int(input_width or 640)
+                input_height = int(input_height or 640)
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"[MultiCameraExecutor-{self.task_id}] 输入尺寸配置非法"
+                    f"({input_width}x{input_height})，回退为 640x640"
+                )
+                input_width, input_height = 640, 640
+
+            # 模型真实输入尺寸校验：模型文件的输入形状在导出时已固定，而预处理张量
+            # 尺寸由上述配置决定。两者不一致时推理会因输入形状不匹配完全失败，
+            # 故以模型实际尺寸为准覆盖配置，并提示同步修正算法库配置。
+            try:
+                from src.detectors.model_input_probe import probe_input_shape
+                _probe_path = (
+                    detector_config['tensorrt_engine_path']
+                    if detector_config['backend'] == 'tensorrt'
+                    else detector_config['model_path']
+                )
+                _real_hw = probe_input_shape(_probe_path)
+            except Exception as e:
+                logger.debug(f"[MultiCameraExecutor-{self.task_id}] 模型输入尺寸探测跳过: {e}")
+                _real_hw = None
+
+            if _real_hw:
+                _real_h, _real_w = _real_hw
+                if (_real_w, _real_h) != (input_width, input_height):
+                    logger.warning(
+                        f"[MultiCameraExecutor-{self.task_id}] 模型输入尺寸与配置不一致，"
+                        f"已按模型实际尺寸纠正: 配置={input_width}x{input_height} → "
+                        f"模型={_real_w}x{_real_h}；"
+                        f"建议同步修改算法库中的“输入尺寸”配置"
+                    )
+                    input_width, input_height = _real_w, _real_h
 
             detector_config_dict = {
                 'model_path': detector_config['model_path'],
@@ -972,20 +1005,6 @@ class MultiCameraTaskExecutor:
             camera_configs_for_processor = {}
             decoder_cfg = self.task_config.get('decoder_config', {})
 
-            # 事件规则去重配置（任务级，独立于大模型，不消耗 token）
-            # task_config 已含 dedup_enabled/dedup_window_seconds/dedup_iou_threshold，
-            # 未配置时回退到系统配置 event_dedup 段默认值
-            try:
-                from src.system.system_config_loader import get_event_dedup_config
-                _sys_dedup = get_event_dedup_config()
-            except Exception:
-                _sys_dedup = {'enabled': True, 'window_seconds': 300, 'iou_threshold': 0.85}
-            _dedup_cfg = {
-                'enabled': self.task_config.get('dedup_enabled', _sys_dedup.get('enabled', True)),
-                'window_seconds': self.task_config.get('dedup_window_seconds', _sys_dedup.get('window_seconds', 300)),
-                'iou_threshold': self.task_config.get('dedup_iou_threshold', _sys_dedup.get('iou_threshold', 0.85)),
-            }
-
             for cam in self.cameras:
                 cam_id = cam['camera_id']
                 # 人员统计：读取本相机（通道）关联的本任务计数区域，并标注相机在
@@ -1006,7 +1025,6 @@ class MultiCameraTaskExecutor:
                     'algorithm': self.algorithm,
                     'class_names': list(class_names),
                     'fps': decoder_cfg.get('fps', 25),
-                    'dedup_config': _dedup_cfg,  # 事件规则去重配置（任务级）
                     'detection_type': self.task_config.get('detection_type', 'realtime'),
                     'event_type': self.task_config.get('event_type', 'tracking'),  # 语义检测类型（事件类型）
                     'counting_zones': counting_zones_for_cam,

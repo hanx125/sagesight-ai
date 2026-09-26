@@ -9,12 +9,17 @@
 - 所有配置参数在 YAML 文件中定义，不硬编码默认值
 """
 
+import logging
 import numpy as np
 import yaml
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Literal
 from dataclasses import dataclass
 import time
+
+from src.detectors.model_input_probe import resolve_input_hw
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -146,6 +151,36 @@ class BaseDetector:
         # 输入信息（子类需要设置）
         self.input_name: Optional[str] = None
         self.input_shape: Optional[Tuple[int, int, int, int]] = None
+
+    def verify_model_input_size(self, layout: str = 'nchw') -> Optional[Tuple[int, int]]:
+        """
+        校验已加载模型的真实输入尺寸与配置是否一致
+
+        模型文件的输入形状在导出时固定，而预处理张量尺寸由配置（算法库 input_size）决定。
+        两者不一致时推理会因输入形状不匹配而失败，任务表现为完全无检测结果。
+        此处统一校验并给出明确提示，避免仅看到推理异常而无从定位。
+
+        Args:
+            layout: 'nchw'（ONNX / TensorRT）或 'nhwc'（RKNN）
+
+        Returns:
+            (height, width)；模型为动态尺寸或形状非法时返回 None
+        """
+        hw = resolve_input_hw(self.input_shape, layout)
+        if hw is None:
+            return None
+
+        model_h, model_w = hw
+        cfg_h = int(getattr(self.config, 'input_height', 0) or 0)
+        cfg_w = int(getattr(self.config, 'input_width', 0) or 0)
+        if (model_h, model_w) != (cfg_h, cfg_w):
+            logger.error(
+                f"[{type(self).__name__}] 模型输入尺寸与配置不一致："
+                f"模型={model_w}x{model_h}，配置={cfg_w}x{cfg_h}。"
+                f"预处理按配置尺寸构造张量，推理将因输入形状不匹配失败。"
+                f"请将算法库中的“输入尺寸”改为 {model_w}x{model_h} 后重启任务。"
+            )
+        return hw
     
     def initialize(self):
         """初始化检测器（加载模型）"""

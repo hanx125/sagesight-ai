@@ -138,6 +138,8 @@ class RKNNDetector(BaseDetector):
             )
 
             # 输入形状（NHWC，统一接口存为 NCHW 形式以便 get_info 展示）
+            # .rknn 无公开的离线输入尺寸读取接口，无法与模型文件比对，
+            # 此处以配置为准，需保证算法库“输入尺寸”与 .rknn 模型一致
             self.input_shape = (1, 3, self.config.input_height, self.config.input_width)
 
             logger.debug(f"[RKNNDetector] RKNN 模型加载成功：{model_path}")
