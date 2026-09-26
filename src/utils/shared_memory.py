@@ -32,7 +32,8 @@ class _ShmLock:
     """跨进程共享内存锁
 
     Windows 用 win32event 命名互斥锁，Linux 用 fcntl.flock 文件锁。
-    超时后不阻塞，直接放行（与原逻辑一致，仍有竞争风险但避免死锁）。
+    获取锁超时直接抛 TimeoutError：不允许无锁直读，否则写方持锁写入时
+    会读到写了一半的帧（画面撕裂/瀑布）。
     """
 
     def __init__(self, name: str, timeout_ms: int = 1000):
@@ -52,6 +53,11 @@ class _ShmLock:
                     self._mutex, self.timeout_ms)
                 if wait_result == win32event.WAIT_OBJECT_0:
                     self._acquired = True
+                elif wait_result == win32event.WAIT_TIMEOUT:
+                    # 写方持锁中：无锁直读会读到写一半的帧（画面撕裂/瀑布），
+                    # 必须放弃本次读写，由调用方跳过该帧
+                    raise TimeoutError(
+                        f"[_ShmLock] 获取锁超时({self.timeout_ms}ms): {self.name}")
             except ImportError:
                 pass
         else:
@@ -69,8 +75,12 @@ class _ShmLock:
                         break
                     except (BlockingIOError, OSError):
                         if _time.monotonic() >= deadline:
-                            break
+                            # 锁超时：与 Windows 一致，放弃本次读写避免读半帧
+                            raise TimeoutError(
+                                f"[_ShmLock] 获取锁超时({self.timeout_ms}ms): {self.name}")
                         _time.sleep(0.001)
+            except TimeoutError:
+                raise
             except Exception as e:
                 logger.debug(f"[_ShmLock] fcntl 锁不可用: {e}")
         return self
@@ -221,11 +231,15 @@ class SharedMemoryBlock:
         # ✅ 原子写入: 一次性写入整个帧(头信息 + Y + U + V),避免数据竞争
         full_data = header + y.tobytes() + u.tobytes() + v.tobytes()
         
-        # 尝试使用跨进程锁保护(如果pywin32可用)
         # 跨进程锁保护写入（Windows 命名互斥锁 / Linux fcntl 文件锁）
-        with _ShmLock(self.name, timeout_ms=1000):
-            arr = np.ndarray((self.shm.size,), dtype=np.uint8, buffer=self.shm.buf)
-            arr[:len(full_data)] = np.frombuffer(full_data, dtype=np.uint8)
+        try:
+            with _ShmLock(self.name, timeout_ms=1000):
+                arr = np.ndarray((self.shm.size,), dtype=np.uint8, buffer=self.shm.buf)
+                arr[:len(full_data)] = np.frombuffer(full_data, dtype=np.uint8)
+        except TimeoutError as e:
+            # 写锁超时：放弃本帧写入（块保持旧帧内容，读方不会读到半帧）
+            logger.warning(f"[SharedMemoryBlock] 写帧锁超时，放弃本帧: {e}")
+            return False
 
         return True
     
@@ -327,8 +341,9 @@ class SharedMemoryRingBuffer:
             block_id = self.write_index.value
             block = self.blocks[block_id]
             
-            # 写入帧
-            block.write_frame_i420(frame_seq, timestamp_ns, y, u, v, camera_id, task_id)
+            # 写入帧（写锁超时失败时返回 False，跳过序号推进，等价丢弃本帧）
+            if not block.write_frame_i420(frame_seq, timestamp_ns, y, u, v, camera_id, task_id):
+                return None
             
             # 更新写入位置(环形)
             self.write_index.value = (block_id + 1) % self.block_count
@@ -409,6 +424,9 @@ class SharedMemoryRingBuffer:
 
             return header, y, u, v
 
+        except TimeoutError:
+            # 写方持锁中，跳过本帧（避免读到半帧导致画面撕裂）
+            return None, None, None, None
         except Exception as e:
             logger.error(f"[read_frame_i420] 读取失败: {e}", exc_info=True)
             return None, None, None, None
@@ -569,6 +587,11 @@ def read_frame_from_shared_memory(
                 # I420 -> RGB
                 import cv2
                 rgb_frame = cv2.cvtColor(i420_frame, cv2.COLOR_YUV2RGB_I420)
+
+        except TimeoutError:
+            # 写方持锁中，跳过本帧（避免读到半帧导致画面撕裂）
+            aligned = False
+            rgb_frame = None
 
         except Exception as e:
             logger.error(f"[read_frame_from_shared_memory] 读取失败: {e}", exc_info=True)

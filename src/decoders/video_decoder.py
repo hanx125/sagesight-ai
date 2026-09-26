@@ -742,8 +742,10 @@ class VideoDecoder:
         if not self.ring_buffer or not self.index_queue:
             return
 
-        # 写入环形缓冲区（返回块ID）
+        # 写入环形缓冲区（返回块ID；写锁超时失败时返回 None）
         block_id = self.ring_buffer.write_frame_i420(frame_seq, timestamp_ns, y, u, v, camera_id, task_id)
+        if block_id is None:
+            return  # 写入失败（写锁超时），本帧丢弃
 
         # 创建帧索引并加入索引队列
         # ✅ 修改：使用传入的timestamp_ns（真实PTS），而不是系统时间
