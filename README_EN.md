@@ -31,7 +31,21 @@ The SageSight AIoT project consists of: SageSight Cloud (responsible for IoT, bu
 - **Object whitelist**: Each zone can independently configure object types of interest
 - **Entry inertia filtering**: Confirm zone entry over N consecutive frames to filter edge jitter
 
-### 4. Intelligent Event Analysis and Output
+### 4. People Counting
+- **Two counting modes**: Single-camera line crossing (draw a dividing line on one camera; entering/leaving is determined by crossing the line) and multi-camera in/out (entrance camera +1 / exit camera -1, multiple cameras collaboratively counting the same zone)
+- **Layered configuration storage**: Single-camera line crossing is stored at channel level in `counting_lines` (with zone-level alarm thresholds); multi-camera in/out is stored in the task-level `counting_zones` table
+- **Single decision criterion**: Enabled when the task event type is set to "People Counting"; tasks matching people counting suppress regular tracking/zone events and only produce counting events
+- **Daily counting**: Counting state is persisted by (task + zone + channel + date), automatically reset across days, with history retained
+- **Zone alarm threshold**: Each counting zone can set an independent people threshold; exceeding it triggers an alarm and voice broadcast
+- **Cockpit visualization**: Displays entered / left / current people aggregated by (task, zone), with horizontal scrolling when there are many zones
+
+### 5. Alarm Voice Broadcast
+- **Server-side playback**: When an alarm triggers, the server's local audio device plays a preset MP3 (`static/alarm_mp3/`)
+- **Multi-level configuration**: Playback parameters follow the priority Task level > Global config > Defaults (MP3 file, loop count, loop interval, volume)
+- **Interrupt without overlap**: Repeated triggers of the same alarm are ignored while it is playing; different alarms preempt and immediately terminate the previous playback, avoiding overlapping voice when multiple targets exceed thresholds simultaneously
+- **Preset file management**: The system management page supports MP3 upload, deletion, and preview
+
+### 6. Intelligent Event Analysis and Output
 - **Event lifecycle**: Complete management of track_start / track_update / track_end event flow
 - **Multiple event types**: Tracking events, zone intrusion, loitering alarms, etc.
 - **Event GIF animation**: Generate event process GIFs based on frame cache, supporting pre/post time windows and trajectory drawing
@@ -41,15 +55,20 @@ The SageSight AIoT project consists of: SageSight Cloud (responsible for IoT, bu
 - **Keyframe capture**: Supports full / cropped / keyframe / periodic — four capture strategies
 - **Image compression**: Configurable JPEG quality and dimensions, reducing storage and bandwidth usage
 - **Automatic event cleanup**: Background thread periodically cleans up expired events and their storage files (local/MinIO/FTP) by retention days
+- **LLM event description**: Optionally integrate an LLM to generate natural-language descriptions for events (image input supported)
+- **LLM event deduplication**: Optionally integrate an LLM to perform secondary deduplication on semantically duplicate events
 
-### 5. Video Wall Real-Time Monitoring
+### 7. Video Wall Real-Time Monitoring
 - **Multi-stream video wall**: Supports multiple video streams displayed simultaneously for real-time monitoring
 - **AI video stream**: Real-time push of AI analysis frames overlaid with detection boxes, tracking boxes, trajectories, and zones
 - **Real-time event list**: Latest events displayed on the right, click to view details
 - **Image/GIF toggle**: Event details support switching between keyframe image and GIF animation
 - **Two-way voice intercom**: Cross-brand two-way voice intercom based on ONVIF Audio Back Channel protocol
+- **Sound switch**: A global sound switch in the toolbar controls all streams at once, and each stream also has its own sound switch (muted by default, state remembered locally)
+- **Counting line display**: Overlay the people-counting dividing line on the AI frame; in multi-camera in/out mode, label the stream as "IN"/"OUT" in the lower-left corner (task configuration → "Display Configuration" switch)
+- **People counting chart**: The bottom of the cockpit shows entered / left / current people by zone, scrollable horizontally for multiple zones
 
-### 6. Streaming Media Management
+### 8. Streaming Media Management
 - **Camera management**: Supports ONVIF protocol auto-discovery, network scanning, and device management
 - **PTZ control**: Supports pan/tilt direction control, preset save/call, zoom/focus (continuous/relative/absolute movement)
 - **PTZ auto-tracking**: Automatically drives the PTZ to follow tracked targets (autotrack)
@@ -57,32 +76,38 @@ The SageSight AIoT project consists of: SageSight Cloud (responsible for IoT, bu
 - **Device channel pool**: Supports device channel pool management; one channel can be reused by multiple tasks, with channel-level Zone configuration
 - **Directory management**: Supports camera directory tree structure for categorized management
 
-### 7. Voice Intercom
+### 9. Voice Intercom
 - **ONVIF Audio Back Channel**: Cross-brand two-way voice intercom based on the ONVIF standard protocol
 - **Brand compatibility**: Supports ONVIF-certified cameras from Hikvision, Dahua, Uniview, Tiandy, etc.
 - **Audio enhancement**: Supports volume gain, audio encoding (PCMU/PCMA) and other parameter configuration
 
-### 8. AI Task Management
+### 10. AI Task Management
 - **Multi-module configuration**: Supports independent configuration of decoder, detector, tracker, motion detection, and event output
 - **Feature toggles**: Motion detection and tracking can be toggled independently
 - **Real-time start/stop**: Supports real-time task start and stop for flexible control of analysis processes
 - **Performance monitoring**: Real-time display of decoding, detection, and tracking stage latency, FPS, detected object count, and other metrics
 - **Configuration templates**: Supports algorithm configuration templates for quick task creation
+- **Configuration layering**: Decoder, detector, tracker, motion, event output, display and other parameters are provided globally by `config/*.yaml` (identical for all tasks); the task table only stores task-level overrides (detection threshold, various switches, counting zones, etc. as independent fields)
+- **Configuration dialog**: Task-level event output switches, display overlay switches, voice broadcast parameters, etc. are maintained in the task "Configuration" dialog
+- **Counting zone configuration**: Supports two modes — single-camera line crossing (hold and drag the mouse to draw the dividing line) and multi-camera in/out (specify entrance / exit cameras) — with per-zone people alarm thresholds
 
-### 9. Algorithm Management
+### 11. Algorithm Management
 - **Algorithm configuration**: Supports YOLOv8/YOLO11 and other algorithm configurations
 - **Model management**: Supports model file upload and management
 - **One model, one label**: Each model corresponds to an independent label file, dynamically loaded, with Chinese label support
 - **Sample images**: Algorithm configuration supports sample image display
 
-### 10. System Management
+### 12. System Management
 - **Hardware monitoring**: Real-time monitoring of CPU, memory, and GPU usage
 - **Decoder configuration**: Supports decoder hardware acceleration method configuration
 - **Streaming media configuration**: Supports ZLMediaKit streaming media server configuration
 - **Remote storage configuration**: Supports MinIO and FTP remote storage configuration
 - **Event cleanup configuration**: Supports event retention days and cleanup interval configuration
+- **Alarm voice management**: Preset MP3 upload / delete / preview, global broadcast switch and default parameter configuration
+- **LLM configuration**: LLM service configuration (API URL, key, model, image support), default configuration selection and connectivity test, global LLM switch
+- **Node management**: Registers with the edge platform and keeps alive via heartbeat, reporting CPU / memory / disk / GPU / NPU and workload metrics (the `node_management` section of `config/system_config.yaml`)
 
-### 11. Real-Time Communication
+### 13. Real-Time Communication
 - **Socket.IO real-time push**: Event information pushed to frontend in real-time, no page refresh needed (namespace: `/ws`)
 - **Native WebSocket channel**: Provides a standard WebSocket endpoint (`/ws/raw`) for third-party system integration
 - **MQTT event push**: Events pushed to EMQX/cockpit via MQTT protocol
@@ -94,7 +119,13 @@ The SageSight AIoT project consists of: SageSight Cloud (responsible for IoT, bu
 A clean, modern login interface supporting user authentication and secure login.
 
 ### Cockpit (Video Wall)
-![Cockpit](docs/images/驾驶舱.jpg)
+
+**Dark theme**
+![Cockpit - Dark Theme](docs/images/驾驶舱-暗主题.png)
+
+**Light theme**
+![Cockpit - Light Theme](docs/images/驾驶舱-亮主题.png)
+
 Multi-stream real-time monitoring with the latest event list on the right, supporting real-time viewing and analysis results.
 
 ### Task Management
@@ -191,6 +222,9 @@ pip install -r requirements.txt
 - `event_output.yaml`: Event output configuration (GIF, storage methods)
 - `tracker_config.yaml`: Tracker configuration (Norfair parameters)
 - `motion_config.yaml`: Motion detection configuration
+- `display_config.yaml`: Display configuration (AI frame overlay switches, counting line switch)
+
+> Note: The above are global configurations shared by all tasks; task-level adjustable parameters (detection threshold, various switches, counting zones, etc.) are saved as independent fields in the task table and maintained via the task "Configuration" dialog.
 
 **Inference backend selection**:
 - `onnx_cuda`: CUDA accelerated inference (recommended for NVIDIA GPU)
@@ -236,6 +270,13 @@ python run.py
 - View multi-stream monitoring frames in real-time
 - Latest event list displayed on the right
 - Click events to view details and GIF animations
+- The toolbar sound switch controls playback audio; each stream can also be toggled individually
+
+**Step 5 (optional): People counting and alarm voice broadcast**
+- In the task "Configuration" dialog, set the event type to "People Counting"
+- Single-camera line crossing: open "Counting Zone Configuration" and hold-drag the mouse to draw the dividing line; multi-camera in/out: specify entrance / exit cameras and set per-zone alarm thresholds
+- Enable the counting line switch in "Display Configuration" to overlay the dividing line and IN/OUT labels on the AI frame
+- Go to "System Management → Alarm Voice" to upload or select a preset MP3, and configure the global broadcast switch and default parameters
 
 ### 6. Deployment Notes
 
@@ -254,7 +295,7 @@ phpStudy is an all-in-one server management tool integrating Apache/Nginx, MySQL
 
 **ZLMediaKit streaming media server configuration:**
 
-This project uses ZLMediaKit as the streaming media server, supporting RTSP/RTMP/HTTP-FLV/HLS/WebRTC and other protocols. For configuration reference: [docs/流媒体服务器参数配置.MD](docs/流媒体服务器参数配置.MD)
+This project uses ZLMediaKit as the streaming media server, supporting RTSP/RTMP/HTTP-FLV/HLS/WebRTC and other protocols. For deployment configuration see: [docs/ZLMediaKit开机自启动部署文档.md](docs/ZLMediaKit开机自启动部署文档.md); for device-side deployment see: [docs/盒子开机自启动部署文档.md](docs/盒子开机自启动部署文档.md)
 
 **Key configuration notes**:
 - **API configuration**: `api.secret` sets the API key
@@ -329,6 +370,11 @@ sagesight-AI/
 │   ├── detection/       # Zone detection
 │   │   ├── __init__.py
 │   │   └── zone_manager.py     # Zone manager
+│   ├── counting/        # People counting
+│   │   ├── counting_processor.py # Counting processor
+│   │   ├── counting_stats.py     # Counting state persistence (daily)
+│   │   ├── line_cross.py         # Dividing line crossing detection
+│   │   └── zone_config.py        # Counting zone configuration
 │   ├── pipeline/        # Detection pipeline
 │   │   ├── __init__.py
 │   │   └── camera_pipeline.py
@@ -356,10 +402,18 @@ sagesight-AI/
 │   │   ├── event_output.py          # Event output (async I/O)
 │   │   ├── tracked_object_processor.py # Tracked object processor
 │   │   ├── event_cleanup_service.py # Event cleanup service
+│   │   ├── camera_state.py          # Camera runtime state
+│   │   ├── frame_cache.py           # Event frame cache
+│   │   ├── rule_dedup.py            # Rule-level event deduplication
 │   │   ├── gif_generator.py         # GIF generator
 │   │   ├── minio_outputter.py       # MinIO storage
 │   │   ├── ftp_outputter.py         # FTP storage
 │   │   └── mqtt_outputter.py        # MQTT push
+│   ├── llm/             # LLM event analysis
+│   │   ├── __init__.py
+│   │   ├── llm_client.py            # LLM client
+│   │   ├── event_describer.py       # LLM event description
+│   │   └── event_deduplicator.py    # LLM event deduplication
 │   ├── tasks/           # Task management
 │   │   ├── __init__.py
 │   │   ├── task_manager.py               # Task data model
@@ -391,7 +445,15 @@ sagesight-AI/
 │   │   ├── __init__.py
 │   │   ├── system_manager.py     # System manager (streaming media config)
 │   │   ├── system_api.py         # System API
-│   │   └── system_config_loader.py # Config loader
+│   │   ├── system_config_loader.py # Config loader
+│   │   └── voice_broadcaster.py  # Alarm voice broadcast
+│   ├── node_agent/      # Node management (edge platform registration & heartbeat)
+│   │   ├── __init__.py
+│   │   ├── node_agent_service.py # Registration, heartbeat, metrics collection
+│   │   ├── node_agent_config.py  # Node config loading
+│   │   ├── agent_server.py       # HTTP service receiving deploy/stop commands
+│   │   ├── workload_manager.py   # Workload management
+│   │   └── media_manager.py      # Media resource management
 │   ├── auth/            # User authentication
 │   │   ├── __init__.py
 │   │   ├── auth_manager.py  # Auth manager
@@ -418,6 +480,7 @@ sagesight-AI/
 │   ├── js/              # JavaScript files
 │   │   ├── jessibuca/    # Video player
 │   │   └── h265web/      # H265 decoder
+│   ├── alarm_mp3/       # Preset alarm voice files (MP3)
 │   └── images/          # Image assets
 │       └── algorithms/  # Algorithm sample images
 ├── templates/           # HTML templates
@@ -435,7 +498,9 @@ sagesight-AI/
 ├── data/                # Data files
 │   └── tasks.db         # SQLite database
 ├── docs/                # Documentation
-│   └── images/          # Feature screenshots
+│   ├── images/          # Feature screenshots
+│   ├── ZLMediaKit开机自启动部署文档.md
+│   └── 盒子开机自启动部署文档.md
 ├── logs/                # Log files
 ├── output/              # Output files (images, GIFs)
 ├── requirements.txt     # Python dependencies
@@ -444,7 +509,18 @@ sagesight-AI/
 
 ## Changelog
 
-### v2.0.0 (current version)
+### v2.1.0 (current version)
+- ✅ People counting: single-camera line crossing / multi-camera in-out modes, daily counting, zone-level alarm thresholds
+- ✅ Cockpit people counting chart: entered / left / current people by (task, zone), horizontal scrolling for multiple zones
+- ✅ Alarm voice broadcast: server-side preset MP3 playback, multi-level configuration (task > global > default), same-alarm deduplication and preemption to avoid overlap
+- ✅ Video wall audio control: global sound switch in the toolbar + per-stream sound switch (muted by default, state remembered locally)
+- ✅ Counting line display: task "Display Configuration" switch controls the overlay on the AI frame; multi-camera in/out mode labels "IN"/"OUT" in the lower-left corner
+- ✅ Configuration convergence: decoder / detector / tracker / motion / event output / display unified into `config/*.yaml` globals, task-level parameters moved to independent columns (with an automatic migration script)
+- ✅ LLM event description and event deduplication (optional LLM integration)
+- ✅ Node management: registers with the edge platform, heartbeat keep-alive, reporting CPU / memory / disk / GPU / NPU and workload metrics
+- ✅ Cleaned up deprecated configuration (`zones_config.yaml`) and dead code, converging to a single source of truth
+
+### v2.0.0
 - ✅ Full multi-platform inference support (NVIDIA GPU, CPU, RK3588 NPU)
 - ✅ Refined event GIF generation and three-channel storage (local, MinIO, FTP)
 - ✅ Video wall and event management support image/GIF toggle display
