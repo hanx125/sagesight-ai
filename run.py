@@ -690,8 +690,8 @@ if _is_main_process:
 # 旧的路由定义已删除，避免覆盖蓝图的正确实现
 #
 # 配置来源：任务表仅保存按任务动态调整的少量参数
-# （detector_config.conf_threshold、event_config.enabled 等），
-# 其余配置统一由 config/*.yaml 提供，读取时由 TaskManager._row_to_task 合并默认值
+# （conf_threshold、事件输出/显示的布尔开关等独立列），
+# 解码/检测/跟踪/运动/事件输出/显示配置统一由 config/*.yaml 提供（全局一致，不落任务表）
 
 # ========================================
 # 事件管理 API（主要路由在 task_api.py 蓝图中）
@@ -752,11 +752,12 @@ if _is_main_process:
     def get_people_stats():
         """获取区域人员统计
 
-        基于 events 表按区域（zone）聚合，用于驾驶舱人员统计可视化。
+        基于 counting_stats 按（任务, 区域）聚合，用于驾驶舱人员统计可视化。
         返回字段说明：
         - datetime: 当前统计时间
-        - total_zones: 当前区域总数（最近窗口内有活动的区域数）
-        - zones: [{'zone_name', 'entered', 'left'}] 每个区域的进入/离开人数
+        - total_zones: 当前区域总数（有计数记录的区域数）
+        - total_people: 各区当前人数之和（进入-离开）
+        - zones: [{'task_id', 'task_name', 'zone_name', 'entered', 'left', 'current'}]
         """
         import sqlite3
         from datetime import datetime, timedelta
@@ -768,20 +769,26 @@ if _is_main_process:
         try:
             with sqlite3.connect(tm.db_path) as conn:
                 cursor = conn.cursor()
-                # 基于计数统计表（counting_stats）聚合今日各区域进出人数
+                # 按（任务, 区域）聚合，避免不同任务的同名区域相互合并；
+                # entered/left：当日累计进入、离开人数；current：该区域当前人数（进入-离开）
                 cursor.execute(
-                    "SELECT cs.zone_name, SUM(cs.in_count), SUM(cs.out_count) "
+                    "SELECT cs.task_id, t.task_name, cs.zone_name, "
+                    "SUM(cs.in_count), SUM(cs.out_count), SUM(cs.current_count) "
                     "FROM counting_stats cs "
+                    "JOIN detection_tasks t ON t.id = cs.task_id "
                     "WHERE cs.count_date = ? "
-                    "AND cs.task_id IN (SELECT id FROM detection_tasks) "
-                    "GROUP BY cs.zone_name ORDER BY cs.zone_name",
+                    "GROUP BY cs.task_id, cs.zone_name "
+                    "ORDER BY t.task_name, cs.zone_name",
                     (now.strftime('%Y-%m-%d'),)
                 )
                 for r in cursor.fetchall():
                     zones.append({
-                        'zone_name': r[0],
-                        'entered': int(r[1]),
-                        'left': int(r[2]),
+                        'task_id': int(r[0]),
+                        'task_name': r[1] or '',
+                        'zone_name': r[2],
+                        'entered': int(r[3]),
+                        'left': int(r[4]),
+                        'current': int(r[5]),
                         'active': True,
                     })
         except Exception as e:
@@ -790,6 +797,7 @@ if _is_main_process:
         return jsonify({
             'datetime': now.strftime('%Y-%m-%d %H:%M:%S'),
             'total_zones': len(zones),
+            'total_people': sum(z['current'] for z in zones),
             'zones': zones,
         })
 

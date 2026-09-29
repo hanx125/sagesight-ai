@@ -58,17 +58,17 @@
             </div>
             
             <div class="toolbar-right">
+                <button class="toolbar-btn" id="wallAudioBtn" onclick="Monitor.toggleWallAudio()" title="电视墙声音开关">
+                    <svg viewBox="0 0 24 24" fill="currentColor" id="wallAudioIcon">
+                        <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.26c2.89.86 5 3.54 5 6.51zM1.27 0L0 1.27 4.28 5.55H0v11h4.5l5 5v-6.67l4.25 4.25 1.27-1.27-9.77-9.77zm11.73 7.23l-1.27 1.27L16 12.5l2.5 2.5 1.27-1.27-5.5-5.5z"/>
+                    </svg>
+                    <span id="wallAudioLabel">声音关</span>
+                </button>
                 <button class="toolbar-btn" onclick="Monitor.clearAllScreens()">
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
                     </svg>
                     清空画面
-                </button>
-                <button class="toolbar-btn" onclick="Monitor.autoArrange()">
-                    <svg viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M3 13h2v-2H3zm0 4h2v-2H3zm0-8h2V7H3zm4 4h2v-2H7zm0 4h2v-2H7zm0-8h2V7H7zm4 4h2v-2h-2zm0 4h2v-2h-2zm0-8h2V7h-2zm4 4h2v-2h-2zm0 4h2v-2h-2zm0-8h2V7h-2zm4 4h2v-2h-2zm0 4h2v-2h-2zm0-8h2V7h-2z"/>
-                    </svg>
-                    自动排列
                 </button>
                 <button class="toolbar-btn fullscreen-btn" onclick="Monitor.toggleMonitorWallFullscreen()">
                     <svg viewBox="0 0 24 24" fill="currentColor" id="fullscreenIcon">
@@ -101,7 +101,12 @@
             <div class="chart-panel">
                 <div class="chart-panel-title">人员统计</div>
                 <div class="chart-panel-body people-stats-body">
-                    <canvas id="peopleStatsChart"></canvas>
+                    <div class="people-stats-scroll" id="peopleStatsScroll">
+                        <div class="people-stats-inner" id="peopleStatsInner">
+                            <canvas id="peopleStatsChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="people-stats-empty" id="peopleStatsEmpty" style="display:none;">今日暂无人员计数数据</div>
                 </div>
             </div>
         </div>
@@ -716,7 +721,7 @@
 <script src="{{ url_for('static', filename='js/ZLMRTCClient.js') }}"></script>
 <script src="{{ url_for('static', filename='js/jessibuca/jessibuca.js') }}"></script>
 <script src="{{ url_for('static', filename='js/chart.umd.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260923ptz"></script>
+<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260929audio3"></script>
 <script src="{{ url_for('static', filename='js/ptz_joystick.js') }}?v=20260923ptz"></script>
 <script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}?v=20260923ptz"></script>
 
@@ -762,6 +767,36 @@
 .chart-panel-body canvas {
     width: 100% !important;
     height: 100% !important;
+}
+
+/* 人员统计：区域多时按区域数量撑开画布并横向滚动，保证每个区域都能看到 */
+.people-stats-body {
+    padding: 8px 8px 0;
+    overflow: hidden;
+}
+
+.people-stats-scroll {
+    width: 100%;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.people-stats-inner {
+    position: relative;
+    width: 100%;
+    min-width: 100%;
+    height: 100%;
+}
+
+.people-stats-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: var(--text-muted);
 }
 
 /* 右侧事件列表样式 */

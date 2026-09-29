@@ -1,12 +1,12 @@
 /**
- * 人员统计计数区域配置
+ * 人员统计计数区域配置（两种模式在同一对话框中配置，逐区域选择模式）
  *
- * 管理任务的计数区域（CountingZone），支持两种模式：
  *   模式A line      ：单摄像机画分界线，目标跨越方向判进出（当前区域人数=进入-离开）
+ *                     区域配置属于通道级别，读写 /api/channels/<cid>/counting-lines
  *   模式B direction ：多摄像机按进出方向汇总（入口机+1 / 出口机-1）
+ *                     跨通道关系，读写 /api/tasks/<id>/counting-zones
  *
- * 前端持有待保存的 countingZones 数组，保存时整体清空替换：
- *   GET/POST /api/tasks/<id>/counting-zones
+ * 保存时按层级分别整体清空替换：画线按通道分组写回（含被清空的通道），方向整体写回任务。
  */
 (function () {
     'use strict';
@@ -16,18 +16,19 @@
         taskId: null,
         taskName: '',
         channels: [],            // 任务关联的摄像机（含 id/channel_name）
-        zones: [],               // 待保存的计数区域列表
+        zones: [],               // 待保存的计数区域列表（两种模式混排）
         activeZoneId: null,
         snapshotImage: null,     // Image 对象
         snapshotSize: { width: 640, height: 480 },
         linePoints: [],          // 当前区域分界线两个画布坐标点
         drawingPointIdx: 0,      // 当前正在绘制的第几个点（0/1）
+        dragging: false,         // 是否正在按住鼠标拖动绘制分界线
         // 计数器，保证 canvas 事件绑定一次
         bound: false,
-        // 通过通道项图标进入时，锁定到该通道的画线区域
-        initialChannelId: null,
-        // 当前配置入口锁定的模式：'line'（通道入口，单机画线）或 'direction'（任务入口，多机进出）
-        modeFilter: 'line'
+        // 从通道图标进入时预选的通道，作为新增画线区域的默认摄像机
+        defaultChannelId: null,
+        // 服务器上已有画线配置的通道（保存时需一并写回，以便清空被删除的画线）
+        lineChannelsLoaded: []
     };
 
     // ========================================
@@ -42,10 +43,8 @@
             return;
         }
         ctx.taskId = taskId;
-        ctx.initialChannelId = initialChannelId != null ? parseInt(initialChannelId, 10) : null;
-        // 通道入口：锁定单机画线模式
-        ctx.modeFilter = 'line';
-        setConfigTitle('单机画线计数配置');
+        const cid = initialChannelId != null ? parseInt(initialChannelId, 10) : NaN;
+        ctx.defaultChannelId = !isNaN(cid) && cid > 0 ? cid : null;
 
         const modal = document.getElementById('countingZoneConfigModal');
         if (modal) modal.style.display = 'flex';
@@ -59,90 +58,27 @@
             ctx.taskName = task.task_name || '';
             ctx.channels = Array.isArray(task.channels) ? task.channels : [];
         }
-        document.getElementById('countingZoneTaskName').textContent = ctx.taskName || `#${taskId}`;
+        setConfigTitle();
+
         populateChannelOptions();
 
-        // 加载已有计数区域配置
+        // 加载两种模式的已有计数区域
         await loadCountingZonesFromServer();
 
         // 若一个区域都没有，自动新增一个，引导用户配置
         if (ctx.zones.length === 0) {
             addCountingZone();
-            selectCountingZone(ctx.zones[0]._id);
-        } else {
-            selectCountingZone(ctx.zones[0]._id);
-        }
-
-        // 通过通道图标进入时，定位到该通道的画线区域；无则自动新增一个
-        if (ctx.initialChannelId != null) {
-            selectZoneForChannel(ctx.initialChannelId);
-        }
-    }
-
-    // 任务面板入口：多机进出（模式B），入口/出口机从任务通道池勾选，不绑定单个通道
-    async function openCountingZoneDirectionConfig() {
-        const taskIdInput = document.getElementById('taskId');
-        const taskId = taskIdInput ? parseInt(taskIdInput.value, 10) : NaN;
-        if (!taskId || isNaN(taskId)) {
-            alert('请先保存任务后再配置计数区域');
-            return;
-        }
-        ctx.taskId = taskId;
-        ctx.initialChannelId = null;
-        // 任务入口：锁定多机进出模式
-        ctx.modeFilter = 'direction';
-        setConfigTitle('多机进出计数配置');
-
-        const modal = document.getElementById('countingZoneConfigModal');
-        if (modal) modal.style.display = 'flex';
-
-        bindCanvasEvents();
-
-        const task = await fetchTask(taskId);
-        if (task) {
-            ctx.taskName = task.task_name || '';
-            ctx.channels = Array.isArray(task.channels) ? task.channels : [];
-        }
-        document.getElementById('countingZoneTaskName').textContent = ctx.taskName || `#${taskId}`;
-        populateChannelOptions();
-
-        await loadCountingZonesFromServer();
-
-        if (ctx.zones.length === 0) {
-            addCountingZone();
-            selectCountingZone(ctx.zones[0]._id);
         } else {
             selectCountingZone(ctx.zones[0]._id);
         }
     }
 
-    function setConfigTitle(title) {
+    function setConfigTitle() {
         const el = document.getElementById('countingZoneConfigTitle');
-        if (el) el.textContent = title;
-    }
-
-    // 选中某通道的 line 区域；若不存在则为其新增一个 line 区域并选中
-    function selectZoneForChannel(channelId) {
-        let zone = ctx.zones.find(z => z.mode === 'line' && z.channel_id === channelId);
-        if (zone) {
-            selectCountingZone(zone._id);
-            return;
+        if (el) {
+            const name = ctx.taskName || `#${ctx.taskId}`;
+            el.textContent = `计数区域配置 - 任务 ${name}`;
         }
-        const newZone = {
-            _id: uuid(),
-            zone_name: `通道${channelId}计数`,
-            mode: 'line',
-            channel_id: channelId,
-            in_side: 1,
-            inertia: 3,
-            min_displacement: 0.02,
-            cross_line: null,
-            in_channels: [],
-            out_channels: []
-        };
-        ctx.zones.push(newZone);
-        renderZoneList();
-        selectCountingZone(newZone._id);
     }
 
     function closeCountingZoneConfig() {
@@ -167,25 +103,22 @@
     }
 
     function populateChannelOptions() {
+        // 画线摄像机：任务通道池中任选其一（画线区域归属该通道）
         const lineSel = document.getElementById('countingZoneLineChannel');
         if (lineSel) {
             lineSel.innerHTML = ctx.channels
                 .map(c => `<option value="${c.id}">${escapeHtml(c.channel_name || `通道${c.id}`)}</option>`)
                 .join('');
         }
-        // 模式B 的入口/出口机复选框
+
+        // 入口/出口机：同样从任务通道池勾选
+        const options = ctx.channels
+            .map(c => `<label><input type="checkbox" value="${c.id}" onchange="onCountingZonePropChange()"> ${escapeHtml(c.channel_name || `通道${c.id}`)}</label>`)
+            .join('');
         const inBox = document.getElementById('countingZoneInChannels');
         const outBox = document.getElementById('countingZoneOutChannels');
-        if (inBox) {
-            inBox.innerHTML = ctx.channels
-                .map(c => `<label><input type="checkbox" value="${c.id}" onchange="onCountingZonePropChange()"> ${escapeHtml(c.channel_name || `通道${c.id}`)}</label>`)
-                .join('');
-        }
-        if (outBox) {
-            outBox.innerHTML = ctx.channels
-                .map(c => `<label><input type="checkbox" value="${c.id}" onchange="onCountingZonePropChange()"> ${escapeHtml(c.channel_name || `通道${c.id}`)}</label>`)
-                .join('');
-        }
+        if (inBox) inBox.innerHTML = options;
+        if (outBox) outBox.innerHTML = options;
     }
 
     // ========================================
@@ -195,33 +128,84 @@
     async function loadCountingZonesFromServer() {
         if (!ctx.taskId) return;
         try {
+            const zones = [];
+            ctx.lineChannelsLoaded = [];
+
+            // 通道级画线：逐通道读取后合并到同一列表
+            const linesByChannel = await Promise.all(ctx.channels.map(async (ch) => {
+                try {
+                    const resp = await fetch(`/api/channels/${ch.id}/counting-lines`);
+                    const data = await resp.json();
+                    return { channelId: ch.id, lines: data.lines || [] };
+                } catch (e) {
+                    return { channelId: ch.id, lines: [] };
+                }
+            }));
+            linesByChannel.forEach(({ channelId, lines }) => {
+                if (lines.length > 0) ctx.lineChannelsLoaded.push(channelId);
+                lines.forEach(line => {
+                    zones.push({
+                        _id: uuid(),
+                        zone_name: line.zone_name || '',
+                        mode: 'line',
+                        channel_id: channelId,
+                        in_side: line.in_side != null ? line.in_side : 1,
+                        inertia: line.inertia != null ? line.inertia : 3,
+                        min_displacement: line.min_displacement != null ? line.min_displacement : 0.02,
+                        cross_line: parseCrossLine(line.cross_line),
+                        in_channels: [],
+                        out_channels: [],
+                        alarm_threshold: line.alarm_threshold != null ? line.alarm_threshold : 0
+                    });
+                });
+            });
+
+            // 任务级多机进出方向
             const resp = await fetch(`/api/tasks/${ctx.taskId}/counting-zones`);
             const data = await resp.json();
-            const zones = data.zones || [];
-            // 按当前入口模式过滤，两种模式的区域分开管理互不干扰
-            ctx.zones = zones.filter(z => (z.mode || 'line') === ctx.modeFilter).map(z => {
-                let crossLine = null;
-                try { crossLine = z.cross_line ? JSON.parse(JSON.stringify(
-                    Array.isArray(z.cross_line) ? z.cross_line :
-                    (typeof z.cross_line === 'string' ? JSON.parse(z.cross_line) : null)
-                )) : null; } catch (e) { crossLine = null; }
-                return {
+            (data.zones || []).forEach(zone => {
+                zones.push({
                     _id: uuid(),
-                    zone_name: z.zone_name || '',
-                    mode: z.mode || 'line',
-                    channel_id: z.channel_id != null ? z.channel_id : null,
-                    in_side: z.in_side != null ? z.in_side : 1,
-                    inertia: z.inertia != null ? z.inertia : 3,
-                    min_displacement: z.min_displacement != null ? z.min_displacement : 0.02,
-                    cross_line: crossLine,
-                    in_channels: Array.isArray(z.in_channels) ? z.in_channels : [],
-                    out_channels: Array.isArray(z.out_channels) ? z.out_channels : []
-                };
+                    zone_name: zone.zone_name || '',
+                    mode: 'direction',
+                    channel_id: null,
+                    in_side: 1,
+                    inertia: 3,
+                    min_displacement: 0.02,
+                    cross_line: null,
+                    in_channels: parseChannelList(zone.in_channels),
+                    out_channels: parseChannelList(zone.out_channels),
+                    alarm_threshold: zone.alarm_threshold != null ? zone.alarm_threshold : 0
+                });
             });
+
+            ctx.zones = zones;
             renderZoneList();
         } catch (e) {
             console.error('[CountingZone] 加载计数区域失败:', e);
         }
+    }
+
+    // 分界线：统一解析为 [[x,y],[x,y]] 或 null（归一化坐标）
+    function parseCrossLine(value) {
+        if (Array.isArray(value)) return value;
+        if (typeof value === 'string') {
+            try {
+                const arr = JSON.parse(value);
+                return Array.isArray(arr) ? arr : null;
+            } catch (e) { return null; }
+        }
+        return null;
+    }
+
+    // 通道ID列表：统一解析为整数数组（服务器返回可能为 JSON 字符串）
+    function parseChannelList(value) {
+        let arr = value;
+        if (typeof value === 'string') {
+            try { arr = JSON.parse(value); } catch (e) { return []; }
+        }
+        if (!Array.isArray(arr)) return [];
+        return arr.map(x => parseInt(x, 10)).filter(x => !isNaN(x));
     }
 
     function uuid() {
@@ -250,17 +234,23 @@
     }
 
     function addCountingZone() {
+        // 默认单机画线（优先使用进入配置时预选的通道），任务无通道时退化为多机进出
+        const defaultChannelId = ctx.defaultChannelId != null
+            ? ctx.defaultChannelId
+            : (ctx.channels[0] ? ctx.channels[0].id : null);
+        const mode = defaultChannelId != null ? 'line' : 'direction';
         const newZone = {
             _id: uuid(),
             zone_name: `区域${ctx.zones.length + 1}`,
-            mode: ctx.modeFilter,
-            channel_id: ctx.modeFilter === 'line' && ctx.channels.length ? ctx.channels[0].id : null,
+            mode: mode,
+            channel_id: mode === 'line' ? defaultChannelId : null,
             in_side: 1,
             inertia: 3,
             min_displacement: 0.02,
             cross_line: null,
             in_channels: [],
-            out_channels: []
+            out_channels: [],
+            alarm_threshold: 0
         };
         ctx.zones.push(newZone);
         renderZoneList();
@@ -296,20 +286,17 @@
 
         // 填充属性面板
         document.getElementById('countingZonePropName').value = z.zone_name || '';
-        const modeSel = document.getElementById('countingZoneMode');
-        // 入口锁定模式，避免通道级与任务级配置混淆
-        modeSel.value = ctx.modeFilter;
-        modeSel.disabled = true;
-        const inertia = document.getElementById('countingZoneInertia');
-        inertia.value = z.inertia != null ? z.inertia : 3;
+        document.getElementById('countingZoneMode').value = z.mode;
+        document.getElementById('countingZoneInertia').value = z.inertia != null ? z.inertia : 3;
+        document.getElementById('countingZoneAlarmThreshold').value = z.alarm_threshold != null ? z.alarm_threshold : 0;
 
-        // 模式A：选择画线摄像机
+        // 画线摄像机（模式A）
         const lineChannel = document.getElementById('countingZoneLineChannel');
         if (lineChannel && z.channel_id != null) {
             lineChannel.value = String(z.channel_id);
         }
 
-        // 模式B：回填入口/出口机
+        // 入口/出口机（模式B）
         const inBox = document.getElementById('countingZoneInChannels');
         const outBox = document.getElementById('countingZoneOutChannels');
         if (inBox) {
@@ -323,19 +310,21 @@
             });
         }
 
-        // 恢复分界线（若是 mode=line 且有 cross_line）
-        if (z.mode === 'line' && z.cross_line && z.cross_line.length === 2) {
-            const { w, h } = ctx.snapshotSize;
-            ctx.linePoints = z.cross_line.map(p => [p[0] * w, p[1] * h]);
-            ctx.drawingPointIdx = 2;
-        } else {
-            ctx.linePoints = [];
-            ctx.drawingPointIdx = z.mode === 'line' ? 0 : 2;
-        }
+        applyZonePanel(z);
+    }
 
+    // 按当前选中区域的模式刷新字段可见性、画布与按钮
+    function applyZonePanel(z) {
         toggleModeFields(z.mode);
         const resetBtn = document.getElementById('resetCountingLineBtn');
         if (resetBtn) resetBtn.style.display = (z.mode === 'line') ? '' : 'none';
+        const refreshBtn = document.getElementById('refreshCountingSnapshotBtn');
+        if (refreshBtn) refreshBtn.style.display = (z.mode === 'line') ? '' : 'none';
+
+        // 分界线在快照就绪后由 loadSnapshotForChannel 按画布尺寸还原
+        ctx.linePoints = [];
+        ctx.drawingPointIdx = 0;
+        ctx.dragging = false;
         if (z.mode === 'line') {
             loadSnapshotForChannel(z.channel_id);
         } else {
@@ -347,13 +336,22 @@
         document.getElementById('countingZonePropName').value = '';
         document.getElementById('countingZoneMode').value = 'line';
         document.getElementById('countingZoneInertia').value = 3;
+        document.getElementById('countingZoneAlarmThreshold').value = 0;
         ctx.linePoints = [];
+        ctx.dragging = false;
+        toggleModeFields('line');
         clearSnapshotCanvas('暂无计数区域');
     }
 
     function toggleModeFields(mode) {
-        document.getElementById('countingZoneLineFields').style.display = mode === 'line' ? '' : 'none';
-        document.getElementById('countingZoneDirectionFields').style.display = mode === 'direction' ? '' : 'none';
+        const isLine = mode === 'line';
+        document.getElementById('countingZoneLineFields').style.display = isLine ? '' : 'none';
+        document.getElementById('countingZoneDirectionFields').style.display = isLine ? 'none' : '';
+        // 多机进出不画分界线，隐藏画布区域并让属性面板占满剩余宽度
+        const canvasSection = document.getElementById('countingZoneCanvasSection');
+        if (canvasSection) canvasSection.style.display = isLine ? '' : 'none';
+        const layout = document.getElementById('countingZoneLayout');
+        if (layout) layout.classList.toggle('no-canvas', !isLine);
     }
 
     // ========================================
@@ -365,7 +363,9 @@
         if (!z) return;
         z.zone_name = document.getElementById('countingZonePropName').value;
         z.inertia = parseInt(document.getElementById('countingZoneInertia').value, 10) || 3;
-        z.mode = document.getElementById('countingZoneMode').value;
+        // 区域级人数报警阈值：0 表示不按人数触发
+        const threshold = parseInt(document.getElementById('countingZoneAlarmThreshold').value, 10);
+        z.alarm_threshold = isNaN(threshold) || threshold < 0 ? 0 : threshold;
         // 模式B：收集入口/出口机
         const inBox = document.getElementById('countingZoneInChannels');
         const outBox = document.getElementById('countingZoneOutChannels');
@@ -378,36 +378,35 @@
         renderZoneList();
     }
 
+    // 切换区域模式：清理另一模式的数据并刷新面板
     function onCountingZoneModeChange() {
         const z = getActiveZone();
         if (!z) return;
-        const mode = document.getElementById('countingZoneMode').value;
-        z.mode = mode;
-        toggleModeFields(mode);
-        if (mode === 'line') {
-            ctx.linePoints = [];
-            ctx.drawingPointIdx = ctx.snapshotImage ? 0 : 2;
-            document.getElementById('resetCountingLineBtn').style.display = '';
-            loadSnapshotForChannel(document.getElementById('countingZoneLineChannel').value);
+        z.mode = document.getElementById('countingZoneMode').value;
+        if (z.mode === 'line') {
+            const lineSel = document.getElementById('countingZoneLineChannel');
+            const cid = lineSel && lineSel.value ? parseInt(lineSel.value, 10) : NaN;
+            z.channel_id = isNaN(cid) ? (ctx.channels[0] ? ctx.channels[0].id : null) : cid;
+            z.in_channels = [];
+            z.out_channels = [];
         } else {
-            ctx.linePoints = [];
-            ctx.drawingPointIdx = 2;
-            document.getElementById('resetCountingLineBtn').style.display = 'none';
-            clearSnapshotCanvas('多机进出：请在上方选择入口机 / 出口机');
+            z.channel_id = null;
+            z.cross_line = null;
         }
+        renderZoneList();
+        applyZonePanel(z);
     }
 
+    // 切换画线摄像机：分界线基于原画面坐标，切换后需重画
     function onCountingZoneChannelChange() {
         const z = getActiveZone();
-        if (!z) return;
-        const chanSel = document.getElementById('countingZoneLineChannel');
-        z.channel_id = chanSel.value ? parseInt(chanSel.value, 10) : null;
-        // 切换摄像机后重置分界线
+        if (!z || z.mode !== 'line') return;
+        const lineSel = document.getElementById('countingZoneLineChannel');
+        const cid = lineSel && lineSel.value ? parseInt(lineSel.value, 10) : NaN;
+        if (isNaN(cid)) return;
+        z.channel_id = cid;
         z.cross_line = null;
-        ctx.linePoints = [];
-        ctx.drawingPointIdx = 0;
-        loadSnapshotForChannel(z.channel_id);
-        render();
+        applyZonePanel(z);
     }
 
     function resetCountingLine() {
@@ -416,6 +415,7 @@
         z.cross_line = null;
         ctx.linePoints = [];
         ctx.drawingPointIdx = 0;
+        ctx.dragging = false;
         render();
     }
 
@@ -456,17 +456,24 @@
             }))
             .then(img => {
                 ctx.snapshotImage = img;
-                ctx.drawingPointIdx = 0; // 快照就绪后允许开始绘制分界线
-                ctx.linePoints = [];
-                if (getActiveZone()) {
-                    getActiveZone().cross_line = null;
-                }
                 sizeCanvasToSnapshot();
+                ctx.dragging = false;
+                const z = getActiveZone();
+                if (z && z.mode === 'line' && z.cross_line && z.cross_line.length === 2) {
+                    // 已有分界线：按当前画布尺寸从归一化坐标还原（避免切换区域时丢失）
+                    ctx.linePoints = z.cross_line.map(p => [p[0] * canvas.width, p[1] * canvas.height]);
+                    ctx.drawingPointIdx = 2;
+                } else {
+                    ctx.linePoints = [];
+                    ctx.drawingPointIdx = 0; // 快照就绪，允许开始绘制分界线
+                }
                 render();
             })
             .catch(err => {
                 console.error('[CountingZone] 获取快照失败:', err);
                 ctx.snapshotImage = null;
+                ctx.linePoints = [];
+                ctx.drawingPointIdx = 0;
                 clearSnapshotCanvas('快照获取失败');
             });
     }
@@ -485,7 +492,7 @@
         const canvas = document.getElementById('countingZoneCanvas');
         const img = ctx.snapshotImage;
         if (!img) return;
-        const targetWidth = Math.min(canvas.clientWidth, 640);
+        const targetWidth = Math.min(canvas.clientWidth || img.width, 640);
         const scale = targetWidth / img.width;
         canvas.width = targetWidth;
         canvas.height = Math.round(img.height * scale);
@@ -510,36 +517,77 @@
         ctx.bound = true;
         const canvas = document.getElementById('countingZoneCanvas');
         if (!canvas) return;
-        canvas.addEventListener('click', onCanvasClick);
+        // 分界线绘制：按下鼠标确定起点 -> 拖动 -> 松开确定终点，两点连线
+        canvas.addEventListener('mousedown', onCanvasMouseDown);
+        canvas.addEventListener('mousemove', onCanvasMouseMove);
+        canvas.addEventListener('mouseup', onCanvasMouseUp);
+        canvas.addEventListener('mouseleave', onCanvasMouseLeave);
     }
 
-    function onCanvasClick(e) {
-        if (ctx.snapshotImage) {
-            ctx.snapshotImage = ctx.snapshotImage;
-        }
-        const z = getActiveZone();
-        if (!z || z.mode !== 'line') return;
-        if (!ctx.snapshotImage) return;
-
+    // 鼠标事件坐标 -> 画布坐标（含边界裁剪）
+    function canvasPointFromEvent(e) {
         const canvas = document.getElementById('countingZoneCanvas');
         const rect = canvas.getBoundingClientRect();
         const scaleX = canvas.width / rect.width;
         const scaleY = canvas.height / rect.height;
         const x = (e.clientX - rect.left) * scaleX;
         const y = (e.clientY - rect.top) * scaleY;
-        const point = [Math.max(0, Math.min(canvas.width, x)), Math.max(0, Math.min(canvas.height, y))];
+        return [
+            Math.max(0, Math.min(canvas.width, x)),
+            Math.max(0, Math.min(canvas.height, y)),
+        ];
+    }
 
-        if (ctx.drawingPointIdx === 0) {
-            ctx.linePoints = [point];
-            ctx.drawingPointIdx = 1;
-        } else if (ctx.drawingPointIdx === 1) {
-            ctx.linePoints.push(point);
-            ctx.drawingPointIdx = 2;
-            // 已定两个点，转成归一化坐标存入区域
-            z.cross_line = ctx.linePoints.map(p => [p[0] / canvas.width, p[1] / canvas.height]);
-        } else {
+    // 是否满足分界线的最小长度（避免误点成一条零长线）
+    function isLineLengthValid(start, end) {
+        return start && end && Math.hypot(end[0] - start[0], end[1] - start[1]) >= 5;
+    }
+
+    function onCanvasMouseDown(e) {
+        const z = getActiveZone();
+        if (!z || z.mode !== 'line' || !ctx.snapshotImage) return;
+        e.preventDefault();
+
+        // 每次按下都重新开始绘制：以按下点为起点
+        ctx.linePoints = [canvasPointFromEvent(e)];
+        ctx.drawingPointIdx = 1;
+        ctx.dragging = true;
+        render();
+    }
+
+    function onCanvasMouseMove(e) {
+        if (!ctx.dragging || ctx.linePoints.length === 0) return;
+        ctx.linePoints[1] = canvasPointFromEvent(e);
+        render();
+    }
+
+    function onCanvasMouseUp(e) {
+        if (!ctx.dragging) return;
+        ctx.dragging = false;
+
+        const z = getActiveZone();
+        const point = canvasPointFromEvent(e);
+        const start = ctx.linePoints[0];
+        if (!z || z.mode !== 'line' || !isLineLengthValid(start, point)) {
+            // 拖动距离过短，视为仅确定了起点，等待继续拖动
+            ctx.linePoints = start ? [start] : [];
+            render();
             return;
         }
+
+        ctx.linePoints = [start, point];
+        ctx.drawingPointIdx = 2;
+        const canvas = document.getElementById('countingZoneCanvas');
+        // 已定两个点，转成归一化坐标存入区域
+        z.cross_line = ctx.linePoints.map(p => [p[0] / canvas.width, p[1] / canvas.height]);
+        render();
+    }
+
+    function onCanvasMouseLeave() {
+        // 拖出画布：放弃本次拖动，保留起点等待重新拖动
+        if (!ctx.dragging) return;
+        ctx.dragging = false;
+        ctx.linePoints = ctx.linePoints.length ? [ctx.linePoints[0]] : [];
         render();
     }
 
@@ -584,7 +632,7 @@
             canvasCtx.font = '14px sans-serif';
             canvasCtx.textAlign = 'center';
             canvasCtx.fillText(
-                ctx.linePoints.length === 0 ? '点击第一个点（分界线起点）' : '点击第二个点（分界线终点）',
+                ctx.linePoints.length === 0 ? '按住鼠标左键确定起点，拖动到终点后松开' : '拖动到终点后松开鼠标完成分界线',
                 canvas.width / 2, 24
             );
         }
@@ -597,8 +645,9 @@
     async function saveCountingZones() {
         if (!ctx.taskId) return;
 
-        // 校验并序列化
-        const payload = [];
+        // 校验并按层级分组：画线归通道、方向归任务
+        const linesByChannel = {};   // 通道ID -> 画线区域数组
+        const directions = [];       // 任务级方向区域数组
         for (let i = 0; i < ctx.zones.length; i++) {
             const z = ctx.zones[i];
             if (!z.zone_name || !z.zone_name.trim()) {
@@ -613,59 +662,68 @@
                     return;
                 }
                 if (!z.cross_line || z.cross_line.length !== 2) {
-                    alert(`计数区域 "${z.zone_name}" 未绘制分界线，请在画布上点击两点`);
+                    alert(`计数区域 "${z.zone_name}" 未绘制分界线，请在画布上按住鼠标左键从起点拖动到终点`);
                     selectCountingZone(z._id);
                     return;
                 }
+                if (!linesByChannel[z.channel_id]) linesByChannel[z.channel_id] = [];
+                linesByChannel[z.channel_id].push({
+                    zone_name: z.zone_name.trim(),
+                    cross_line: z.cross_line,
+                    in_side: z.in_side != null ? z.in_side : 1,
+                    inertia: z.inertia,
+                    min_displacement: z.min_displacement,
+                    alarm_threshold: z.alarm_threshold != null ? z.alarm_threshold : 0
+                });
             } else {
                 if ((!z.in_channels || z.in_channels.length === 0) && (!z.out_channels || z.out_channels.length === 0)) {
-                    alert(`计数区域 "${z.zone_name}" 模式B 至少需要一个入口机或出口机`);
+                    alert(`计数区域 "${z.zone_name}" 至少需要一个入口机或出口机`);
                     selectCountingZone(z._id);
                     return;
                 }
+                directions.push({
+                    zone_name: z.zone_name.trim(),
+                    in_channels: z.in_channels || [],
+                    out_channels: z.out_channels || [],
+                    alarm_threshold: z.alarm_threshold != null ? z.alarm_threshold : 0
+                });
             }
-            payload.push({
-                zone_name: z.zone_name.trim(),
-                mode: z.mode,
-                channel_id: z.mode === 'line' ? z.channel_id : null,
-                cross_line: z.mode === 'line' ? z.cross_line : null,
-                in_side: (z.mode === 'line' && z.cross_line && z.cross_line.length === 2) ? 1 : z.in_side,
-                inertia: z.inertia,
-                min_displacement: z.min_displacement,
-                in_channels: z.mode === 'direction' ? (z.in_channels || []) : [],
-                out_channels: z.mode === 'direction' ? (z.out_channels || []) : []
-            });
         }
 
-        // 合并服务器上其他模式的区域，避免本次保存覆盖另一种模式的配置
-        let otherZones = [];
-        try {
-            const resp = await fetch(`/api/tasks/${ctx.taskId}/counting-zones`);
-            const data = await resp.json();
-            otherZones = (data.zones || [])
-                .filter(z => (z.mode || 'line') !== ctx.modeFilter)
-                .map(z => normalizeZoneForSave(z));
-        } catch (e) {
-            console.error('[CountingZone] 加载其他模式区域失败:', e);
-        }
+        // 需要写回的通道 = 当前有画线的通道 ∪ 原本有画线的通道（后者写空数组以清空）
+        const channelIds = new Set(Object.keys(linesByChannel).map(x => parseInt(x, 10)).concat(ctx.lineChannelsLoaded));
 
         const btn = document.getElementById('countingZoneSaveBtn');
         if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
         try {
+            // 画线：按通道整体替换
+            for (const channelId of channelIds) {
+                const resp = await fetch(`/api/channels/${channelId}/counting-lines`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lines: linesByChannel[channelId] || [] })
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    alert('保存失败: ' + (data.error || '未知错误'));
+                    return;
+                }
+            }
+
+            // 方向：任务级整体替换
             const resp = await fetch(`/api/tasks/${ctx.taskId}/counting-zones`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ zones: otherZones.concat(payload) })
+                body: JSON.stringify({ zones: directions })
             });
             const data = await resp.json();
-            if (data.message) {
-                showToast('计数区域保存成功', 'success');
-                closeCountingZoneConfig();
-                // 刷新概览
-                updateCountingSummary();
-            } else {
+            if (!resp.ok) {
                 alert('保存失败: ' + (data.error || '未知错误'));
+                return;
             }
+
+            showToast('计数区域保存成功', 'success');
+            closeCountingZoneConfig();
         } catch (e) {
             console.error('[CountingZone] 保存失败:', e);
             alert('保存失败: ' + e.message);
@@ -675,58 +733,8 @@
     }
 
     // ========================================
-    // 概览（供 tasks.js 调用）
+    // 工具
     // ========================================
-
-    // 将服务器返回的计数区域行转换为可提交结构（字符串字段解析回数组）
-    function normalizeZoneForSave(z) {
-        const parseList = (v) => {
-            if (Array.isArray(v)) return v;
-            if (typeof v === 'string') {
-                try { return JSON.parse(v); } catch (e) { return []; }
-            }
-            return [];
-        };
-        let crossLine = null;
-        if (Array.isArray(z.cross_line)) crossLine = z.cross_line;
-        else if (typeof z.cross_line === 'string') {
-            try { crossLine = JSON.parse(z.cross_line); } catch (e) { crossLine = null; }
-        }
-        return {
-            zone_name: z.zone_name || '',
-            mode: z.mode || 'line',
-            channel_id: z.channel_id != null ? z.channel_id : null,
-            cross_line: crossLine,
-            in_side: z.in_side != null ? z.in_side : 1,
-            inertia: z.inertia != null ? z.inertia : 3,
-            min_displacement: z.min_displacement != null ? z.min_displacement : 0.02,
-            in_channels: parseList(z.in_channels),
-            out_channels: parseList(z.out_channels)
-        };
-    }
-
-    async function updateCountingSummary() {
-        const summaryEl = document.getElementById('countingConfigSummary');
-        if (!summaryEl) return;
-        const taskIdInput = document.getElementById('taskId');
-        const taskId = taskIdInput ? parseInt(taskIdInput.value, 10) : NaN;
-        if (!taskId || isNaN(taskId)) {
-            summaryEl.value = '';
-            return;
-        }
-        try {
-            const resp = await fetch(`/api/tasks/${taskId}/counting-zones`);
-            const data = await resp.json();
-            const zones = data.zones || [];
-            const lineCount = zones.filter(z => z.mode === 'line').length;
-            const dirCount = zones.filter(z => z.mode === 'direction').length;
-            summaryEl.value = zones.length
-                ? `已配置 ${zones.length} 个计数区域（单机画线 ${lineCount}，多机进出 ${dirCount}）`
-                : '';
-        } catch (e) {
-            summaryEl.value = '';
-        }
-    }
 
     function escapeHtml(str) {
         if (!str) return '';
@@ -739,7 +747,6 @@
 
     // 导出（全局，供 tasks.js / HTML 事件调用）
     window.openCountingZoneConfig = openCountingZoneConfig;
-    window.openCountingZoneDirectionConfig = openCountingZoneDirectionConfig;
     window.closeCountingZoneConfig = closeCountingZoneConfig;
     window.addCountingZone = addCountingZone;
     window.deleteCountingZone = deleteCountingZone;
@@ -750,5 +757,4 @@
     window.resetCountingLine = resetCountingLine;
     window.refreshCountingSnapshot = refreshCountingSnapshot;
     window.saveCountingZones = saveCountingZones;
-    window.updateCountingSummary = updateCountingSummary;
 })();

@@ -36,7 +36,6 @@ function getDetectionTypeText(detection_type) {
     if (detection_type === 'motion_gated') return '运动门控检测';
     if (detection_type === 'file') return '离线文件检测';
     if (detection_type === 'scheduled') return '定时批量检测';
-    if (detection_type === 'people_counting') return '人员统计';
     return '实时检测';
 }
 
@@ -59,37 +58,12 @@ function onDetectionTypeChange() {
     if (eventTypeSelect && !eventTypeSelect.value) {
         eventTypeSelect.value = 'tracking';
     }
-    updateCountingPanels();
 }
 
-// 同步人员统计相关面板：事件类型为 people_counting 时展示计数区域配置与人数报警阈值
-function updateCountingPanels() {
-    const et = (document.getElementById('eventType') || {}).value;
-    const isCount = et === 'people_counting';
-    const countingGroup = document.getElementById('countingConfigGroup');
-    if (countingGroup) countingGroup.style.display = isCount ? '' : 'none';
-    const thresholdGroup = document.getElementById('countAlarmThresholdGroup');
-    if (thresholdGroup) thresholdGroup.style.display = isCount ? '' : 'none';
-}
-
-// 事件类型变化时刷新人员统计相关面板
-function onEventTypeChange() {
-    updateCountingPanels();
-}
-
-// 打开人员统计计数区域配置（委托给 counting_zone_config.js 中的全局函数）
+// 打开人员统计计数区域配置（单机画线 / 多机进出在同一对话框中配置）
 function openCountingZoneConfig(channelId) {
     if (typeof window.openCountingZoneConfig === 'function') {
         window.openCountingZoneConfig(channelId);
-    } else {
-        alert('计数区域配置模块未加载');
-    }
-}
-
-// 打开人员统计多机进出计数配置（任务级入口，委托给 counting_zone_config.js 中的全局函数）
-function openCountingZoneDirectionConfig() {
-    if (typeof window.openCountingZoneDirectionConfig === 'function') {
-        window.openCountingZoneDirectionConfig();
     } else {
         alert('计数区域配置模块未加载');
     }
@@ -1244,27 +1218,6 @@ function editCurrentTask() {
 // 创建/编辑任务模态框
 // ========================================
 
-// 加载系统管理的 MP3 预置文件列表，填充语音下拉选项
-async function loadVoiceMp3Options(callback) {
-    const select = document.getElementById('voiceMp3');
-    if (!select) return;
-    try {
-        const resp = await fetch('/api/system/voice-files');
-        const data = await resp.json();
-        const files = (data && data.files) || [];
-        select.innerHTML = '<option value="">使用全局默认</option>';
-        files.forEach(f => {
-            const opt = document.createElement('option');
-            opt.value = f.name;
-            opt.textContent = f.name;
-            select.appendChild(opt);
-        });
-    } catch (e) {
-        console.warn('加载报警语音 MP3 列表失败:', e);
-    }
-    if (typeof callback === 'function') callback();
-}
-
 function openCreateModal() {
     document.getElementById('modalTitle').textContent = '创建任务';
     document.getElementById('taskId').value = '';
@@ -1287,23 +1240,10 @@ function openCreateModal() {
     document.getElementById('scheduleSource').value = '';
     document.getElementById('batchFilePaths').value = '';
     document.getElementById('fileLoop').value = 'false';
-    // 报警语音播报默认值
-    document.getElementById('voiceEnabled').value = 'false';
-    document.getElementById('voiceMp3').value = '';
-    document.getElementById('voiceLoopCount').value = 1;
-    document.getElementById('voiceIntervalMs').value = 1000;
-    document.getElementById('voiceVolume').value = 1.0;
-    // 检测器/事件输出的动态参数（控件在各任务的参数配置弹窗内），创建时恢复默认
-    document.getElementById('detectorConfThreshold').value = 0.25;
-    document.getElementById('eventEnabled').value = 'true';
-    // 人员统计人数报警阈值（默认 0：不按人数触发）
-    const countThresholdEl = document.getElementById('countAlarmThreshold');
-    if (countThresholdEl) countThresholdEl.value = 0;
-    loadVoiceMp3Options();  // 加载预置 MP3 下拉选项
+    // 置信度阈值（任务级参数，仅在此对话框维护）
+    const confEl = document.getElementById('taskConfThreshold');
+    if (confEl) confEl.value = 0.25;
     onDetectionTypeChange();  // 刷新动态参数显示
-    // 重置人员统计概览
-    const countingSummary = document.getElementById('countingConfigSummary');
-    if (countingSummary) countingSummary.value = '';
     document.getElementById('motionDetectionEnabled').value = 'true';  // 运动检测默认启用
     document.getElementById('trackingEnabled').value = 'true';  // 跟踪功能默认启用
     document.getElementById('taskEnabled').value = 'true';
@@ -1360,22 +1300,10 @@ async function openEditModal(taskId, event) {
         document.getElementById('scheduleSource').value = task.schedule_source || '';
         document.getElementById('batchFilePaths').value = (Array.isArray(task.file_paths) ? task.file_paths : []).join('\n');
         document.getElementById('fileLoop').value = task.file_loop ? 'true' : 'false';
-        // 报警语音播报填充（选项加载完成后回填已选 MP3）
-        document.getElementById('voiceEnabled').value = task.voice_enabled ? 'true' : 'false';
-        document.getElementById('voiceMp3').value = task.voice_mp3 || '';
-        document.getElementById('voiceLoopCount').value = task.voice_loop_count ?? 1;
-        document.getElementById('voiceIntervalMs').value = task.voice_interval_ms ?? 1000;
-        document.getElementById('voiceVolume').value = task.voice_volume ?? 1.0;
-        // 人员统计人数报警阈值回填
-        const countThresholdEl = document.getElementById('countAlarmThreshold');
-        if (countThresholdEl) countThresholdEl.value = task.count_alarm_threshold ?? 0;
-        loadVoiceMp3Options(() => { document.getElementById('voiceMp3').value = task.voice_mp3 || ''; });
+        // 置信度阈值回填（任务级参数）
+        const confEl = document.getElementById('taskConfThreshold');
+        if (confEl) confEl.value = task.conf_threshold ?? 0.25;
         onDetectionTypeChange();  // 根据检测类型刷新动态参数显示
-
-        // 人员统计任务：刷新计数区域概览
-        if ((task.detection_type === 'people_counting' || task.event_type === 'people_counting') && typeof window.updateCountingSummary === 'function') {
-            window.updateCountingSummary();
-        }
 
         // 填充功能开关
         document.getElementById('motionDetectionEnabled').value = task.motion_detection_enabled ? 'true' : 'false';
@@ -1426,18 +1354,7 @@ async function openEditModal(taskId, event) {
         selectedChannels = task.channels ? task.channels.map(ch => ch.id) : [];
         renderChannelPool();
 
-        // 加载检测器配置
-        const detectorConfig = task.detector_config || {};
-        const detectorConfThreshold = document.getElementById('detectorConfThreshold');
-
-        if (detectorConfThreshold) detectorConfThreshold.value = detectorConfig.conf_threshold ?? 0.25;
-
-        // ✅ 加载事件配置
-        const eventConfig = task.event_config || {};
-        const eventEnabled = document.getElementById('eventEnabled');
-
-        if (eventEnabled) eventEnabled.value = eventConfig.enabled !== false ? 'true' : 'false';
-
+        // 置信度阈值与事件输出/显示开关属于任务级参数，仅在「参数配置」对话框中维护
         document.getElementById('taskModal').classList.add('show');
 
     } catch (error) {
@@ -1691,7 +1608,7 @@ function renderChannelPool() {
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
                     </svg>
                 </button>
-                <button type="button" class="btn btn-sm btn-secondary" onclick="openCountingZoneConfig(${channel.id}, event)" title="配置该通道的单机画线计数区域">
+                <button type="button" class="btn btn-sm btn-secondary" onclick="openCountingZoneConfig(${channel.id}, event)" title="配置计数区域（默认使用该通道画线）">
                     <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;">
                         <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10z"/>
                     </svg>
@@ -1809,17 +1726,11 @@ async function saveTask() {
             return raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
         })(),
         file_loop: document.getElementById('fileLoop').value === 'true',
-        // 报警语音播报配置（独立字段）
-        voice_enabled: document.getElementById('voiceEnabled').value === 'true',
-        count_alarm_threshold: (function() {
-            const el = document.getElementById('countAlarmThreshold');
-            const v = el ? parseInt(el.value, 10) : 0;
-            return isNaN(v) || v < 0 ? 0 : v;
-        })(),  // 区域人数报警阈值（仅人员统计）
-        voice_mp3: document.getElementById('voiceMp3').value || '',
-        voice_loop_count: parseInt(document.getElementById('voiceLoopCount').value, 10) || 1,
-        voice_interval_ms: parseInt(document.getElementById('voiceIntervalMs').value, 10) || 1000,
-        voice_volume: parseFloat(document.getElementById('voiceVolume').value) != null ? parseFloat(document.getElementById('voiceVolume').value) : 1.0,
+        conf_threshold: (function() {
+            const el = document.getElementById('taskConfThreshold');
+            const v = el ? parseFloat(el.value) : 0.25;
+            return isNaN(v) ? 0.25 : v;
+        })(),  // 检测置信度阈值（任务级参数）
         algorithm: document.getElementById('algorithm').value,
         model_path: document.getElementById('modelPath').value,
         target_classes: (() => {
@@ -1839,16 +1750,6 @@ async function saveTask() {
         // 功能开关（新增）
         motion_detection_enabled: document.getElementById('motionDetectionEnabled').value === 'true',
         tracking_enabled: document.getElementById('trackingEnabled').value === 'true',
-
-        // 检测器配置（新增）
-        detector_config: {
-            conf_threshold: parseFloat(document.getElementById('detectorConfThreshold')?.value) || 0.25
-        },
-
-        // 事件配置（新增）
-        event_config: {
-            enabled: document.getElementById('eventEnabled')?.value === 'true'
-        },
     };
 
     // 验证必填字段
@@ -2149,9 +2050,7 @@ return {
     taskGoToPage: taskGoToPage,
     onAlgorithmConfigChange: onAlgorithmConfigChange,
     onDetectionTypeChange: onDetectionTypeChange,
-    onEventTypeChange: onEventTypeChange,
     openCountingZoneConfig: openCountingZoneConfig,
-    openCountingZoneDirectionConfig: openCountingZoneDirectionConfig,
     openClassesSelectDialog: openClassesSelectDialog,
     closeClassesSelectDialog: closeClassesSelectDialog,
     selectAllClasses: selectAllClasses,

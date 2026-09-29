@@ -1,25 +1,15 @@
 // ========================================
 // 参数配置功能
 // ========================================
-// 说明：此处仅保留任务级动态参数——检测器置信度阈值、事件输出开关、报警语音播报。
-// 解码器/检测器/跟踪器/运动检测/事件输出/显示配置统一由 config/*.yaml 提供，
-// 任务表不再保存这些配置项（避免同一参数存在多个来源）。
+// 说明：此处仅维护任务级动态参数——事件输出/显示开关、报警语音播报。
+// 其中事件输出/显示的布尔开关为任务表独立列（input[data-switch] 与列名一一对应，
+// 未在界面上提交的开关由后端按 config/*.yaml 默认值处理）；
+// 置信度阈值在任务新增/编辑对话框中维护，
+// 解码器/检测器/跟踪器/运动检测及事件输出/显示的非开关参数统一由 config/*.yaml 提供。
 // ========================================
 
 // 当前配置的任务ID
 let currentConfigTaskId = null;
-
-// 切换配置选项卡
-function switchConfigTab(tabName) {
-    // 切换选项卡激活状态
-    document.querySelectorAll('.config-tab').forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.tab === tabName);
-    });
-    // 切换面板显示
-    document.querySelectorAll('.tab-panel').forEach(panel => {
-        panel.classList.toggle('active', panel.dataset.tab === tabName);
-    });
-}
 
 // 打开参数配置模态框
 async function openConfigModal(taskId, event) {
@@ -47,9 +37,6 @@ async function openConfigModal(taskId, event) {
         // 加载当前配置到表单
         loadConfigToForm(task);
 
-        // 重置到第一个选项卡
-        switchConfigTab('detector');
-
         // 显示模态框
         document.getElementById('configModal').classList.add('show');
 
@@ -61,16 +48,13 @@ async function openConfigModal(taskId, event) {
 
 // 加载配置到表单
 function loadConfigToForm(task) {
-    // 检测器配置（仅置信度阈值）
-    const detectorConfig = task.detector_config || {};
-    document.getElementById('detectorConfThreshold').value = detectorConfig.conf_threshold || 0.25;
-
-    // 事件输出开关
-    const eventConfig = task.event_config || {};
-    document.getElementById('eventEnabled').value = eventConfig.enabled !== false ? 'true' : 'false';
+    // 事件输出/显示开关（任务表独立列，未返回时按启用处理）
+    document.querySelectorAll('#configForm input[data-switch]').forEach(el => {
+        el.checked = task[el.dataset.switch] !== false;
+    });
 
     // 报警语音播报配置（任务级独立字段）
-    document.getElementById('voiceEnabled').value = task.voice_enabled ? 'true' : 'false';
+    document.getElementById('voiceEnabled').checked = task.voice_enabled === true;
     document.getElementById('voiceMp3').value = task.voice_mp3 || '';
     document.getElementById('voiceLoopCount').value = task.voice_loop_count ?? 1;
     document.getElementById('voiceIntervalMs').value = task.voice_interval_ms ?? 1000;
@@ -122,16 +106,8 @@ async function saveConfig() {
 
         // 构建配置数据（仅提交任务级动态参数，未提交的字段由后端保留原值）
         const configData = {
-            detector_config: {
-                conf_threshold: parseFloat(document.getElementById('detectorConfThreshold').value) || 0.25
-            },
-
-            event_config: {
-                enabled: document.getElementById('eventEnabled').value === 'true'
-            },
-
             // 报警语音播报配置（任务级独立字段）
-            voice_enabled: document.getElementById('voiceEnabled').value === 'true',
+            voice_enabled: document.getElementById('voiceEnabled').checked,
             voice_mp3: document.getElementById('voiceMp3').value || '',
             voice_loop_count: parseInt(document.getElementById('voiceLoopCount').value, 10) || 1,
             voice_interval_ms: parseInt(document.getElementById('voiceIntervalMs').value, 10) || 1000,
@@ -139,6 +115,11 @@ async function saveConfig() {
                 ? parseFloat(document.getElementById('voiceVolume').value)
                 : 1.0
         };
+
+        // 事件输出/显示开关（任务表独立列，列名取自 data-switch）
+        document.querySelectorAll('#configForm input[data-switch]').forEach(el => {
+            configData[el.dataset.switch] = el.checked;
+        });
 
         // 发送更新请求
         const response = await fetch(`/api/tasks/${currentConfigTaskId}`, {
@@ -158,7 +139,7 @@ async function saveConfig() {
 
             if (isRunning) {
                 // 任务运行中：提示需要重启才能生效的配置
-                showNotification('配置已保存。置信度阈值等变更需重启任务后生效', 'warning');
+                showNotification('配置已保存。变更需重启任务后生效', 'warning');
             } else {
                 showNotification('配置已保存', 'success');
             }

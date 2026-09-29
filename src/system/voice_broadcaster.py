@@ -140,7 +140,7 @@ def resolve_voice_config(global_cfg: dict, task: dict = None) -> dict:
 # 播放后端
 # ========================================
 
-def _play_with_pygame(path: str, volume: float) -> bool:
+def _play_with_pygame(path: str, volume: float, cancel: threading.Event = None) -> bool:
     """使用 pygame.mixer 播放（跨平台，支持 MP3 / 音量）
 
     返回是否成功播放到结束（或判断可用）。
@@ -157,6 +157,9 @@ def _play_with_pygame(path: str, volume: float) -> bool:
         pygame.mixer.music.load(path)
         pygame.mixer.music.play()
         while pygame.mixer.music.get_busy():
+            if cancel is not None and cancel.is_set():
+                pygame.mixer.music.stop()
+                return False
             time.sleep(0.05)
         return True
     except Exception as e:
@@ -168,27 +171,50 @@ def _play_with_pygame(path: str, volume: float) -> bool:
         return False
 
 
-def _play_with_ffplay(path: str, volume: float, timeout: int = 120) -> bool:
-    """使用 ffplay（FFmpeg 附带）播放 MP3"""
+def _terminate_proc(proc):
+    """终止播放子进程并等待其退出（避免新旧两路声音短暂重叠）"""
+    try:
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        proc.wait(timeout=1.0)
+    except Exception:
+        pass
+
+
+def _play_with_ffplay(path: str, volume: float, cancel: threading.Event = None,
+                      on_spawn=None, timeout: int = 120) -> bool:
+    """使用 ffplay（FFmpeg 附带）播放 MP3
+
+    on_spawn(proc) 把子进程登记给调用方，打断时可直接终止该进程。
+    """
     volume_pct = int(round(max(0.0, min(1.0, volume)) * 100))
     cmd = [
         "ffplay", "-nodisp", "-autoexit", "-loglevel", "error",
         "-volume", str(volume_pct), path,
     ]
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, timeout=timeout, check=False,
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        return proc.returncode == 0
     except FileNotFoundError:
         return False
+    except Exception as e:
+        logger.warning(f"[Voice] ffplay 启动失败: {e}")
+        return False
+
+    if on_spawn:
+        on_spawn(proc)
+    try:
+        proc.wait(timeout=timeout)
+        return proc.returncode == 0
     except subprocess.TimeoutExpired:
         logger.warning(f"[Voice] ffplay 播放超时，已终止: {path}")
+        _terminate_proc(proc)
         return True
-    except Exception as e:
-        logger.warning(f"[Voice] ffplay 播放异常: {e}")
-        return False
 
 
 # ========================================
@@ -198,7 +224,8 @@ def _play_with_ffplay(path: str, volume: float, timeout: int = 120) -> bool:
 class VoiceBroadcaster:
     """报警语音播报服务
 
-    - 任意时刻仅保留一次播放任务；新报警触发会主动停止上一次播放。
+    - 同一种报警正在播报时忽略重复触发（多目标同时超限会并发触发同一报警）。
+    - 不同报警触发时打断上一次播报，并立即终止其音频子进程（避免声音重叠）。
     - 播放在线程中执行，不阻塞检测主流程。
     """
 
@@ -206,6 +233,19 @@ class VoiceBroadcaster:
         self._lock = threading.Lock()
         self._cancel = threading.Event()  # 当前播放任务的取消信号
         self._thread = None
+        self._proc = None                 # 当前 ffplay 子进程（打断时终止）
+        self._current_mp3 = None          # 当前正在播报的预置文件
+
+    def _register_proc(self, proc):
+        """登记当前播放子进程，供打断时终止"""
+        with self._lock:
+            self._proc = proc
+
+    def _stop_current(self):
+        """取消当前播报并终止其音频子进程（调用方需持有 self._lock）"""
+        self._cancel.set()
+        _terminate_proc(self._proc)
+        self._proc = None
 
     def _load_global_config(self) -> dict:
         """从 system_settings 读取全局语音配置"""
@@ -238,19 +278,28 @@ class VoiceBroadcaster:
         if not cfg["enabled"] or not cfg["mp3"]:
             return
 
-        # 取消上一次播放
         with self._lock:
-            self._cancel.set()
+            # 同一种报警正在播报时忽略重复触发：多目标同时超限会并发触发同一报警，
+            # 重复打断只会让声音反复重启，听起来像重叠
+            if self._current_mp3 == cfg["mp3"] and self._thread and self._thread.is_alive():
+                return
+
+            # 不同报警：打断上一次播报并终止其音频子进程
+            self._stop_current()
+
+            cancel = threading.Event()
+            self._cancel = cancel
+            self._current_mp3 = cfg["mp3"]
             thread = threading.Thread(
                 target=self._play_worker,
-                args=(cfg["mp3"], cfg["loop_count"], cfg["interval_ms"], cfg["volume"]),
+                args=(cfg["mp3"], cfg["loop_count"], cfg["interval_ms"], cfg["volume"], cancel),
                 daemon=True,
             )
-            self._cancel = threading.Event()
             self._thread = thread
             thread.start()
 
-    def _play_worker(self, mp3_name: str, loop_count: int, interval_ms: int, volume: float):
+    def _play_worker(self, mp3_name: str, loop_count: int, interval_ms: int, volume: float,
+                     cancel: threading.Event):
         ensure_preset_dir()
         fpath = Path(PRESET_DIR) / Path(mp3_name).name
         if not fpath.is_file():
@@ -258,7 +307,6 @@ class VoiceBroadcaster:
             return
 
         path = str(fpath)
-        cancel = self._cancel
         logger.info(
             f"[Voice] 开始报警语音播报: {mp3_name}, 循环={loop_count}, 间隙={interval_ms}ms, 音量={volume}"
         )
@@ -267,10 +315,13 @@ class VoiceBroadcaster:
                 logger.info("[Voice] 本次语音播报被新的报警打断，停止")
                 return
 
-            played = _play_with_ffplay(path, volume)
+            played = _play_with_ffplay(path, volume, cancel, on_spawn=self._register_proc)
             if not played:
-                played = _play_with_pygame(path, volume)
+                played = _play_with_pygame(path, volume, cancel)
             if not played:
+                if cancel.is_set():
+                    logger.info("[Voice] 本次语音播报被新的报警打断，停止")
+                    return
                 logger.warning("[Voice] 无可用的音频播放后端，报警语音播报已跳过")
                 return
 

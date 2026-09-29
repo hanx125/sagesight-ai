@@ -35,7 +35,6 @@ DETECTOR_CONFIG_PATH = os.path.join(CONFIG_DIR, 'detector_config.yaml')
 TRACKER_CONFIG_PATH = os.path.join(CONFIG_DIR, 'tracker_config.yaml')
 MOTION_CONFIG_PATH = os.path.join(CONFIG_DIR, 'motion_config.yaml')
 EVENT_CONFIG_PATH = os.path.join(CONFIG_DIR, 'event_output.yaml')
-ZONES_CONFIG_PATH = os.path.join(CONFIG_DIR, 'zones_config.yaml')  # 新增：Zone区域配置
 
 # ========================================
 # 辅助函数
@@ -121,9 +120,16 @@ def get_default_detector_config() -> Dict:
         'input_width': detector_config.get('input_width', 640),
         'input_height': detector_config.get('input_height', 640),
         'tensorrt_engine_cache_path': detector_config.get('tensorrt_engine_cache_path', './trt_cache'),
+        'tensorrt_engine_path': detector_config.get('tensorrt_engine_path', ''),
         'tensorrt_lib_path': detector_config.get('tensorrt_lib_path', ''),
         'device_id': detector_config.get('device_id', 0),
-        'gpu_mem_limit': detector_config.get('gpu_mem_limit', 0)
+        'gpu_mem_limit': detector_config.get('gpu_mem_limit', 0),
+        # RKNN 配置（backend=rknn 时生效）
+        'rknn_target': detector_config.get('rknn_target', 'rk3588'),
+        'rknn_device_id': detector_config.get('rknn_device_id', ''),
+        'rknn_core_mask': detector_config.get('rknn_core_mask', 0),
+        # 检测器进程数（null 表示按摄像机数自动计算）
+        'num_detectors': detector_config.get('num_detectors'),
     }
 
     # 注意：target_classes 是任务表的单独字段，不从配置文件读取
@@ -336,59 +342,128 @@ def get_default_display_config() -> Dict:
     return display_config
 
 
-def get_default_zones_config() -> List[Dict]:
-    """
-    获取默认Zone区域配置（从配置文件读取）
+# ========================================
+# 事件输出 / 显示 开关（任务级独立列）
+# ========================================
+# config/event_output.yaml、config/display_config.yaml 中的布尔开关统一提升为
+# 任务级独立列（不使用嵌套 JSON），其余非开关参数仍由这两个 YAML 全局提供。
+# 每项：列名 -> (在配置中的路径, YAML 缺失时的兜底默认值)
 
-    Returns:
-        List[Dict]: Zone配置列表，每个Zone包含：
-            - name: 区域名称
-            - polygon: 多边形顶点列表 [[x1,y1], [x2,y2], ...]
-            - required: 是否为必需区域
-            - color: RGB颜色 [R, G, B]
-            - min_area: 最小区域面积
-    """
-    config = load_yaml_config(ZONES_CONFIG_PATH)
+EVENT_SWITCH_PATHS = (
+    ('event_enabled',                    ('enabled',),                        True),
+    ('event_image_local_enabled',        ('image_output', 'local_enabled'),   True),
+    ('event_image_minio_enabled',        ('image_output', 'minio_enabled'),   True),
+    ('event_image_ftp_enabled',          ('image_output', 'ftp_enabled'),     False),
+    ('event_image_auto_cleanup',         ('image_output', 'auto_cleanup'),    True),
+    ('event_image_draw_bbox',            ('image_output', 'draw_bbox'),       True),
+    ('event_compression_enabled',        ('compression', 'enabled'),          True),
+    ('event_gif_enabled',                ('gif', 'enabled'),                  True),
+    ('event_gif_local_enabled',          ('gif', 'local_enabled'),            True),
+    ('event_gif_minio_enabled',          ('gif', 'minio_enabled'),            True),
+    ('event_gif_ftp_enabled',            ('gif', 'ftp_enabled'),              False),
+    ('event_gif_auto_cleanup',           ('gif', 'auto_cleanup'),             True),
+    ('event_gif_draw_trajectory',        ('gif', 'draw_trajectory'),          True),
+    ('event_gif_draw_bbox',              ('gif', 'draw_bbox'),                True),
+    ('event_capture_save_full_on_start', ('capture', 'save_full_on_start'),   True),
+    ('event_capture_save_full_on_end',   ('capture', 'save_full_on_end'),     True),
+)
 
-    # zones_config.yaml 的结构：
-    # zones: [list of zone configs]
-    # zone_detection: {enabled, send_enter_events, ...}
+DISPLAY_SWITCH_PATHS = (
+    ('display_show_detection_boxes',   ('display', 'show_detection_boxes'),   True),
+    ('display_show_track_boxes',       ('display', 'show_track_boxes'),       True),
+    ('display_show_trajectories',      ('display', 'show_trajectories'),      True),
+    ('display_show_motion_regions',    ('display', 'show_motion_regions'),    True),
+    ('display_show_zones',             ('display', 'show_zones'),             True),
+    ('display_show_counting_line',     ('display', 'show_counting_line'),     False),
+    ('display_loitering_blink',        ('track_box', 'loitering_blink'),      True),
+    ('display_alarm_zone_enter_enabled', ('alarm', 'zone_enter_enabled'),     True),
+    ('display_alarm_loitering_enabled',  ('alarm', 'loitering_enabled'),      True),
+    ('display_alarm_show_banner',        ('alarm', 'show_banner'),            True),
+)
 
-    zones = config.get('zones', [])
+EVENT_SWITCH_COLUMNS = tuple(item[0] for item in EVENT_SWITCH_PATHS)
+DISPLAY_SWITCH_COLUMNS = tuple(item[0] for item in DISPLAY_SWITCH_PATHS)
+TASK_SWITCH_COLUMNS = EVENT_SWITCH_COLUMNS + DISPLAY_SWITCH_COLUMNS
 
-    if not zones:
-        # 如果配置文件中没有定义zones，返回空列表
-        return []
+# 任务表标量字段（不含 id 与时间戳）：写入与查询共用同一份列清单，
+# 避免 ALTER TABLE 造成的列顺序依赖
+TASK_FIELD_COLUMNS = (
+    'task_name', 'enabled', 'status', 'detection_type', 'event_type',
+    'polling_interval_frames', 'motion_gate_fallback_interval',
+    'schedule_cron', 'schedule_source', 'file_paths', 'file_loop',
+    'dedup_enabled', 'dedup_window_seconds', 'dedup_iou_threshold',
+    'voice_enabled', 'voice_mp3', 'voice_loop_count', 'voice_interval_ms',
+    'voice_volume',
+    'algorithm', 'model_path', 'model_type', 'labels_file', 'target_classes',
+    'conf_threshold', 'motion_detection_enabled', 'tracking_enabled',
+)
+TASK_SELECT_COLUMNS = ('id',) + TASK_FIELD_COLUMNS + TASK_SWITCH_COLUMNS + ('created_at', 'updated_at')
 
-    # 验证每个zone的必需字段
-    validated_zones = []
-    for zone in zones:
-        if not isinstance(zone, dict):
-            continue
 
-        # 必需字段：name, polygon
-        if 'name' not in zone or 'polygon' not in zone:
-            logger.warning(f"Zone配置缺少必需字段，跳过: {zone}")
-            continue
+def _config_path_get(config: Dict, path: tuple, default):
+    """按键路径读取嵌套配置值，任一层缺失时返回默认值"""
+    current = config
+    for key in path:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+        if current is None:
+            return default
+    return current
 
-        # polygon必须是至少3个点的列表
-        polygon = zone.get('polygon', [])
-        if not isinstance(polygon, list) or len(polygon) < 3:
-            logger.warning(f"Zone {zone['name']} 的polygon无效，跳过")
-            continue
 
-        # 构造标准化的zone配置
-        validated_zone = {
-            'name': zone['name'],
-            'polygon': polygon,
-            'required': zone.get('required', False),
-            'color': zone.get('color', [0, 255, 0]),  # 默认绿色
-            'min_area': zone.get('min_area', 0)
-        }
+def _config_path_set(config: Dict, path: tuple, value) -> None:
+    """按键路径写入嵌套配置值，缺失的中间层自动补空字典"""
+    current = config
+    for key in path[:-1]:
+        nxt = current.get(key)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            current[key] = nxt
+        current = nxt
+    current[path[-1]] = value
 
-        validated_zones.append(validated_zone)
 
-    return validated_zones
+def _load_switch_defaults(config: Dict, mapping: tuple) -> Dict[str, bool]:
+    """从配置文件默认值中提取各开关列的默认值"""
+    return {
+        column: bool(_config_path_get(config, path, fallback))
+        for column, path, fallback in mapping
+    }
+
+
+def _coerce_bool(value, default: bool) -> bool:
+    """把外部传入的开关值（bool/字符串/数字）统一转换为 bool"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
+# 开关默认值唯一来源为 config/*.yaml（新增任务与数据库建列均以此为准）
+_EVENT_SWITCH_DEFAULTS = _load_switch_defaults(get_default_event_config(), EVENT_SWITCH_PATHS)
+_DISPLAY_SWITCH_DEFAULTS = _load_switch_defaults(get_default_display_config(), DISPLAY_SWITCH_PATHS)
+_SWITCH_DEFAULTS = {**_EVENT_SWITCH_DEFAULTS, **_DISPLAY_SWITCH_DEFAULTS}
+
+
+def coerce_switch_value(column: str, value) -> bool:
+    """任务级开关取值归一化（None 时回落到 config/*.yaml 默认值）"""
+    return _coerce_bool(value, _SWITCH_DEFAULTS[column])
+
+
+def _switch_columns_ddl() -> str:
+    """生成开关列的建表片段（默认值取自 config/*.yaml）"""
+    lines = ['-- 事件输出开关（任务级；其余事件参数由 config/event_output.yaml 全局提供）']
+    for column in EVENT_SWITCH_COLUMNS:
+        lines.append(f"                    {column} BOOLEAN DEFAULT {1 if _SWITCH_DEFAULTS[column] else 0},")
+    lines.append('')
+    lines.append('-- 显示开关（任务级；其余显示参数由 config/display_config.yaml 全局提供）')
+    for column in DISPLAY_SWITCH_COLUMNS:
+        lines.append(f"                    {column} BOOLEAN DEFAULT {1 if _SWITCH_DEFAULTS[column] else 0},")
+    return '\n'.join(lines)
 
 
 # ========================================
@@ -453,9 +528,6 @@ class DetectionTask:
     voice_loop_count: int = 1  # 循环播放次数
     voice_interval_ms: int = 1000  # 循环播放时间间隙（毫秒）
     voice_volume: float = 1.0  # 播放音量（0-1）
-    # 区域人数报警阈值（仅人员统计检测生效）：当前区域人数达到该值时触发语音报警；
-    # 0 表示不使用人数阈值触发（维持检测到目标即触发的默认行为）
-    count_alarm_threshold: int = 0
 
     # 检测算法配置
     algorithm: str = "yolov11"
@@ -463,33 +535,70 @@ class DetectionTask:
     model_type: str = "yolov11n"  # 模型类型字段（如 yolov11n, yolov8n, yolo11n）
     labels_file: str = ""  # 标签文件路径（创建任务时从算法库 labels_file 拷贝，独立字段避免嵌套 JSON）
     target_classes: List[str] = field(default_factory=list)  # 空列表表示不限制检测类别
+    # 检测置信度阈值（任务级独立字段，前端可调）
+    # 解码/检测/跟踪/运动四类配置统一由 config/*.yaml 提供（全局一致），不再保存在任务表
+    conf_threshold: float = 0.25
 
     # 功能开关（独立字段，便于任务管理）
     motion_detection_enabled: bool = True  # 是否启用运动检测（默认启用）
     tracking_enabled: bool = True  # 是否启用跟踪功能（默认启用）
 
-    # 解码器配置（JSON）- 从配置文件读取默认值
-    decoder_config: Dict = field(default_factory=get_default_decoder_config)
+    # 事件输出开关（任务级独立列）
+    # 其余事件参数由 config/event_output.yaml 全局提供（所有任务一致），运行期合并
+    event_enabled: bool = _SWITCH_DEFAULTS['event_enabled']
+    event_image_local_enabled: bool = _SWITCH_DEFAULTS['event_image_local_enabled']
+    event_image_minio_enabled: bool = _SWITCH_DEFAULTS['event_image_minio_enabled']
+    event_image_ftp_enabled: bool = _SWITCH_DEFAULTS['event_image_ftp_enabled']
+    event_image_auto_cleanup: bool = _SWITCH_DEFAULTS['event_image_auto_cleanup']
+    event_image_draw_bbox: bool = _SWITCH_DEFAULTS['event_image_draw_bbox']
+    event_compression_enabled: bool = _SWITCH_DEFAULTS['event_compression_enabled']
+    event_gif_enabled: bool = _SWITCH_DEFAULTS['event_gif_enabled']
+    event_gif_local_enabled: bool = _SWITCH_DEFAULTS['event_gif_local_enabled']
+    event_gif_minio_enabled: bool = _SWITCH_DEFAULTS['event_gif_minio_enabled']
+    event_gif_ftp_enabled: bool = _SWITCH_DEFAULTS['event_gif_ftp_enabled']
+    event_gif_auto_cleanup: bool = _SWITCH_DEFAULTS['event_gif_auto_cleanup']
+    event_gif_draw_trajectory: bool = _SWITCH_DEFAULTS['event_gif_draw_trajectory']
+    event_gif_draw_bbox: bool = _SWITCH_DEFAULTS['event_gif_draw_bbox']
+    event_capture_save_full_on_start: bool = _SWITCH_DEFAULTS['event_capture_save_full_on_start']
+    event_capture_save_full_on_end: bool = _SWITCH_DEFAULTS['event_capture_save_full_on_end']
 
-    # 检测器配置（JSON）- 从配置文件读取默认值
-    detector_config: Dict = field(default_factory=get_default_detector_config)
-
-    # 跟踪器配置（JSON）- 从配置文件读取默认值
-    tracker_config: Dict = field(default_factory=get_default_tracker_config)
-
-    # 运动检测配置（JSON）- 从配置文件读取默认值
-    motion_config: Dict = field(default_factory=get_default_motion_config)
-
-    # 事件输出配置（JSON）- 从配置文件读取默认值
-    event_config: Dict = field(default_factory=get_default_event_config)
-
-    # 显示配置（JSON）- 测试工具专用，任务配置中使用空字典
-    display_config: Dict = field(default_factory=dict)
+    # 显示开关（任务级独立列）
+    # 其余显示参数（颜色、线宽、FPS 等）由 config/display_config.yaml 全局提供
+    display_show_detection_boxes: bool = _SWITCH_DEFAULTS['display_show_detection_boxes']
+    display_show_track_boxes: bool = _SWITCH_DEFAULTS['display_show_track_boxes']
+    display_show_trajectories: bool = _SWITCH_DEFAULTS['display_show_trajectories']
+    display_show_motion_regions: bool = _SWITCH_DEFAULTS['display_show_motion_regions']
+    display_show_zones: bool = _SWITCH_DEFAULTS['display_show_zones']
+    display_show_counting_line: bool = _SWITCH_DEFAULTS['display_show_counting_line']
+    display_loitering_blink: bool = _SWITCH_DEFAULTS['display_loitering_blink']
+    display_alarm_zone_enter_enabled: bool = _SWITCH_DEFAULTS['display_alarm_zone_enter_enabled']
+    display_alarm_loitering_enabled: bool = _SWITCH_DEFAULTS['display_alarm_loitering_enabled']
+    display_alarm_show_banner: bool = _SWITCH_DEFAULTS['display_alarm_show_banner']
 
     # 时间戳
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    
+
+    def build_event_config(self) -> Dict:
+        """组装任务生效的事件输出配置
+
+        以 config/event_output.yaml 为基准（全局唯一来源），用任务级开关列覆盖对应开关。
+        """
+        config = get_default_event_config()
+        for column, path, _ in EVENT_SWITCH_PATHS:
+            _config_path_set(config, path, bool(getattr(self, column)))
+        return normalize_event_config_storage(config)
+
+    def build_display_config(self) -> Dict:
+        """组装任务生效的显示配置
+
+        以 config/display_config.yaml 为基准（全局唯一来源），用任务级开关列覆盖对应开关。
+        """
+        config = get_default_display_config()
+        for column, path, _ in DISPLAY_SWITCH_PATHS:
+            _config_path_set(config, path, bool(getattr(self, column)))
+        return config
+
     def to_dict(self) -> Dict:
         """转换为字典"""
         def format_datetime(value):
@@ -522,20 +631,18 @@ class DetectionTask:
             'voice_loop_count': self.voice_loop_count,  # 播放循环次数
             'voice_interval_ms': self.voice_interval_ms,  # 循环播放时间间隙（毫秒）
             'voice_volume': self.voice_volume,  # 播放音量
-            'count_alarm_threshold': self.count_alarm_threshold,  # 区域人数报警阈值（仅人员统计）
             'algorithm': self.algorithm,
             'model_path': self.model_path,
             'model_type': self.model_type,  # 模型类型字段
             'labels_file': self.labels_file,  # 标签文件路径
             'target_classes': self.target_classes,
+            'conf_threshold': self.conf_threshold,
             'motion_detection_enabled': self.motion_detection_enabled,
             'tracking_enabled': self.tracking_enabled,
-            'decoder_config': self.decoder_config,
-            'detector_config': self.detector_config,
-            'tracker_config': self.tracker_config,
-            'motion_config': self.motion_config,
-            'event_config': normalize_event_config_storage(self.event_config),
-            'display_config': self.display_config,
+            'event_config': self.build_event_config(),
+            'display_config': self.build_display_config(),
+            # 任务级开关（独立列，供前端「参数配置」对话框按列名读写）
+            **{column: bool(getattr(self, column)) for column in TASK_SWITCH_COLUMNS},
             'created_at': format_datetime(self.created_at),
             'updated_at': format_datetime(self.updated_at)
         }
@@ -564,37 +671,26 @@ class DetectionTask:
             voice_loop_count=data.get('voice_loop_count', 1),  # 播放循环次数
             voice_interval_ms=data.get('voice_interval_ms', 1000),  # 循环播放时间间隙（毫秒）
             voice_volume=data.get('voice_volume', 1.0),  # 播放音量
-            count_alarm_threshold=int(data.get('count_alarm_threshold', 0) or 0),  # 区域人数报警阈值（仅人员统计）
             algorithm=data.get('algorithm', 'yolov11'),
             model_path=data.get('model_path', 'models/yolov11n.onnx'),
             model_type=data.get('model_type', 'yolov11n'),  # 模型类型字段
             labels_file=data.get('labels_file', ''),  # 标签文件路径
             target_classes=data.get('target_classes', []),  # 空列表表示不限制检测类别
+            conf_threshold=float(data.get('conf_threshold') if data.get('conf_threshold') is not None else 0.25),
             motion_detection_enabled=data.get('motion_detection_enabled', True),  # 默认启用
             tracking_enabled=data.get('tracking_enabled', True),
-            decoder_config=data.get('decoder_config', get_default_decoder_config()),
-            detector_config=data.get('detector_config', get_default_detector_config()),
-            tracker_config=data.get('tracker_config', get_default_tracker_config()),
-            motion_config=data.get('motion_config', get_default_motion_config()),
-            event_config=data.get('event_config', get_default_event_config()),
-            display_config=data.get('display_config', get_default_display_config()),
+            **{
+                column: _coerce_bool(data.get(column), _SWITCH_DEFAULTS[column])
+                for column in TASK_SWITCH_COLUMNS
+            },
             created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None,
             updated_at=datetime.fromisoformat(data['updated_at']) if data.get('updated_at') else None
         )
 
     @classmethod
     def _resolve_event_type(cls, data: Dict) -> str:
-        """解析语义检测类型（事件类型）。
-
-        显式指定时优先采用；人员统计任务未显式指定时兜底为 people_counting，
-        其余未指定时默认 tracking。
-        """
-        event_type = data.get('event_type')
-        if not event_type:
-            if data.get('detection_type') == 'people_counting':
-                return 'people_counting'
-            return 'tracking'
-        return event_type
+        """解析语义检测类型（事件类型）：显式指定时采用，未指定时默认 tracking。"""
+        return data.get('event_type') or 'tracking'
 
     def get_full_config(self) -> Dict:
         """获取完整配置（用于任务执行器）"""
@@ -606,6 +702,7 @@ class DetectionTask:
             'model_type': self.model_type,  # 模型类型字段
             'labels_file': self.labels_file,  # 标签文件路径（task_executor 经 task_config 取此值）
             'target_classes': self.target_classes,
+            'conf_threshold': self.conf_threshold,
             'detection_type': self.detection_type,  # 检测类型
             'event_type': self.event_type,  # 语义检测类型（事件类型）
             'polling_interval_frames': self.polling_interval_frames,  # 轮询抽样间隔
@@ -619,12 +716,8 @@ class DetectionTask:
             'dedup_iou_threshold': self.dedup_iou_threshold,  # 去重 IoU 阈值
             'motion_detection_enabled': self.motion_detection_enabled,
             'tracking_enabled': self.tracking_enabled,
-            'decoder_config': self.decoder_config,
-            'detector_config': self.detector_config,
-            'tracker_config': self.tracker_config,
-            'motion_config': self.motion_config,
-            'event_config': normalize_event_config_storage(self.event_config),
-            'display_config': self.display_config
+            'event_config': self.build_event_config(),
+            'display_config': self.build_display_config()
         }
 
 
@@ -729,6 +822,286 @@ class EventRecord:
 
 
 # ========================================
+# 数据库迁移：任务表全局配置列清理
+# ========================================
+
+# 已统一由 config/*.yaml 提供（全局一致、所有任务相同）的配置列，任务表不再保存
+GLOBAL_CONFIG_COLUMNS = ('decoder_config', 'detector_config', 'tracker_config', 'motion_config')
+
+
+def migrate_task_global_configs(cursor) -> None:
+    """迁移 detection_tasks 表：新增任务级 conf_threshold，删除全局配置列。
+
+    解码/检测/跟踪/运动四类配置已统一由 config/*.yaml 提供（全局一致）、
+    不再保存在任务表；旧的 detector_config.conf_threshold 搬迁为独立列。
+    幂等：表结构已符合目标时不执行任何操作。
+    """
+    cursor.execute("PRAGMA table_info(detection_tasks)")
+    columns = [column[1] for column in cursor.fetchall()]
+
+    # 1) 新增任务级 conf_threshold，并把旧 detector_config 中的取值搬迁过来
+    if 'conf_threshold' not in columns:
+        cursor.execute("ALTER TABLE detection_tasks ADD COLUMN conf_threshold REAL DEFAULT 0.25")
+        logger.info("数据库迁移: 添加 conf_threshold 字段到 detection_tasks 表")
+        if 'detector_config' in columns:
+            _backfill_conf_threshold(cursor)
+
+    # 2) 物理删除已废弃的全局配置列
+    deprecated = [column for column in GLOBAL_CONFIG_COLUMNS if column in columns]
+    if deprecated:
+        _drop_task_columns(cursor, deprecated)
+        logger.info(f"数据库迁移: 已删除 detection_tasks 全局配置列 {deprecated}")
+
+    # 3) 人数报警阈值已改为区域级（counting_zones.alarm_threshold / counting_lines 内），
+    #    删除任务级废弃列
+    if 'count_alarm_threshold' in columns:
+        _drop_task_columns(cursor, ['count_alarm_threshold'])
+        logger.info("数据库迁移: 已删除 detection_tasks 任务级 count_alarm_threshold 列")
+
+
+def _backfill_conf_threshold(cursor) -> None:
+    """把旧 detector_config JSON 中的 conf_threshold 搬迁到独立列"""
+    cursor.execute("SELECT id, detector_config FROM detection_tasks")
+    updated = 0
+    for task_id, raw in cursor.fetchall():
+        if not raw:
+            continue
+        try:
+            config = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(config, dict) or config.get('conf_threshold') is None:
+            continue
+        cursor.execute(
+            "UPDATE detection_tasks SET conf_threshold = ? WHERE id = ?",
+            (float(config['conf_threshold']), task_id)
+        )
+        updated += 1
+    if updated:
+        logger.info(f"数据库迁移: 已从 detector_config 搬迁 conf_threshold 的任务数: {updated}")
+
+
+def _drop_task_columns(cursor, columns: List[str]) -> None:
+    """删除 detection_tasks 指定列（SQLite 3.35+ 直接 DROP COLUMN，旧版本重建表）"""
+    if sqlite3.sqlite_version_info >= (3, 35, 0):
+        for column in columns:
+            cursor.execute(f"ALTER TABLE detection_tasks DROP COLUMN {column}")
+        return
+
+    # 旧版 SQLite 不支持 DROP COLUMN：按保留列重建表并搬移数据
+    cursor.execute("PRAGMA table_info(detection_tasks)")
+    keep = [row for row in cursor.fetchall() if row[1] not in columns]
+
+    definitions = []
+    for _, name, column_type, notnull, default, primary_key in keep:
+        if primary_key:
+            definitions.append(f"{name} INTEGER PRIMARY KEY AUTOINCREMENT")
+            continue
+        definition = f"{name} {column_type or 'TEXT'}"
+        if notnull:
+            definition += " NOT NULL"
+        if default is not None:
+            definition += f" DEFAULT {default}"
+        definitions.append(definition)
+
+    kept_columns = ', '.join(row[1] for row in keep)
+    cursor.execute("ALTER TABLE detection_tasks RENAME TO detection_tasks_legacy")
+    cursor.execute(f"CREATE TABLE detection_tasks ({', '.join(definitions)})")
+    cursor.execute(
+        f"INSERT INTO detection_tasks ({kept_columns}) "
+        f"SELECT {kept_columns} FROM detection_tasks_legacy"
+    )
+    cursor.execute("DROP TABLE detection_tasks_legacy")
+
+
+def migrate_task_event_display_switches(cursor) -> None:
+    """迁移 detection_tasks 表：把事件输出/显示配置的布尔开关提升为独立列。
+
+    config/event_output.yaml 与 config/display_config.yaml 仍为这两个配置的
+    全局唯一来源，其中的布尔开关改为任务级独立列（与 conf_threshold 同级），
+    任务表不再保存整块 JSON。幂等：结构已符合目标时不执行任何操作。
+    """
+    cursor.execute("PRAGMA table_info(detection_tasks)")
+    columns = [column[1] for column in cursor.fetchall()]
+
+    # 1) 缺失的开关列按 config/*.yaml 默认值补齐
+    missing = [column for column in TASK_SWITCH_COLUMNS if column not in columns]
+    for column in missing:
+        default = 1 if _SWITCH_DEFAULTS[column] else 0
+        cursor.execute(
+            f"ALTER TABLE detection_tasks ADD COLUMN {column} BOOLEAN DEFAULT {default}"
+        )
+    if missing:
+        logger.info(f"数据库迁移: 已添加事件输出/显示开关列 {len(missing)} 个")
+
+    # 2) 从旧的 JSON 列回填开关取值，再物理删除旧列
+    legacy = [column for column in ('event_config', 'display_config') if column in columns]
+    if legacy:
+        _backfill_task_switches(cursor)
+        _drop_task_columns(cursor, legacy)
+        logger.info(f"数据库迁移: 已删除 detection_tasks 事件/显示 JSON 列 {legacy}")
+
+
+def _backfill_task_switches(cursor) -> None:
+    """把旧 event_config / display_config JSON 中的开关值搬迁到独立列"""
+    cursor.execute("SELECT id, event_config, display_config FROM detection_tasks")
+    rows = cursor.fetchall()
+    if not rows:
+        return
+
+    updated = 0
+    for task_id, event_raw, display_raw in rows:
+        values = {}
+        for raw, mapping in ((event_raw, EVENT_SWITCH_PATHS), (display_raw, DISPLAY_SWITCH_PATHS)):
+            config = _load_legacy_config(raw, mapping is EVENT_SWITCH_PATHS)
+            if not isinstance(config, dict):
+                continue
+            for column, path, _ in mapping:
+                value = _config_path_get(config, path, None)
+                if value is not None:
+                    values[column] = 1 if _coerce_bool(value, _SWITCH_DEFAULTS[column]) else 0
+
+        if not values:
+            continue
+
+        assignments = ', '.join(f"{column} = ?" for column in values)
+        cursor.execute(
+            f"UPDATE detection_tasks SET {assignments} WHERE id = ?",
+            list(values.values()) + [task_id]
+        )
+        updated += 1
+
+    if updated:
+        logger.info(f"数据库迁移: 已从事件/显示 JSON 搬迁开关的任务数: {updated}")
+
+
+def _load_legacy_config(raw, is_event_config: bool) -> Dict:
+    """解析旧 JSON 配置列（事件配置先做一次旧字段归一化）"""
+    if not raw:
+        return {}
+    try:
+        config = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(config, dict):
+        return {}
+    return normalize_event_config_storage(config) if is_event_config else config
+
+
+def migrate_task_config_schema(cursor) -> None:
+    """任务表配置结构迁移总入口"""
+    migrate_task_global_configs(cursor)
+    migrate_task_event_display_switches(cursor)
+    migrate_counting_zone_alarm_threshold(cursor)
+
+
+def migrate_counting_zone_alarm_threshold(cursor) -> None:
+    """counting_zones 新增区域级人数报警阈值列（幂等）。
+
+    人数报警阈值由任务级改为区域级：画线区域随 counting_lines JSON 存储，
+    多机进出方向区域使用本列。0 表示不按人数触发。
+    """
+    cursor.execute("PRAGMA table_info(counting_zones)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if not columns or 'alarm_threshold' in columns:
+        return
+    cursor.execute("ALTER TABLE counting_zones ADD COLUMN alarm_threshold INTEGER DEFAULT 0")
+    logger.info("数据库迁移: 添加 alarm_threshold 字段到 counting_zones 表")
+
+
+def migrate_counting_zone_levels(cursor) -> None:
+    """计数区域分层迁移：单机画线 → 通道级；counting_zones 收敛为多机进出方向专用。
+
+    区域配置属于通道级别，画线区域本质是某一路相机画面上的分界线，
+    因此搬迁到 device_channel_pool.counting_lines（与通道级 zones_config 同级）；
+    多机进出的 in/out 通道对天然跨通道，保留在任务级 counting_zones。
+    幂等：counting_zones 已无画线专用列时直接返回。
+    """
+    cursor.execute("PRAGMA table_info(counting_zones)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if not columns:
+        return
+
+    line_only_columns = ('mode', 'channel_id', 'cross_line', 'in_side', 'min_displacement')
+    if not any(column in columns for column in line_only_columns):
+        return
+
+    # 确保通道表存在 counting_lines 列（历史库可能缺失；独立执行迁移脚本时同样生效）
+    cursor.execute("PRAGMA table_info(device_channel_pool)")
+    if 'counting_lines' not in [row[1] for row in cursor.fetchall()]:
+        cursor.execute("ALTER TABLE device_channel_pool ADD COLUMN counting_lines TEXT")
+
+    _migrate_line_zones_to_channels(cursor)
+
+    cursor.execute("ALTER TABLE counting_zones RENAME TO counting_zones_legacy")
+    cursor.execute('''
+        CREATE TABLE counting_zones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            zone_name VARCHAR(100) NOT NULL,
+            in_channels TEXT,
+            out_channels TEXT,
+            alarm_threshold INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    direction_filter = "WHERE mode = 'direction'" if 'mode' in columns else ''
+    cursor.execute(f'''
+        INSERT INTO counting_zones
+            (task_id, zone_name, in_channels, out_channels, created_at, updated_at)
+        SELECT task_id, zone_name, in_channels, out_channels, created_at, updated_at
+        FROM counting_zones_legacy {direction_filter}
+    ''')
+    cursor.execute("DROP TABLE counting_zones_legacy")
+    logger.info("[TaskManager] counting_zones 表已收敛为多机进出方向专用")
+
+
+def _migrate_line_zones_to_channels(cursor) -> None:
+    """把旧 counting_zones 中的画线行按通道合并搬迁到通道级 counting_lines"""
+    cursor.execute('''
+        SELECT channel_id, zone_name, cross_line, in_side, inertia, min_displacement
+        FROM counting_zones
+        WHERE mode = 'line' AND channel_id IS NOT NULL
+        ORDER BY channel_id, id
+    ''')
+
+    grouped: Dict[int, Dict[str, Dict]] = {}
+    duplicates = 0
+    for channel_id, zone_name, cross_line, in_side, inertia, min_displacement in cursor.fetchall():
+        zones = grouped.setdefault(int(channel_id), {})
+        # 同一通道下同名画线区域仅保留首个（跨任务定义合并为一个通道级配置）
+        if zone_name in zones:
+            duplicates += 1
+            continue
+        zones[zone_name] = {
+            'zone_name': zone_name,
+            'cross_line': safe_json_loads(cross_line, None),
+            'in_side': int(in_side) if in_side is not None else 1,
+            'inertia': int(inertia) if inertia is not None else 3,
+            'min_displacement': float(min_displacement) if min_displacement is not None else 0.02,
+        }
+
+    migrated = 0
+    for channel_id, zones in grouped.items():
+        cursor.execute("SELECT counting_lines FROM device_channel_pool WHERE id = ?", (channel_id,))
+        row = cursor.fetchone()
+        # 通道已有画线配置或通道已不存在时跳过，避免覆盖与悬空引用
+        if not row or row[0]:
+            continue
+        cursor.execute(
+            "UPDATE device_channel_pool SET counting_lines = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (json.dumps(list(zones.values()), ensure_ascii=False), channel_id)
+        )
+        migrated += 1
+
+    if migrated:
+        logger.info(f"[TaskManager] 已将 {migrated} 个通道的单机画线计数区域迁移到通道级")
+    if duplicates:
+        logger.warning(f"[TaskManager] 跨任务重名画线区域 {duplicates} 个未迁移（同一通道同名仅保留首个）")
+
+
+# ========================================
 # 任务管理器
 # ========================================
 
@@ -756,7 +1129,7 @@ class TaskManager:
             # ========================================
             # 检测任务表（不含摄像机信息）
             # ========================================
-            cursor.execute('''
+            cursor.execute(f'''
                 CREATE TABLE IF NOT EXISTS detection_tasks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task_name VARCHAR(100) NOT NULL,
@@ -771,28 +1144,14 @@ class TaskManager:
                     model_type VARCHAR(50) DEFAULT 'yolov11n',  -- 模型类型字段
                     labels_file VARCHAR(500) DEFAULT '',  -- 标签文件路径（创建任务时从算法库拷贝）
                     target_classes TEXT DEFAULT '[]',  -- 空数组表示不限制检测类别
+                    conf_threshold REAL DEFAULT 0.25,  -- 检测置信度阈值（任务级）
 
                     -- 功能开关
                     motion_detection_enabled BOOLEAN DEFAULT 1,  -- 默认启用运动检测
                     tracking_enabled BOOLEAN DEFAULT 1,  -- 默认启用跟踪功能,
 
-                    -- 解码器配置（JSON）
-                    decoder_config TEXT DEFAULT '{}',
-
-                    -- 检测器配置（JSON）
-                    detector_config TEXT DEFAULT '{}',
-
-                    -- 跟踪器配置（JSON）
-                    tracker_config TEXT DEFAULT '{}',
-
-                    -- 运动检测配置（JSON）
-                    motion_config TEXT DEFAULT '{}',
-
-                    -- 事件输出配置（JSON）
-                    event_config TEXT DEFAULT '{}',
-
-                    -- 显示配置（JSON）
-                    display_config TEXT DEFAULT '{}',
+                    -- 事件输出 / 显示 开关（任务级；其余参数由 config/*.yaml 全局提供）
+{_switch_columns_ddl()}
 
                     -- 事件规则去重（任务级）
                     dedup_enabled BOOLEAN DEFAULT 1,
@@ -804,8 +1163,6 @@ class TaskManager:
                     voice_mp3 VARCHAR(255) DEFAULT '',
                     voice_loop_count INTEGER DEFAULT 1,
                     voice_interval_ms INTEGER DEFAULT 1000,
-                    -- 区域人数报警阈值（仅人员统计检测生效）
-                    count_alarm_threshold INTEGER DEFAULT 0,
                     voice_volume REAL DEFAULT 1.0,
 
                     -- 时间戳
@@ -825,6 +1182,7 @@ class TaskManager:
                     channel_source VARCHAR(50) DEFAULT 'local_platform',
                     enabled INTEGER DEFAULT 1,
                     zones_config TEXT,
+                    counting_lines TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
@@ -856,6 +1214,12 @@ class TaskManager:
             if 'zones_config' not in dcp_cols:
                 cursor.execute("ALTER TABLE device_channel_pool ADD COLUMN zones_config TEXT")
                 logger.info("[TaskManager] device_channel_pool 表添加 zones_config 字段")
+
+            # 人员统计计数区域存储位置统一：单机画线为通道级（device_channel_pool.counting_lines）
+            # 画线区域本质属于某一路相机的画面，与通道级 zones_config 同级存储
+            if 'counting_lines' not in dcp_cols:
+                cursor.execute("ALTER TABLE device_channel_pool ADD COLUMN counting_lines TEXT")
+                logger.info("[TaskManager] device_channel_pool 表添加 counting_lines 字段")
 
             # 数据迁移：把任务-通道绑定表中的 zones_config 迁移到通道表（按 channel_id 取非空值）
             # 迁移后清空绑定表的 zones_config，使通道表成为唯一数据源
@@ -1053,7 +1417,9 @@ class TaskManager:
 
             # ========================================
             # 人员统计（people counting）数据表
-            # counting_zones: 任务级计数区域定义（与通道级 zones_config 多边形隔离）
+            # 计数区域按层级拆分存储：
+            #   - 单机画线（模式A）：通道级，存于 device_channel_pool.counting_lines
+            #   - 多机进出（模式B）：任务级，本表按 in/out 通道对描述跨通道关系
             # counting_stats: 按天复位的计数状态（唯一键 task_id+zone_name+channel_id+count_date）
             # 按天复位：所有读写都以 count_date 为键，跨天即视为从零开始。
             # ========================================
@@ -1062,14 +1428,9 @@ class TaskManager:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task_id INTEGER NOT NULL,
                     zone_name VARCHAR(100) NOT NULL,
-                    mode VARCHAR(10) NOT NULL,
-                    channel_id INTEGER,
-                    cross_line TEXT,
-                    in_side INTEGER DEFAULT 1,
-                    inertia INTEGER DEFAULT 3,
-                    min_displacement FLOAT DEFAULT 0.02,
                     in_channels TEXT,
                     out_channels TEXT,
+                    alarm_threshold INTEGER DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
@@ -1091,6 +1452,9 @@ class TaskManager:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_counting_stats_unique
                 ON counting_stats (task_id, zone_name, channel_id, count_date)
             ''')
+
+            # 计数区域分层迁移：单机画线行搬迁到通道级，counting_zones 收敛为方向专用
+            migrate_counting_zone_levels(cursor)
 
             # ========================================
             # 迁移：历史事件状态归一化（保证事件列表只有 initial/final/duplicate 三种状态）
@@ -1215,15 +1579,17 @@ class TaskManager:
             if 'voice_volume' not in columns:
                 cursor.execute("ALTER TABLE detection_tasks ADD COLUMN voice_volume REAL DEFAULT 1.0")
                 logger.info("数据库迁移: 添加 voice_volume 字段到 detection_tasks 表")
-            if 'count_alarm_threshold' not in columns:
-                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN count_alarm_threshold INTEGER DEFAULT 0")
-                logger.info("数据库迁移: 添加 count_alarm_threshold 字段到 detection_tasks 表")
 
             # 添加语义检测类型（事件类型）字段
             if 'event_type' not in columns:
                 cursor.execute("ALTER TABLE detection_tasks ADD COLUMN event_type VARCHAR(20) DEFAULT 'tracking'")
                 logger.info("数据库迁移: 添加 event_type 字段到 detection_tasks 表")
-            
+
+            # 配置结构迁移总入口：
+            # 1) 解码/检测/跟踪/运动配置改由 config/*.yaml 统一提供，删除四个全局配置列并新增任务级 conf_threshold
+            # 2) 事件输出/显示配置的布尔开关提升为任务级独立列，删除 event_config/display_config JSON 列
+            migrate_task_config_schema(cursor)
+
             # algorithms 表保留（不删除），避免旧触发器/外键引用失败
             # 实际算法配置已迁移到 algorithm_configs 表
             
@@ -1248,19 +1614,10 @@ class TaskManager:
 
             now = datetime.now()
 
-            cursor.execute('''
-                INSERT INTO detection_tasks
-                (task_name, enabled, status, detection_type, event_type, polling_interval_frames, motion_gate_fallback_interval,
-                 schedule_cron, schedule_source, file_paths, file_loop,
-                 dedup_enabled, dedup_window_seconds, dedup_iou_threshold,
-                 voice_enabled, voice_mp3, voice_loop_count, voice_interval_ms, voice_volume, count_alarm_threshold,
-                 algorithm, model_path, model_type, labels_file, target_classes,
-                 motion_detection_enabled, tracking_enabled,
-                 decoder_config, detector_config,
-                 tracker_config, motion_config, event_config, display_config,
-                 created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
+            # 列顺序：标量字段 + 事件输出/显示开关列（任务级独立列）+ 时间戳
+            insert_columns = list(TASK_FIELD_COLUMNS) + list(TASK_SWITCH_COLUMNS) + ['created_at', 'updated_at']
+
+            insert_values = [
                 task.task_name,
                 task.enabled,
                 task.status,
@@ -1280,23 +1637,21 @@ class TaskManager:
                 task.voice_loop_count,
                 task.voice_interval_ms,
                 task.voice_volume,
-                task.count_alarm_threshold,
                 task.algorithm,
                 task.model_path,
                 task.model_type,  # 模型类型字段
                 task.labels_file,  # 标签文件路径
                 json.dumps(task.target_classes),
+                task.conf_threshold,
                 task.motion_detection_enabled,
                 task.tracking_enabled,
-                json.dumps(task.decoder_config),
-                json.dumps(task.detector_config),
-                json.dumps(task.tracker_config),
-                json.dumps(task.motion_config),
-                json.dumps(task.event_config),
-                json.dumps(task.display_config),
-                now,
-                now
-            ))
+            ] + [bool(getattr(task, column)) for column in TASK_SWITCH_COLUMNS] + [now, now]
+
+            placeholders = ', '.join(['?'] * len(insert_columns))
+            cursor.execute(
+                f"INSERT INTO detection_tasks ({', '.join(insert_columns)}) VALUES ({placeholders})",
+                insert_values
+            )
 
             conn.commit()
             task_id = cursor.lastrowid
@@ -1306,60 +1661,19 @@ class TaskManager:
     def get_task(self, task_id: int) -> Optional[DetectionTask]:
         """获取单个任务"""
         with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            # 明确指定列名查询，避免ALTER TABLE导致的列顺序问题
-            cursor.execute('''SELECT id, task_name, enabled, status, detection_type,
-                              algorithm, model_path, model_type, labels_file, target_classes,
-                              motion_detection_enabled, tracking_enabled,
-                              decoder_config, detector_config, tracker_config,
-                              motion_config, event_config, display_config,
-                              created_at, updated_at,
-                              polling_interval_frames, motion_gate_fallback_interval,
-                              schedule_cron, schedule_source, file_paths, file_loop,
-                              dedup_enabled, dedup_window_seconds, dedup_iou_threshold,
-                              voice_enabled, voice_mp3, voice_loop_count, voice_interval_ms, voice_volume,
-                              event_type,
-                              count_alarm_threshold
-                              FROM detection_tasks WHERE id = ?''', (task_id,))
+            # 显式指定列名并按名称访问，避免 ALTER TABLE 导致的列顺序问题
+            cursor.execute(
+                f"SELECT {', '.join(TASK_SELECT_COLUMNS)} FROM detection_tasks WHERE id = ?",
+                (task_id,)
+            )
             row = cursor.fetchone()
 
             if row:
                 task = self._row_to_task(row)
                 return task
             return None
-    
-    def get_config_overrides(self, task_id: int, columns: List[str]) -> Dict[str, Dict]:
-        """读取任务表中配置列的原始覆盖值（不合并 YAML 默认值）
-
-        任务表只保存"按任务动态调整"的少量参数，其余由 config/*.yaml 提供；
-        更新配置时需以库中覆盖值为基准合并，避免把 YAML 快照写回任务表。
-        """
-        allowed = ('decoder_config', 'detector_config', 'tracker_config',
-                   'motion_config', 'event_config', 'display_config')
-        selected = [column for column in columns if column in allowed]
-        if not selected:
-            return {}
-
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"SELECT {', '.join(selected)} FROM detection_tasks WHERE id = ?",
-                (task_id,)
-            )
-            row = cursor.fetchone()
-
-        if not row:
-            return {}
-
-        overrides = {}
-        for index, column in enumerate(selected):
-            raw = row[index]
-            try:
-                loaded = json.loads(raw) if raw else {}
-            except (json.JSONDecodeError, TypeError):
-                loaded = {}
-            overrides[column] = loaded if isinstance(loaded, dict) else {}
-        return overrides
 
     def get_all_tasks(self, enabled_only: bool = False, status: str = None) -> List[DetectionTask]:
         """获取所有任务
@@ -1372,22 +1686,11 @@ class TaskManager:
             任务列表
         """
         with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
-            # 明确指定列名查询，避免ALTER TABLE导致的列顺序问题
-            query = '''SELECT id, task_name, enabled, status, detection_type,
-                       algorithm, model_path, model_type, labels_file, target_classes,
-                       motion_detection_enabled, tracking_enabled,
-                       decoder_config, detector_config, tracker_config,
-                       motion_config, event_config, display_config,
-                       created_at, updated_at,
-                       polling_interval_frames, motion_gate_fallback_interval,
-                       schedule_cron, schedule_source, file_paths, file_loop,
-                       dedup_enabled, dedup_window_seconds, dedup_iou_threshold,
-                       voice_enabled, voice_mp3, voice_loop_count, voice_interval_ms, voice_volume,
-                       event_type,
-                       count_alarm_threshold
-                       FROM detection_tasks WHERE 1=1'''
+            # 显式指定列名并按名称访问，避免 ALTER TABLE 导致的列顺序问题
+            query = f"SELECT {', '.join(TASK_SELECT_COLUMNS)} FROM detection_tasks WHERE 1=1"
             params = []
 
             if enabled_only:
@@ -1406,66 +1709,27 @@ class TaskManager:
             return tasks
     
     def update_task(self, task_id: int, updates: Dict) -> bool:
-        """更新任务"""
-        # 调试日志：打印接收到的更新数据
-        logger.debug(f"[TaskManager] 更新任务: ID={task_id}")
-        logger.debug(f"[TaskManager] 接收到的更新字段: {list(updates.keys())}")
-        if 'event_config' in updates:
-            logger.debug(f"[TaskManager] event_config 内容: {json.dumps(updates['event_config'], ensure_ascii=False, indent=2)}")
-        
+        """更新任务（仅接受任务表已有的标量列与开关列）"""
+        logger.debug(f"[TaskManager] 更新任务: ID={task_id}, 字段={list(updates.keys())}")
+
+        json_fields = ('target_classes', 'file_paths')
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            
-            # JSON 字段列表
-            json_fields = ['target_classes', 'file_paths', 'decoder_config', 'detector_config',
-                          'tracker_config', 'motion_config', 'event_config', 'display_config']
 
-            updatable_fields = {
-                'task_name': 'task_name',
-                'enabled': 'enabled',
-                'status': 'status',
-                'detection_type': 'detection_type',
-                'event_type': 'event_type',  # 语义检测类型（事件类型）
-                'polling_interval_frames': 'polling_interval_frames',
-                'motion_gate_fallback_interval': 'motion_gate_fallback_interval',
-                'schedule_cron': 'schedule_cron',
-                'schedule_source': 'schedule_source',
-                'file_paths': 'file_paths',
-                'file_loop': 'file_loop',
-                'dedup_enabled': 'dedup_enabled',
-                'dedup_window_seconds': 'dedup_window_seconds',
-                'dedup_iou_threshold': 'dedup_iou_threshold',
-                'voice_enabled': 'voice_enabled',  # 报警语音播报开关
-                'voice_mp3': 'voice_mp3',  # 报警语音 MP3 预置文件名
-                'voice_loop_count': 'voice_loop_count',  # 播放循环次数
-                'voice_interval_ms': 'voice_interval_ms',  # 循环播放时间间隙（毫秒）
-                'voice_volume': 'voice_volume',  # 播放音量
-                'count_alarm_threshold': 'count_alarm_threshold',  # 区域人数报警阈值（仅人员统计）
-                'algorithm': 'algorithm',
-                'model_path': 'model_path',
-                'model_type': 'model_type',  # 模型类型字段支持更新
-                'labels_file': 'labels_file',  # 标签文件路径支持更新
-                'target_classes': 'target_classes',
-                'motion_detection_enabled': 'motion_detection_enabled',
-                'tracking_enabled': 'tracking_enabled',
-                'decoder_config': 'decoder_config',
-                'detector_config': 'detector_config',
-                'tracker_config': 'tracker_config',
-                'motion_config': 'motion_config',
-                'event_config': 'event_config',
-                'display_config': 'display_config'
-            }
-            
             set_clause = []
             params = []
-            
-            for field, column in updatable_fields.items():
-                if field in updates:
-                    set_clause.append(f'{column} = ?')
-                    if field in json_fields:
-                        params.append(json.dumps(updates[field]))
-                    else:
-                        params.append(updates[field])
+
+            for field in TASK_FIELD_COLUMNS + TASK_SWITCH_COLUMNS:
+                if field not in updates:
+                    continue
+                value = updates[field]
+                if field in TASK_SWITCH_COLUMNS:
+                    value = _coerce_bool(value, _SWITCH_DEFAULTS[field])
+                elif field in json_fields:
+                    value = json.dumps(value)
+                set_clause.append(f'{field} = ?')
+                params.append(value)
             
             if not set_clause:
                 return False
@@ -1506,88 +1770,66 @@ class TaskManager:
             
             return success
     
-    def _row_to_task(self, row: tuple) -> DetectionTask:
-        """将数据库行转换为 DetectionTask 对象"""
-        # 安全解析 JSON 字段（不补充默认值，完全使用数据库配置）
-        def safe_json_loads(value, default):
-            """解析JSON并返回（不补充默认值）"""
-            if not value:
-                return default
-            try:
-                loaded = json.loads(value)
-                if isinstance(loaded, (dict, list)):
-                    return loaded
-                return default
-            except (json.JSONDecodeError, TypeError):
-                return default
+    def _row_to_task(self, row: sqlite3.Row) -> DetectionTask:
+        """将数据库行转换为 DetectionTask 对象（按列名访问，避免列顺序依赖）"""
 
-        # 安全解析JSON并补充默认值（用于需要向后兼容的配置）
-        def safe_json_loads_with_defaults(value, default):
-            """解析JSON并补充默认值（用于字典类型）"""
-            if not value:
-                return default
+        def cell(name: str, default=None):
+            """读取列值；列为 NULL 或不存在时返回默认值"""
             try:
-                loaded = json.loads(value)
-                if not isinstance(loaded, dict):
-                    return default
-                # 补充默认值中不存在的新字段
-                result = default.copy()
-                result.update(loaded)
-                return result
-            except (json.JSONDecodeError, TypeError):
+                value = row[name]
+            except (IndexError, KeyError):
                 return default
-        
-        # 安全解析列表类型的 JSON 字段
-        def safe_json_loads_list(value, default):
-            """解析JSON列表并返回（用于列表类型）"""
-            if not value:
-                return default
+            return default if value is None else value
+
+        def json_list(name: str) -> List:
+            """解析列表类型的 JSON 列"""
+            raw = cell(name)
+            if not raw:
+                return []
             try:
-                loaded = json.loads(value)
-                if isinstance(loaded, list):
-                    return loaded
-                return default
+                loaded = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
-                return default
-        
-        return DetectionTask(
-            id=row[0],
-            task_name=row[1] or '',
-            enabled=row[2],
-            status=row[3] or 'stopped',
-            detection_type=row[4] if len(row) > 4 else 'realtime',  # 检测类型字段
-            algorithm=row[5] if len(row) > 5 else 'yolov11',
-            model_path=row[6] if len(row) > 6 else 'models/yolov11n.onnx',
-            model_type=row[7] if len(row) > 7 and row[7] else 'yolov11n',  # 模型类型字段
-            labels_file=row[8] if len(row) > 8 and row[8] else '',  # 标签文件路径（索引 8）
-            target_classes=safe_json_loads_list(row[9] if len(row) > 9 else None, []),  # 索引 9，空列表表示不限制
-            motion_detection_enabled=row[10] if len(row) > 10 else True,  # 索引 10，默认启用
-            tracking_enabled=row[11] if len(row) > 11 else True,  # 索引 11
-            decoder_config=safe_json_loads_with_defaults(row[12] if len(row) > 12 else None, get_default_decoder_config()),  # 索引 12
-            detector_config=safe_json_loads_with_defaults(row[13] if len(row) > 13 else None, get_default_detector_config()),  # 索引 13
-            tracker_config=safe_json_loads_with_defaults(row[14] if len(row) > 14 else None, get_default_tracker_config()),  # 索引 14
-            motion_config=safe_json_loads_with_defaults(row[15] if len(row) > 15 else None, get_default_motion_config()),  # 索引 15
-            event_config=safe_json_loads_with_defaults(row[16] if len(row) > 16 else None, get_default_event_config()),  # 索引 16
-            display_config=safe_json_loads_with_defaults(row[17] if len(row) > 17 else None, get_default_display_config()),  # 索引 17
-            created_at=parse_datetime(row[18] if len(row) > 18 else None),  # 索引 18
-            updated_at=parse_datetime(row[19] if len(row) > 19 else None),  # 索引 19
-            polling_interval_frames=row[20] if len(row) > 20 and row[20] is not None else 5,  # 索引 20
-            motion_gate_fallback_interval=row[21] if len(row) > 21 and row[21] is not None else 30,  # 索引 21
-            schedule_cron=row[22] if len(row) > 22 and row[22] else '',  # 索引 22
-            schedule_source=row[23] if len(row) > 23 and row[23] else '',  # 索引 23
-            file_paths=safe_json_loads_list(row[24] if len(row) > 24 else None, []),  # 索引 24
-            file_loop=bool(row[25]) if len(row) > 25 else False,  # 索引 25
-            dedup_enabled=bool(row[26]) if len(row) > 26 and row[26] is not None else True,  # 索引 26
-            dedup_window_seconds=row[27] if len(row) > 27 and row[27] is not None else 300,  # 索引 27
-            dedup_iou_threshold=float(row[28]) if len(row) > 28 and row[28] is not None else 0.85,  # 索引 28
-            voice_enabled=bool(row[29]) if len(row) > 29 and row[29] is not None else False,  # 索引 29
-            voice_mp3=row[30] if len(row) > 30 and row[30] else '',  # 索引 30
-            voice_loop_count=row[31] if len(row) > 31 and row[31] is not None else 1,  # 索引 31
-            voice_interval_ms=row[32] if len(row) > 32 and row[32] is not None else 1000,  # 索引 32
-            voice_volume=float(row[33]) if len(row) > 33 and row[33] is not None else 1.0,  # 索引 33
-            event_type=row[34] if len(row) > 34 and row[34] else 'tracking',  # 索引 34（语义检测类型/事件类型）
-            count_alarm_threshold=int(row[35]) if len(row) > 35 and row[35] is not None else 0  # 索引 35（区域人数报警阈值）
+                return []
+            return loaded if isinstance(loaded, list) else []
+
+        task = DetectionTask(
+            id=cell('id'),
+            task_name=cell('task_name', '') or '',
+            enabled=bool(cell('enabled', True)),
+            status=cell('status', 'stopped') or 'stopped',
+            detection_type=cell('detection_type', 'realtime') or 'realtime',
+            event_type=cell('event_type', 'tracking') or 'tracking',
+            polling_interval_frames=cell('polling_interval_frames', 5),
+            motion_gate_fallback_interval=cell('motion_gate_fallback_interval', 30),
+            schedule_cron=cell('schedule_cron', '') or '',
+            schedule_source=cell('schedule_source', '') or '',
+            file_paths=json_list('file_paths'),
+            file_loop=bool(cell('file_loop', False)),
+            dedup_enabled=bool(cell('dedup_enabled', True)),
+            dedup_window_seconds=cell('dedup_window_seconds', 300),
+            dedup_iou_threshold=float(cell('dedup_iou_threshold', 0.85)),
+            voice_enabled=bool(cell('voice_enabled', False)),
+            voice_mp3=cell('voice_mp3', '') or '',
+            voice_loop_count=cell('voice_loop_count', 1),
+            voice_interval_ms=cell('voice_interval_ms', 1000),
+            voice_volume=float(cell('voice_volume', 1.0)),
+            algorithm=cell('algorithm', 'yolov11') or 'yolov11',
+            model_path=cell('model_path', 'models/yolov11n.onnx') or 'models/yolov11n.onnx',
+            model_type=cell('model_type', 'yolov11n') or 'yolov11n',
+            labels_file=cell('labels_file', '') or '',
+            target_classes=json_list('target_classes'),
+            conf_threshold=float(cell('conf_threshold', 0.25)),
+            motion_detection_enabled=bool(cell('motion_detection_enabled', True)),
+            tracking_enabled=bool(cell('tracking_enabled', True)),
+            created_at=parse_datetime(cell('created_at')),
+            updated_at=parse_datetime(cell('updated_at')),
         )
+
+        # 事件输出 / 显示开关列（任务级独立列）
+        for column in TASK_SWITCH_COLUMNS:
+            setattr(task, column, _coerce_bool(cell(column), _SWITCH_DEFAULTS[column]))
+
+        return task
     
     # ========================================
     # 事件管理
@@ -2205,65 +2447,163 @@ class TaskManager:
         return self.save_channel_zones(channel_id, [])
 
     # ========================================
-    # 人员统计计数区域（任务级，独立于通道级 zones_config）
+    # 人员统计计数区域（区域配置属于通道级别）
+    #   单机画线（模式A）：通道级，存于 device_channel_pool.counting_lines
+    #   多机进出（模式B）：任务级 counting_zones（in/out 通道对，跨通道关系）
     # ========================================
 
-    def get_counting_zones(self, task_id: int, channel_id: int = None) -> List[Dict]:
-        """获取任务的计数区域配置
-
-        Args:
-            task_id: 任务ID
-            channel_id: 可选。提供时按通道过滤并标注相机角色：
-                - line 模式：仅当 channel_id 等于区域画线相机时返回，role='line'
-                - direction 模式：in/out_channels 含该通道时返回，role='in'/'out'
-            不提供时返回任务全部区域行（role 留空）。
-
-        Returns:
-            计数区域字典列表
-        """
-        rows = []
+    def get_channel_counting_lines(self, channel_id: int) -> List[Dict]:
+        """获取通道的单机画线计数区域（通道级）"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM counting_zones WHERE task_id = ?", (task_id,))
-            cols = [d[0] for d in cursor.description]
-            for r in cursor.fetchall():
-                rows.append(dict(zip(cols, r)))
+            cursor.execute(
+                "SELECT counting_lines FROM device_channel_pool WHERE id = ?",
+                (channel_id,)
+            )
+            row = cursor.fetchone()
 
-        if channel_id is not None:
-            filtered = []
-            for z in rows:
-                mode = z.get('mode')
-                if mode == 'line':
-                    if int(z.get('channel_id') or 0) == int(channel_id):
-                        z['role'] = 'line'
-                        filtered.append(z)
-                elif mode == 'direction':
-                    in_chs = [int(x) for x in safe_json_loads(z.get('in_channels'), [])]
-                    out_chs = [int(x) for x in safe_json_loads(z.get('out_channels'), [])]
-                    if int(channel_id) in in_chs:
-                        z['role'] = 'in'
-                        filtered.append(z)
-                    elif int(channel_id) in out_chs:
-                        z['role'] = 'out'
-                        filtered.append(z)
-            return filtered
-        return rows
+        if not row:
+            return []
+        lines = safe_json_loads(row[0], [])
+        return lines if isinstance(lines, list) else []
 
-    def save_counting_zones(self, task_id: int, zones: List[Dict]) -> bool:
-        """保存任务的计数区域配置（清空替换 + task_id 内 zone_name 唯一校验）
+    def save_channel_counting_lines(self, channel_id: int, lines: List[Dict]) -> bool:
+        """保存通道的单机画线计数区域（清空替换 + 通道内 zone_name 唯一校验）
 
         Args:
-            task_id: 任务ID
-            zones: 计数区域列表，每项含：
-                {zone_name, mode, channel_id, cross_line, in_side, inertia,
-                 min_displacement, in_channels, out_channels}
+            channel_id: 通道ID（device_channel_pool.id）
+            lines: 画线区域列表，每项含 {zone_name, cross_line, in_side, inertia, min_displacement, alarm_threshold}
 
         Returns:
             是否保存成功
         """
         try:
-            # 校验：mode 合法、zone_name 非空且任务内唯一
             names = set()
+            normalized = []
+            for line in lines:
+                name = (line.get('zone_name') or '').strip()
+                if not name:
+                    raise ValueError("计数区域名称不能为空")
+                if name in names:
+                    raise ValueError(f"计数区域名称重复: {name}")
+                names.add(name)
+
+                cross_line = line.get('cross_line')
+                if not isinstance(cross_line, list) or len(cross_line) != 2:
+                    raise ValueError(f"计数区域 {name} 缺少有效的分界线（需两个点）")
+
+                normalized.append({
+                    'zone_name': name,
+                    'cross_line': cross_line,
+                    'in_side': int(line.get('in_side', 1)),
+                    'inertia': int(line.get('inertia', 3)),
+                    'min_displacement': float(line.get('min_displacement', 0.02)),
+                    'alarm_threshold': max(0, int(line.get('alarm_threshold', 0) or 0)),
+                })
+
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM device_channel_pool WHERE id = ?", (channel_id,))
+                if not cursor.fetchone():
+                    logger.error(f"保存通道画线计数区域失败: 通道不存在 channel_id={channel_id}")
+                    return False
+
+                cursor.execute(
+                    "UPDATE device_channel_pool SET counting_lines = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (json.dumps(normalized, ensure_ascii=False), channel_id)
+                )
+                conn.commit()
+                # 强制 WAL checkpoint，确保任务子进程能立即读到最新配置
+                try:
+                    cursor.execute("PRAGMA wal_checkpoint(FULL)")
+                except Exception:
+                    pass
+
+            logger.info(f"通道画线计数区域已保存: channel_id={channel_id}, lines_count={len(normalized)}")
+            return True
+        except Exception as e:
+            logger.error(f"保存通道画线计数区域失败: {e}")
+            return False
+
+    def delete_channel_counting_lines(self, channel_id: int) -> bool:
+        """删除通道的单机画线计数区域（重置为空）"""
+        return self.save_channel_counting_lines(channel_id, [])
+
+    def get_counting_directions(self, task_id: int) -> List[Dict]:
+        """获取任务的多机进出计数区域（任务级，仅方向模式）"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM counting_zones WHERE task_id = ? ORDER BY id",
+                (task_id,)
+            )
+            cols = [d[0] for d in cursor.description]
+            return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    def get_counting_zones(self, task_id: int, channel_id: int = None) -> List[Dict]:
+        """按相机获取计数区域（通道级画线 + 任务级方向合并）并标注相机角色
+
+        Args:
+            task_id: 任务ID
+            channel_id: 可选。提供时返回该通道参与的计数区域：
+                - 单机画线：该通道 counting_lines 的全部区域，role='line'
+                - 多机进出：任务级方向区域中 in/out_channels 含该通道的行，role='in'/'out'
+                不提供时仅返回任务级方向区域（role 留空）。
+
+        Returns:
+            计数区域字典列表（结构与 CountingZone.from_row 兼容）
+        """
+        if channel_id is None:
+            return self.get_counting_directions(task_id)
+
+        channel_id = int(channel_id)
+        zones = []
+
+        for line in self.get_channel_counting_lines(channel_id):
+            zones.append({
+                'task_id': task_id,
+                'zone_name': line.get('zone_name', ''),
+                'mode': 'line',
+                'channel_id': channel_id,
+                'role': 'line',
+                'cross_line': line.get('cross_line'),
+                'in_side': line.get('in_side', 1),
+                'inertia': line.get('inertia', 3),
+                'min_displacement': line.get('min_displacement', 0.02),
+                'alarm_threshold': int(line.get('alarm_threshold', 0) or 0),
+                'in_channels': [],
+                'out_channels': [],
+            })
+
+        for zone in self.get_counting_directions(task_id):
+            in_channels = [int(x) for x in safe_json_loads(zone.get('in_channels'), [])]
+            out_channels = [int(x) for x in safe_json_loads(zone.get('out_channels'), [])]
+            if channel_id in in_channels:
+                role = 'in'
+            elif channel_id in out_channels:
+                role = 'out'
+            else:
+                continue
+            zone['role'] = role
+            zone['mode'] = 'direction'
+            zone['channel_id'] = channel_id
+            zones.append(zone)
+
+        return zones
+
+    def save_counting_directions(self, task_id: int, zones: List[Dict]) -> bool:
+        """保存任务的多机进出计数区域（清空替换 + task_id 内 zone_name 唯一校验）
+
+        Args:
+            task_id: 任务ID
+            zones: 方向区域列表，每项含 {zone_name, in_channels, out_channels, alarm_threshold}
+
+        Returns:
+            是否保存成功
+        """
+        try:
+            names = set()
+            normalized = []
             for z in zones:
                 name = (z.get('zone_name') or '').strip()
                 if not name:
@@ -2271,30 +2611,33 @@ class TaskManager:
                 if name in names:
                     raise ValueError(f"计数区域名称重复: {name}")
                 names.add(name)
-                mode = z.get('mode', 'line')
-                if mode not in ('line', 'direction'):
-                    raise ValueError(f"非法计数模式: {mode}")
+
+                in_channels = [int(x) for x in (z.get('in_channels') or [])]
+                out_channels = [int(x) for x in (z.get('out_channels') or [])]
+                if not in_channels and not out_channels:
+                    raise ValueError(f"计数区域 {name} 至少需要一个入口机或出口机")
+
+                normalized.append((
+                    name,
+                    in_channels,
+                    out_channels,
+                    max(0, int(z.get('alarm_threshold', 0) or 0)),
+                ))
 
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM counting_zones WHERE task_id = ?", (task_id,))
-                for z in zones:
+                for name, in_channels, out_channels, alarm_threshold in normalized:
                     cursor.execute('''
                         INSERT INTO counting_zones
-                            (task_id, zone_name, mode, channel_id, cross_line, in_side,
-                             inertia, min_displacement, in_channels, out_channels, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                            (task_id, zone_name, in_channels, out_channels, alarm_threshold, updated_at)
+                        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                     ''', (
                         task_id,
-                        (z.get('zone_name') or '').strip(),
-                        z.get('mode', 'line'),
-                        z.get('channel_id'),
-                        z.get('cross_line') and json.dumps(z.get('cross_line')) or None,
-                        int(z.get('in_side', 1)),
-                        int(z.get('inertia', 3)),
-                        float(z.get('min_displacement', 0.02)),
-                        json.dumps(z.get('in_channels', []) or []),
-                        json.dumps(z.get('out_channels', []) or []),
+                        name,
+                        json.dumps(in_channels),
+                        json.dumps(out_channels),
+                        alarm_threshold,
                     ))
                 conn.commit()
                 # 强制 WAL checkpoint，确保任务子进程能立即读到最新配置
@@ -2302,10 +2645,11 @@ class TaskManager:
                     cursor.execute("PRAGMA wal_checkpoint(FULL)")
                 except Exception:
                     pass
-                logger.info(f"计数区域已保存: task_id={task_id}, zones_count={len(zones)}")
-                return True
+
+            logger.info(f"多机进出计数区域已保存: task_id={task_id}, zones_count={len(normalized)}")
+            return True
         except Exception as e:
-            logger.error(f"保存计数区域失败: {e}")
+            logger.error(f"保存多机进出计数区域失败: {e}")
             return False
 
     def get_counting_stats(self, task_id: int = None,

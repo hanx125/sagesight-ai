@@ -591,11 +591,10 @@ class TrackedObjectProcessor(mp.Process):
             # 初始化 PTZ 跟踪目标
             self.ptz_tracked_object[cam_id] = None
 
-            # 人员统计（people counting）：事件类型为 people_counting（人员统计 = 实时检测 + 事件类型=人员统计，
-            # 兼容旧任务的 detection_type=people_counting）即硬性抑制常规跟踪/区域事件（只产计数事件）；
+            # 人员统计（people counting）：以事件类型为唯一判定依据，
+            # 命中即硬性抑制常规跟踪/区域事件（只产计数事件）；
             # 该相机参与计数区域时才创建 CountingManager 真正产出计数事件
-            is_people_counting = (config.get('event_type') == 'people_counting'
-                                  or config.get('detection_type') == 'people_counting')
+            is_people_counting = config.get('event_type') == 'people_counting'
             if is_people_counting:
                 self.counting_only[cam_id] = True
                 if config.get('counting_zones'):
@@ -822,23 +821,11 @@ class TrackedObjectProcessor(mp.Process):
             lifecycle=False,
             defer_db=False,
         )
-        # 报警语音播报：人员统计任务按"当前区域人数达到阈值"触发服务端语音。
-        # 阈值>0 且当前人数未达标时不播报；阈值<=0 维持原本触发行为。
-        _threshold = self._get_count_alarm_threshold(camera_id)
+        # 报警语音播报：人员统计任务按"该区域当前人数达到区域阈值"触发服务端语音。
+        # 区域阈值>0 且当前人数未达标时不播报；阈值<=0 维持原本触发行为。
+        _threshold = int(payload.get('alarm_threshold', 0) or 0)
         if _threshold <= 0 or int(payload.get('current_count', 0) or 0) >= _threshold:
             self._trigger_alarm_voice(camera_id)
-
-    def _get_count_alarm_threshold(self, camera_id: str) -> int:
-        """获取人员统计任务配置的区域人数报警阈值；未配置或无任务时返回 0。"""
-        task_id = self.camera_configs.get(camera_id, {}).get("task_id")
-        if not task_id:
-            return 0
-        try:
-            from src.tasks.task_manager import get_task_manager
-            task = get_task_manager().get_task(int(task_id))
-            return int(getattr(task, 'count_alarm_threshold', 0) or 0) if task else 0
-        except Exception:
-            return 0
 
     def _emit_tracking_start(self, camera_id: str, obj_dict: dict, wall_time: float) -> Optional[str]:
         """创建跟踪事件（type=tracking, status=tracking_start）并返回 event_id
@@ -1871,12 +1858,13 @@ class TrackedObjectProcessor(mp.Process):
             # 大模型兜底超时：LLM 需要参与终态判定时启动看门狗。
             # 大模型调用异常/失联时，超时后强制完成门闩，避免事件无限悬在 initial。
             if llm_required:
-                threading.Timer(
+                timer = threading.Timer(
                     _get_llm_terminal_timeout(),
                     self._timeout_llm_gate,
                     args=(event_id,),
-                    daemon=True,
-                ).start()
+                )
+                timer.daemon = True
+                timer.start()
 
     def _timeout_llm_gate(self, event_id: str) -> None:
         """大模型兜底超时回调：LLM 未在超时内完成时，强制收尾终态门闩
@@ -2373,7 +2361,8 @@ class TrackedObjectProcessor(mp.Process):
     def _draw_detections_on_frame(self, frame: np.ndarray, camera_id: str,
                                     tracked_objects: dict, motion_boxes: list = None,
                                     regions: list = None,
-                                    detection_results: list = None) -> np.ndarray:
+                                    detection_results: list = None,
+                                    for_event_image: bool = False) -> np.ndarray:
         """
         在帧上绘制区域框、检测框、跟踪框和运动区域（受 display_config 开关管控）
 
@@ -2587,6 +2576,47 @@ class TrackedObjectProcessor(mp.Process):
                     for pt in points:
                         cv2.circle(frame_copy, pt, point_size, point_color, -1)
 
+        # ========================================
+        # 5. 绘制人员统计计数信息（受 show_counting_line 管控，仅 AI 视频流）
+        #    单机画线：按归一化坐标绘制分界线（黄色，两端带起点/终点圆点）
+        #    多机进出：不画线，在画面左下角标注本相机角色「进」/「出」
+        #    事件图片不绘制：事件缩略图按 cover 裁切画面底部，绘制后会被裁断
+        # ========================================
+        if display_cfg.get('show_counting_line', False) and not for_event_image:
+            counting_zones = self.camera_configs.get(camera_id, {}).get('counting_zones', [])
+            if counting_zones:
+                frame_h, frame_w = frame_copy.shape[:2]
+                for zone_cfg in counting_zones:
+                    if zone_cfg.get('mode') == 'direction':
+                        role = zone_cfg.get('role')
+                        if role not in ('in', 'out'):
+                            continue
+                        text = '进' if role == 'in' else '出'
+                        text_color = (76, 175, 80) if role == 'in' else (244, 67, 54)
+                        # 左下角：深色底 + 绿/红文字
+                        # 离底边预留安全边距，且字号随分辨率缩放，避免贴边或过大过小
+                        font_size = max(16, int(frame_h * 0.045))
+                        margin = max(14, int(frame_h * 0.06))
+                        fx = max(10, int(frame_w * 0.02))
+                        fy = frame_h - margin - font_size
+                        cv2.rectangle(frame_copy, (fx - 6, fy - 6),
+                                      (fx + font_size + 12, fy + font_size + 10), (0, 0, 0), -1)
+                        if _has_chinese_font:
+                            draw_utf8_label_on_rgb(frame_copy, text, (fx, fy),
+                                                   font_size=font_size, text_color_rgb=text_color)
+                        else:
+                            cv2.putText(frame_copy, text, (fx, fy + font_size),
+                                        cv2.FONT_HERSHEY_SIMPLEX, font_size / 30.0, text_color, 2)
+                    else:
+                        cross_line = zone_cfg.get('cross_line')
+                        if not cross_line or len(cross_line) < 2:
+                            continue
+                        p1 = (int(cross_line[0][0] * frame_w), int(cross_line[0][1] * frame_h))
+                        p2 = (int(cross_line[1][0] * frame_w), int(cross_line[1][1] * frame_h))
+                        cv2.line(frame_copy, p1, p2, (255, 235, 59), 3)
+                        cv2.circle(frame_copy, p1, 5, (76, 175, 80), -1)
+                        cv2.circle(frame_copy, p2, 5, (244, 67, 54), -1)
+
         return frame_copy
 
     def _prepare_event_image(self, camera_id: str, image: Optional[np.ndarray]) -> Optional[np.ndarray]:
@@ -2610,9 +2640,11 @@ class TrackedObjectProcessor(mp.Process):
         regions = getattr(self, '_current_regions', []) or []
         detection_results = getattr(self, '_current_detection_results', []) or []
 
-        # 事件图片不绘制运动框（motion_boxes=None），只保留检测框/跟踪框/区域框
+        # 事件图片不绘制运动框（motion_boxes=None），只保留检测框/跟踪框/区域框；
+        # 人员统计计数叠加（分界线/进出标识）也只用于实时 AI 画面，不绘制到事件图片
         return self._draw_detections_on_frame(
-            image, camera_id, tracked_objects, None, regions, detection_results
+            image, camera_id, tracked_objects, None, regions, detection_results,
+            for_event_image=True
         )
 
     def _schedule_delayed_gif(self, event_output, event_id: str, camera_id: str,

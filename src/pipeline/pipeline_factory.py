@@ -14,7 +14,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-VALID_DETECTION_TYPES = ('realtime', 'polling', 'motion_gated', 'file', 'scheduled', 'people_counting')
+VALID_DETECTION_TYPES = ('realtime', 'polling', 'motion_gated', 'file', 'scheduled')
 
 
 def get_pipeline(detection_type: str):
@@ -39,11 +39,6 @@ def get_pipeline(detection_type: str):
     if detection_type in ('file', 'scheduled'):
         from src.pipeline.batch_pipeline import run_batch_pipeline
         return run_batch_pipeline
-
-    # 人员统计（people_counting）：复用实时流水线（依赖目标跟踪做画线跨越判定）
-    if detection_type == 'people_counting':
-        from src.pipeline.camera_pipeline import run_pipeline
-        return run_pipeline
 
     # realtime 及未知类型：回退到现有实时流水线
     if detection_type != 'realtime':

@@ -321,7 +321,6 @@ sagesight-AI/
 │   ├── event_output.yaml     # Event output config (GIF, storage methods, push)
 │   ├── tracker_config.yaml   # Tracker config (Norfair parameters)
 │   ├── motion_config.yaml    # Motion detection config
-│   ├── zones_config.yaml     # Zone detection config
 │   └── display_config.yaml   # Display config
 ├── src/                 # Source code
 │   ├── decoders/        # Video decoders

@@ -364,9 +364,9 @@ class CameraWorker:
             model_w = self.detector_params.get('input_width', 640)
             self.model_size = (model_h, model_w)
 
-            # 检测阈值和目标类别
+            # 检测阈值和目标类别（置信度阈值为任务级独立字段）
             detector_config_block = self.task_config.get('detector_config', {})
-            self.detect_threshold = detector_config_block.get('conf_threshold', 0.4)
+            self.detect_threshold = self.task_config.get('conf_threshold', 0.25)
             target_classes = self.task_config.get('target_classes', [])
             self.target_classes = target_classes if target_classes else None
 
@@ -641,6 +641,20 @@ class MultiCameraTaskExecutor:
         self.task_config = task_config
         self.cameras = cameras
 
+        # 解码/检测/跟踪/运动四类配置统一由 config/*.yaml 提供（全局一致、所有任务相同），
+        # 任务表不再保存这四类配置；此处从配置文件加载并注入 task_config，
+        # 供主进程与各工作子进程统一读取（单一来源）
+        from src.tasks.task_manager import (
+            get_default_decoder_config,
+            get_default_detector_config,
+            get_default_tracker_config,
+            get_default_motion_config,
+        )
+        task_config['decoder_config'] = get_default_decoder_config()
+        task_config['detector_config'] = get_default_detector_config()
+        task_config['tracker_config'] = get_default_tracker_config()
+        task_config['motion_config'] = get_default_motion_config()
+
         self.task_id = task_config.get('id')
         self.task_name = task_config.get('task_name', 'unknown')
         self.algorithm = task_config.get('algorithm', 'yolov11')
@@ -702,23 +716,24 @@ class MultiCameraTaskExecutor:
             except Exception as e:
                 logger.debug(f"[MultiCameraExecutor-{self.task_id}] 警告: 无法从算法库读取配置: {e}")
 
-            # 从配置块中读取检测器参数
+            # 从全局配置读取检测器参数（config/detector_config.yaml，所有任务一致）
             detector_config_block = self.task_config.get('detector_config', {})
 
             # ========================================
             # 步骤2：合并配置
             # 算法库为单一真相源：model_path 和 labels_file 优先从算法库读取
             # 避免任务表中的旧路径在算法库更新后失效（如标签文件被重新上传）
+            # 置信度阈值为任务级独立字段，其余检测参数来自 detector_config.yaml
             # ========================================
             detector_config = {
                 'model_path': algorithm_config.get('model_path') or self.task_config.get('model_path') or 'models/detection/yolov11n.onnx',
                 'target_classes': self.task_config.get('target_classes', []),  # 空列表表示不限制检测类别
-                'conf_threshold': detector_config_block.get('conf_threshold', 0.25),
+                'conf_threshold': self.task_config.get('conf_threshold', 0.25),
                 'iou_threshold': detector_config_block.get('iou_threshold', 0.35),
                 'min_box_area': detector_config_block.get('min_box_area', 50),
                 'backend': detector_config_block.get('backend', 'onnx_cuda'),
                 'use_fp16': detector_config_block.get('use_fp16', True),
-                'engine_cache_path': detector_config_block.get('engine_cache_path', './trt_cache'),
+                'tensorrt_engine_cache_path': detector_config_block.get('tensorrt_engine_cache_path', './trt_cache'),
                 'device_id': detector_config_block.get('device_id', 0),
                 'gpu_mem_limit': detector_config_block.get('gpu_mem_limit', 0),
                 'tensorrt_lib_path': detector_config_block.get('tensorrt_lib_path', ''),
@@ -726,7 +741,7 @@ class MultiCameraTaskExecutor:
                 'rknn_target': detector_config_block.get('rknn_target', 'rk3588'),
                 'rknn_device_id': detector_config_block.get('rknn_device_id', ''),
                 'rknn_core_mask': detector_config_block.get('rknn_core_mask', 0),
-                'labels_file': algorithm_config.get('labels_file') or self.task_config.get('labels_file') or detector_config_block.get('labels_file', '')
+                'labels_file': algorithm_config.get('labels_file') or self.task_config.get('labels_file') or ''
             }
 
             logger.info(f"[MultiCameraExecutor-{self.task_id}] 算法={self.algorithm}, 模型路径={detector_config['model_path']}, 标签文件={detector_config['labels_file'] or '未配置'}")
@@ -867,28 +882,26 @@ class MultiCameraTaskExecutor:
                 return False
 
             # 构造 detector_config dict（用于 LocalObjectDetector）
-            # 模型输入尺寸优先级：任务 detector_config（create_task 时从算法库写入）> 算法库 input_size > 640 兜底
-            input_width = detector_config_block.get('input_width')
-            input_height = detector_config_block.get('input_height')
-            if not input_width or not input_height:
-                # 兼容旧任务：回查算法库 input_size（如 "640x640"）
-                input_size_str = algorithm_config.get('input_size', '640x640')
-                try:
-                    # 兼容 '640x640' 和 '640*640' 两种分隔符写法
-                    parts = input_size_str.lower().replace('*', 'x').split('x')
-                    if len(parts) == 2:
-                        input_width = int(parts[0])
-                        input_height = int(parts[1])
-                except Exception:
-                    pass
-            # 最终兜底（算法库缺失或解析失败时），并统一为整数类型
+            # 模型输入尺寸唯一来源为算法库 input_size（如 "640x640"）
+            input_width = None
+            input_height = None
+            input_size_str = algorithm_config.get('input_size', '640x640')
+            try:
+                # 兼容 '640x640' 和 '640*640' 两种分隔符写法
+                parts = input_size_str.lower().replace('*', 'x').split('x')
+                if len(parts) == 2:
+                    input_width = int(parts[0])
+                    input_height = int(parts[1])
+            except Exception:
+                pass
+            # 算法库缺失或解析失败时回退到 640 兜底，并统一为整数类型
             try:
                 input_width = int(input_width or 640)
                 input_height = int(input_height or 640)
             except (TypeError, ValueError):
                 logger.warning(
                     f"[MultiCameraExecutor-{self.task_id}] 输入尺寸配置非法"
-                    f"({input_width}x{input_height})，回退为 640x640"
+                    f"({input_size_str})，回退为 640x640"
                 )
                 input_width, input_height = 640, 640
 
@@ -929,6 +942,7 @@ class MultiCameraTaskExecutor:
                 'device_id': detector_config['device_id'],
                 'gpu_mem_limit': detector_config['gpu_mem_limit'],
                 'tensorrt_lib_path': detector_config['tensorrt_lib_path'],
+                'tensorrt_engine_cache_path': detector_config['tensorrt_engine_cache_path'],
                 'tensorrt_engine_path': detector_config['tensorrt_engine_path'],
                 'rknn_target': detector_config['rknn_target'],
                 'rknn_device_id': detector_config['rknn_device_id'],
@@ -1010,8 +1024,15 @@ class MultiCameraTaskExecutor:
                 # 人员统计：读取本相机（通道）关联的本任务计数区域，并标注相机在
                 # direction 模式下的角色（in/out）；line 模式仅当通道匹配时携带。
                 counting_zones_for_cam = []
-                if self.task_config.get('detection_type') == 'people_counting':
+                # 人员统计以事件类型为唯一判定依据（event_type=people_counting）
+                if self.task_config.get('event_type') == 'people_counting':
                     counting_zones_for_cam = self._load_counting_zones_for_camera(cam)
+                # 计数依赖跟踪轨迹（画线跨越判定 / 方向去重），跟踪关闭时不会有任何计数
+                if counting_zones_for_cam and not self.task_config.get('tracking_enabled', True):
+                    logger.warning(
+                        f"[MultiCameraExecutor-{self.task_id}] 已配置计数区域但目标跟踪未启用，"
+                        f"计数不会执行: camera={cam_id}"
+                    )
                 camera_configs_for_processor[cam_id] = {
                     'frame_shape': (
                         decoder_cfg.get('height', 640),
@@ -1062,11 +1083,11 @@ class MultiCameraTaskExecutor:
             return False
 
     def _load_counting_zones_for_camera(self, cam: Dict) -> list:
-        """人员统计：读取本相机（通道）关联的本任务计数区域并标注角色
+        """人员统计：读取本相机（通道）关联的计数区域并标注角色
 
-        委托 task_manager.get_counting_zones(task_id, channel_id)：
-        - line 模式：channel_id 匹配才返回，role='line'
-        - direction 模式：in/out_channels 含本通道时返回，role='in'/'out'
+        委托 task_manager.get_counting_zones(task_id, channel_id)，区域配置按层级存放：
+        - 单机画线（模式A）：通道级 counting_lines，role='line'
+        - 多机进出（模式B）：任务级方向区域中 in/out_channels 含本通道时返回，role='in'/'out'
         返回 row 字典列表，供 TrackedObjectProcessor 构建 CountingZone。
         """
         try:
@@ -1075,13 +1096,7 @@ class MultiCameraTaskExecutor:
                 return []
             from src.tasks.task_manager import TaskManager
             tm = TaskManager()
-            zones = tm.get_counting_zones(self.task_id, int(channel_id))
-            # direction 模式：zone.channel_id 在表内为 null，
-            # 补充为本相机（通道）的 channel_id，保证计数归属到正确的通道明细
-            for z in zones:
-                if z.get('mode') == 'direction':
-                    z['channel_id'] = int(channel_id)
-            return zones
+            return tm.get_counting_zones(self.task_id, int(channel_id))
         except Exception as e:
             logger.error(f"[TaskExecutor] 加载计数区域失败 channel={cam.get('channel_id')}: {e}")
             return []

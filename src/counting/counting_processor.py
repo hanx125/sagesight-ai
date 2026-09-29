@@ -127,6 +127,8 @@ class CountingManager:
                 'current_count': summary['current_count'],
                 'task_total': task_totals['task_total'],
                 'date': summary['date'],
+                # 区域级人数报警阈值（随事件下发，供报警语音判断是否播报）
+                'alarm_threshold': int(zone.alarm_threshold or 0),
             }
             logger.debug(
                 f"[Counting] {zone_name}: direction={direction}, "

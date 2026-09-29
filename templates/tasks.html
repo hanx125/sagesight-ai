@@ -143,30 +143,21 @@
                                 <input type="hidden" id="algorithm" name="algorithm">
                             </div>
                         </div>
-                        <!-- 事件类型（语义检测类型）：检测什么，就出什么类型的事件 -->
+                        <!-- 事件类型（语义检测类型）：检测什么，就出什么类型的事件；置信度阈值跟随其后 -->
                         <div class="form-row">
                             <div class="form-group">
                                 <label for="eventType">事件类型</label>
-                                <select id="eventType" name="event_type" onchange="Tasks.onEventTypeChange()">
+                                <select id="eventType" name="event_type">
                                     <option value="tracking">目标跟踪</option>
                                     <option value="zone">区域入侵</option>
                                     <option value="loitering">徘徊检测</option>
                                     <option value="people_counting">人员统计</option>
                                 </select>
                             </div>
-                            <div class="form-group" id="countAlarmThresholdGroup" style="display: none;">
-                                <label for="countAlarmThreshold">人数报警阈值 <span class="required">*</span></label>
-                                <input type="number" id="countAlarmThreshold" name="count_alarm_threshold" min="0" step="1" value="0" placeholder="当前区域人数达到该值触发语音报警">
-                            </div>
-                        </div>
-                        <!-- 人员统计：计数区域配置（单机画线从通道图标进入，多机进出为任务级配置） -->
-                        <div class="form-row" id="countingConfigGroup" style="display: none;">
-                            <div class="form-group" style="flex: 1 1 100%;">
-                                <label>计数区域配置</label>
-                                <div style="display: flex; gap: 8px; align-items: center;">
-                                    <input type="text" id="countingConfigSummary" readonly placeholder="单机画线请在通道上点击计数图标配置">
-                                    <button type="button" class="btn btn-sm btn-primary" onclick="Tasks.openCountingZoneDirectionConfig()" title="多机进出模式不绑定单个通道，从任务通道池勾选入口机/出口机">多机进出配置</button>
-                                </div>
+                            <div class="form-group">
+                                <label for="taskConfThreshold">置信度阈值</label>
+                                <input type="number" id="taskConfThreshold" name="conf_threshold" step="0.01" min="0" max="1" value="0.25" placeholder="0.25">
+                                <small style="color: #888; font-size: 12px;">低于此阈值的检测框会被过滤</small>
                             </div>
                         </div>
                         <!-- 轮询检测参数 -->
@@ -340,66 +331,172 @@
             <form id="configForm" style="display: flex; flex-direction: column; width: 100%; height: 100%;">
                 <input type="hidden" id="configTaskId">
 
-                <!-- 选项卡导航 -->
-                <div class="config-tabs">
-                    <div class="config-tab active" data-tab="detector" onclick="switchConfigTab('detector')">检测器</div>
-                    <div class="config-tab" data-tab="event" onclick="switchConfigTab('event')">事件输出</div>
-                </div>
+                <!-- 配置内容（全部同页展示，单列滚动） -->
+                <div class="config-body">
 
-                <!-- 选项卡内容区域 -->
-                <div class="config-tab-content">
-
-                <!-- 检测器配置（仅置信度阈值） -->
-                <div class="form-section tab-panel active" data-tab="detector">
-                    <h4 class="form-section-title">检测器配置</h4>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="detectorConfThreshold">置信度阈值</label>
-                            <input type="number" id="detectorConfThreshold" name="detector_conf_threshold" step="0.01" min="0" max="1" placeholder="0.25">
-                            <small style="color: #888; font-size: 12px;">低于此阈值的检测框会被过滤</small>
-                        </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group form-group-full">
-                            <small style="color: var(--text-secondary); font-size: 12px;">
-                                推理后端、精度、IoU、最小框面积、GPU/RKNN 等参数已统一由
-                                config/detector_config.yaml 配置，修改后重启任务生效。
-                            </small>
-                        </div>
+                <div class="form-row">
+                    <div class="form-group form-group-full">
+                        <small style="color: var(--text-secondary); font-size: 12px;">
+                            置信度阈值已移至任务新增/编辑对话框；解码、检测、跟踪、运动等参数统一由
+                            config/decoder_config.yaml、detector_config.yaml、tracker_config.yaml、
+                            motion_config.yaml 全局配置，所有任务一致，修改后重启任务生效。
+                        </small>
                     </div>
                 </div>
 
-                <!-- 事件输出配置（仅事件输出开关与报警语音播报） -->
-                <div class="form-section tab-panel" data-tab="event">
-                    <h4 class="form-section-title">事件输出配置</h4>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="eventEnabled">启用事件输出</label>
-                            <select id="eventEnabled" name="event_enabled">
-                                <option value="true">启用</option>
-                                <option value="false">禁用</option>
-                            </select>
-                        </div>
+                <!-- 事件输出配置（任务级开关 + 报警语音播报；其余参数由 config/event_output.yaml 全局提供） -->
+                <div class="form-section">
+                    <h4 class="form-section-title">事件输出开关（任务级）</h4>
+
+                    <h5 class="switch-group-title">总开关</h5>
+                    <div class="switch-grid">
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">启用事件输出</span>
+                        </label>
                     </div>
-                    <div class="form-row">
+
+                    <h5 class="switch-group-title">图片输出</h5>
+                    <div class="switch-grid">
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_image_local_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">本地存储</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_image_minio_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">MinIO 上传</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_image_ftp_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">FTP 上传</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_image_auto_cleanup">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">自动清理过期图片</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_image_draw_bbox">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">绘制检测框</span>
+                        </label>
+                    </div>
+
+                    <h5 class="switch-group-title">GIF 输出</h5>
+                    <div class="switch-grid">
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_gif_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">启用 GIF 输出</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_gif_local_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">本地存储</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_gif_minio_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">MinIO 上传</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_gif_ftp_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">FTP 上传</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_gif_auto_cleanup">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">自动清理过期 GIF</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_gif_draw_trajectory">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">绘制运动轨迹</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_gif_draw_bbox">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">绘制检测框</span>
+                        </label>
+                    </div>
+
+                    <h5 class="switch-group-title">压缩与采集</h5>
+                    <div class="switch-grid">
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_compression_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">启用图片压缩</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_capture_save_full_on_start">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">开始采集时保存原图</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="event_capture_save_full_on_end">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">结束采集时保存原图</span>
+                        </label>
+                    </div>
+
+                    <div class="form-row" style="margin-top: 16px;">
                         <div class="form-group form-group-full">
                             <small style="color: var(--text-secondary); font-size: 12px;">
-                                图片/GIF 的存储方式、目录、压缩、采集与去重参数已统一由
-                                config/event_output.yaml、config/system_config.yaml 配置。
+                                存储目录、压缩质量、GIF 采集帧数与事件去重等参数由 config/event_output.yaml
+                                全局配置，所有任务一致，修改后重启任务生效。
                             </small>
                         </div>
                     </div>
 
                     <!-- 报警语音播报（触发区域入侵/徘徊报警时，服务端播放任务指定的 MP3） -->
-                    <div class="form-row" style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
-                        <div class="form-group">
-                            <label for="voiceEnabled">报警语音播报</label>
-                            <select id="voiceEnabled" name="voice_enabled">
-                                <option value="false">不播报（默认）</option>
-                                <option value="true">播报</option>
-                            </select>
-                            <small style="color: #888; font-size: 12px;">区域入侵/徘徊报警时服务端播放语音；未指定MP3时回退到全局默认语音</small>
-                        </div>
+                    <h5 class="switch-group-title" style="margin-top: 24px; border-top: 1px solid var(--border-color); padding-top: 16px;">报警语音播报</h5>
+                    <div class="switch-grid">
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" id="voiceEnabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">报警时播放语音</span>
+                        </label>
+                    </div>
+                    <div class="form-row" style="margin-top: 12px;">
                         <div class="form-group">
                             <label for="voiceMp3">播放语音（MP3）</label>
                             <select id="voiceMp3" name="voice_mp3">
@@ -422,7 +519,99 @@
                     </div>
                 </div>
 
-                </div><!-- config-tab-content -->
+                <!-- 显示配置（任务级开关；其余显示参数由 config/display_config.yaml 全局提供） -->
+                <div class="form-section">
+                    <h4 class="form-section-title">显示开关（任务级）</h4>
+
+                    <h5 class="switch-group-title">画面叠加</h5>
+                    <div class="switch-grid">
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="display_show_detection_boxes">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">显示检测框</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="display_show_track_boxes">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">显示跟踪框</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="display_show_trajectories">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">显示运动轨迹</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="display_show_motion_regions">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">显示运动区域</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="display_show_zones">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">显示区域（多边形/分界线）</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="display_show_counting_line">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">显示人员统计计数（分界线 / 进出门标识）</span>
+                        </label>
+                    </div>
+
+                    <h5 class="switch-group-title">跟踪与报警提示</h5>
+                    <div class="switch-grid">
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="display_loitering_blink">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">徘徊目标闪烁</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="display_alarm_zone_enter_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">区域入侵报警</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="display_alarm_loitering_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">徘徊报警</span>
+                        </label>
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="display_alarm_show_banner">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">报警横幅提示</span>
+                        </label>
+                    </div>
+
+                    <div class="form-row" style="margin-top: 16px;">
+                        <div class="form-group form-group-full">
+                            <small style="color: var(--text-secondary); font-size: 12px;">
+                                线宽、颜色、字体、闪烁频率与横幅样式等参数由 config/display_config.yaml
+                                全局配置，所有任务一致，修改后重启任务生效。
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
+                </div><!-- config-body -->
             </form>
         </div>
         <div class="modal-footer">
@@ -560,11 +749,11 @@
 <div id="countingZoneConfigModal" class="modal">
     <div class="modal-content modal-large" style="max-width: 1100px;">
         <div class="modal-header">
-            <h3><span id="countingZoneConfigTitle">单机画线计数配置</span> - 任务 <span id="countingZoneTaskName"></span></h3>
+            <h3 id="countingZoneConfigTitle">计数区域配置</h3>
             <button class="modal-close" onclick="closeCountingZoneConfig()">&times;</button>
         </div>
         <div class="modal-body">
-            <div class="zone-config-layout">
+            <div class="zone-config-layout" id="countingZoneLayout">
                 <!-- 左侧：区域列表 -->
                 <div class="zone-panel-section">
                     <div class="zone-panel-block zone-panel-block-fill">
@@ -581,10 +770,10 @@
                     </div>
                 </div>
 
-                <!-- 中间：Canvas 画布（模式A 画分界线用） -->
-                <div class="zone-canvas-section">
+                <!-- 中间：Canvas 画布（画分界线用，多机进出模式下隐藏） -->
+                <div class="zone-canvas-section" id="countingZoneCanvasSection">
                     <div class="zone-canvas-toolbar">
-                        <span class="zone-canvas-hint" id="countingZoneCanvasHint">先选中“模式A：单机画线”区域并选择摄像机，再在画布上点击两个点绘制分界线（再次点击按钮可调整进入侧）</span>
+                        <span class="zone-canvas-hint" id="countingZoneCanvasHint">在画布上按住鼠标左键确定起点，拖动到终点后松开完成分界线（分界线一侧为进入侧），保存后立即对该通道生效</span>
                         <button type="button" class="btn btn-sm btn-secondary" onclick="resetCountingLine()" style="display:none;" id="resetCountingLineBtn">重置分界线</button>
                     </div>
                     <canvas id="countingZoneCanvas" width="640" height="480" style="border: 1px solid var(--border-color); background: #2a2a2a; cursor: crosshair; max-width: 100%;"></canvas>
@@ -602,8 +791,8 @@
                             <div class="form-group">
                                 <label for="countingZoneMode">计数模式</label>
                                 <select id="countingZoneMode" onchange="onCountingZoneModeChange()">
-                                    <option value="line">单机画分界线（进出相减）</option>
-                                    <option value="direction">多机进出方向汇总</option>
+                                    <option value="line">单机画分界线（单通道，进出相减）</option>
+                                    <option value="direction">多机进出方向汇总（多通道）</option>
                                 </select>
                             </div>
                             <!-- 模式A：单机画线 -->
@@ -611,6 +800,7 @@
                                 <div class="form-group">
                                     <label for="countingZoneLineChannel">画线摄像机</label>
                                     <select id="countingZoneLineChannel" onchange="onCountingZoneChannelChange()"></select>
+                                    <small style="color: #888; font-size: 12px;">分界线归属该通道，切换摄像机会清除已绘制分界线</small>
                                 </div>
                                 <div class="form-group">
                                     <label>进入侧方向（分界线一侧）</label>
@@ -636,13 +826,18 @@
                                 <label for="countingZoneInertia">进入惯性（帧）</label>
                                 <input type="number" id="countingZoneInertia" min="1" max="60" value="3" onchange="onCountingZonePropChange()">
                             </div>
+                            <div class="form-group">
+                                <label for="countingZoneAlarmThreshold">人数报警阈值</label>
+                                <input type="number" id="countingZoneAlarmThreshold" min="0" step="1" value="0" onchange="onCountingZonePropChange()" placeholder="当前区域人数达到该值触发语音报警">
+                                <small style="color: #888; font-size: 12px;">0 表示不按人数触发报警</small>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" onclick="refreshCountingSnapshot()">
+            <button type="button" class="btn btn-secondary" id="refreshCountingSnapshotBtn" onclick="refreshCountingSnapshot()">
                 <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;margin-right:4px;">
                     <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
                 </svg>
@@ -666,6 +861,11 @@
         flex-direction: column;
         gap: 8px;
         min-width: 0;
+    }
+    /* 多机进出模式无画布：属性面板占满画布让出的宽度 */
+    .zone-config-layout.no-canvas .zone-panel-section:last-child {
+        flex: 1;
+        width: auto;
     }
     .zone-canvas-toolbar {
         display: flex;
@@ -918,9 +1118,9 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{{ url_for('static', filename='js/tasks.js') }}?v=20260926a"></script>
-<script src="{{ url_for('static', filename='js/config_modal.js') }}?v=20260926a"></script>
+<script src="{{ url_for('static', filename='js/tasks.js') }}?v=20260929e"></script>
+<script src="{{ url_for('static', filename='js/config_modal.js') }}?v=20260929c"></script>
 <script src="{{ url_for('static', filename='js/zone_canvas_editor.js') }}?v=20260801a"></script>
 <script src="{{ url_for('static', filename='js/channel_zone_config.js') }}?v=20260801a"></script>
-<script src="{{ url_for('static', filename='js/counting_zone_config.js') }}?v=20260924a"></script>
+<script src="{{ url_for('static', filename='js/counting_zone_config.js') }}?v=20260929drag"></script>
 {% endblock %}

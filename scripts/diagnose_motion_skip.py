@@ -11,7 +11,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.tasks.task_manager import TaskManager
+from src.tasks.task_manager import TaskManager, get_default_motion_config
 
 def diagnose_motion_efficiency():
     """诊断运动检测效率"""
@@ -33,7 +33,8 @@ def diagnose_motion_efficiency():
         print(f"\n任务: {task.task_name} (ID: {task.id})")
         print(f"  运动检测启用: {task.motion_detection_enabled}")
 
-        motion_config = task.motion_config
+        # 运动配置为全局配置（config/motion_config.yaml），所有任务一致
+        motion_config = get_default_motion_config()
 
         # 诊断1：运动检测参数是否合理
         print(f"\n  [诊断1] 运动检测参数分析:")

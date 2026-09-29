@@ -63,6 +63,8 @@ SageSight.registerPage('/', function() {
     initMonitorEventList();
     // 初始化电视墙下方可视化图表
     initCharts();
+    // 按本地记忆的开关状态初始化电视墙声音按钮
+    updateWallAudioButton();
 });
 
 // ========================================
@@ -81,7 +83,7 @@ var _alarmConfig = {
 };
 
 // 每任务报警配置缓存：{task_id: alarm 配置}
-// 单一真相源为任务表 display_config.alarm，此处仅缓存运行中任务的配置
+// 单一真相源为任务表的显示开关列 + config/display_config.yaml，接口按任务组装后下发，此处仅缓存运行中任务的配置
 var _alarmConfigByTask = {};
 
 // 报警运行时状态
@@ -113,7 +115,7 @@ async function fetchAlarmConfig() {
     }
 }
 
-// 加载运行中任务的报警配置缓存（每任务独立，单一真相源为任务表 display_config.alarm）
+// 加载运行中任务的报警配置缓存（每任务独立，来自任务显示开关列 + config/display_config.yaml 组装结果）
 async function loadAlarmConfigCache() {
     try {
         const resp = await fetch('/api/tasks?status=running&per_page=1000');
@@ -667,6 +669,11 @@ function generateScreens(count) {
                 <div class="screen-overlay">
                     <div class="screen-info" id="screenInfo${i}"></div>
                     <div class="screen-controls">
+                        <button class="screen-btn" id="screenAudioBtn${i}" onclick="Monitor.toggleScreenAudio(${i}, event)" title="该路声音开关">
+                            <svg viewBox="0 0 24 24" fill="currentColor" id="screenAudioIcon${i}">
+                                <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.26c2.89.86 5 3.54 5 6.51zM1.27 0L0 1.27 4.28 5.55H0v11h4.5l5 5v-6.67l4.25 4.25 1.27-1.27-9.77-9.77zm11.73 7.23l-1.27 1.27L16 12.5l2.5 2.5 1.27-1.27-5.5-5.5z"/>
+                            </svg>
+                        </button>
                         <button class="screen-btn" onclick="Monitor.toggleAIMode(${i}, event)" title="切换 AI/普通模式">
                             <svg viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM8 15c0-1.66 1.34-3 3-3 .35 0 .69.07 1 .18V6h5v2h-3v7.03A3.003 3.003 0 0 1 11 18c-1.66 0-3-1.34-3-3z"/>
@@ -691,6 +698,12 @@ function generateScreens(count) {
     }
     
     monitorWall.innerHTML = html;
+
+    // 新布局重新生成单路按钮：清空单路设置，按当前开关状态初始化
+    screenAudioState = {};
+    for (let i = 0; i < count; i++) {
+        updateScreenAudioButton(i);
+    }
     
     // 恢复旧画面（如果布局变大）
     oldScreens.forEach((screen, index) => {
@@ -840,7 +853,7 @@ function playWithWebRTC(containerId, camera) {
         return;
     }
 
-    // 清空容器，创建video元素
+    // 清空容器，创建video元素（声音按电视墙开关状态初始化）
     container.innerHTML = `
         <video id="webrtcVideo${containerId}" 
                autoplay 
@@ -848,6 +861,7 @@ function playWithWebRTC(containerId, camera) {
                style="width:100%;height:100%;background-color:#000;object-fit:contain;">
         </video>
     `;
+    initWallAudio(document.getElementById(`webrtcVideo${containerId}`));
 
     // 检查 ZLMRTCClient 是否已加载
     if (typeof window.ZLMRTCClient === 'undefined') {
@@ -1078,6 +1092,7 @@ function playWithFlvJs(containerId, camera) {
     `;
 
     const videoElement = document.getElementById(`flvVideo${containerId}`);
+    initWallAudio(videoElement);
 
     try {
         // 销毁已有实例
@@ -1350,6 +1365,7 @@ function playVideoFileNormal(screenIndex, camera) {
     `;
 
     const video = document.getElementById(`videoPlayer${screenIndex}`);
+    initWallAudio(video);
 
     // 监听视频加载事件
     video.addEventListener('loadeddata', function() {
@@ -1655,18 +1671,6 @@ function clearScreen(index, event) {
 function clearAllScreens() {
     for (let i = 0; i < currentLayout; i++) {
         clearScreen(i);
-    }
-}
-
-// ========================================
-// 自动排列
-// ========================================
-
-function autoArrange() {
-    const onlineCameras = cameras.filter(c => c.status === 'online');
-    
-    for (let i = 0; i < Math.min(currentLayout, onlineCameras.length); i++) {
-        playOnScreen(i, onlineCameras[i].id);
     }
 }
 
@@ -2118,6 +2122,117 @@ function toggleMonitorWallFullscreen() {
             console.error('电视墙全屏失败:', err);
         });
     }
+}
+
+// ========================================
+// 电视墙声音开关
+// ========================================
+
+// 控制电视墙各画面的视频声音，状态本地记忆；默认关闭（静音）
+var WALL_AUDIO_STORAGE_KEY = 'monitorWallAudio';
+var wallAudioEnabled = false;
+try {
+    wallAudioEnabled = localStorage.getItem(WALL_AUDIO_STORAGE_KEY) === '1';
+} catch (e) {}
+
+// 单路声音状态（画面序号 -> bool）：单路开关优先于全局开关，未单独设置时跟随全局
+var screenAudioState = {};
+
+var WALL_AUDIO_ICON_ON = '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.7 7-8.77s-2.99-7.86-7-8.77z"/>';
+var WALL_AUDIO_ICON_OFF = '<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.26c2.89.86 5 3.54 5 6.51zM1.27 0L0 1.27 4.28 5.55H0v11h4.5l5 5v-6.67l4.25 4.25 1.27-1.27-9.77-9.77zm11.73 7.23l-1.27 1.27L16 12.5l2.5 2.5 1.27-1.27-5.5-5.5z"/>';
+
+// 浏览器要求先有用户交互才允许带声音自动播放：首次交互后补应用一次开关状态
+document.addEventListener('click', function onFirstClick() {
+    document.removeEventListener('click', onFirstClick);
+    if (wallAudioEnabled) applyWallAudio();
+});
+
+// 取某路画面正在播放的 video 元素
+function getScreenVideo(screenIndex) {
+    var container = document.getElementById(`screenContainer${screenIndex}`);
+    return container ? container.querySelector('video') : null;
+}
+
+// 单路声音是否开启：单路单独设置优先，未设置时跟随全局开关
+function isScreenAudioEnabled(screenIndex) {
+    var state = screenAudioState[screenIndex];
+    return state === undefined ? wallAudioEnabled : state === true;
+}
+
+// 单路声音状态同步到该画面的按钮图标
+function updateScreenAudioButton(screenIndex) {
+    var btn = document.getElementById(`screenAudioBtn${screenIndex}`);
+    if (!btn) return;
+    var enabled = isScreenAudioEnabled(screenIndex);
+    var icon = document.getElementById(`screenAudioIcon${screenIndex}`);
+    btn.classList.toggle('active', enabled);
+    btn.title = enabled ? '该路声音已开启，点击关闭' : '该路声音已关闭，点击开启';
+    if (icon) icon.innerHTML = enabled ? WALL_AUDIO_ICON_ON : WALL_AUDIO_ICON_OFF;
+}
+
+// 把声音状态应用到某一路画面
+function applyScreenAudio(screenIndex) {
+    var enabled = isScreenAudioEnabled(screenIndex);
+    var video = getScreenVideo(screenIndex);
+    if (video) {
+        video.muted = !enabled;
+        if (enabled) {
+            // 开启声音后重新起播，避免被浏览器自动播放策略拦截
+            var p = video.play();
+            if (p && typeof p.catch === 'function') p.catch(function() {});
+        }
+    }
+    updateScreenAudioButton(screenIndex);
+}
+
+// 新画面按当前开关状态初始化声音
+function initWallAudio(video) {
+    if (!video) return;
+    var cell = video.closest ? video.closest('.screen-cell') : null;
+    var screenIndex = cell ? parseInt(cell.getAttribute('data-index'), 10) : NaN;
+    if (isNaN(screenIndex)) {
+        video.muted = !wallAudioEnabled;
+        return;
+    }
+    video.muted = !isScreenAudioEnabled(screenIndex);
+    updateScreenAudioButton(screenIndex);
+}
+
+// 全局声音开关状态同步到工具栏按钮外观
+function updateWallAudioButton() {
+    var btn = document.getElementById('wallAudioBtn');
+    if (!btn) return;
+    var icon = document.getElementById('wallAudioIcon');
+    var label = document.getElementById('wallAudioLabel');
+    btn.classList.toggle('active', wallAudioEnabled);
+    btn.title = wallAudioEnabled ? '电视墙声音已开启，点击关闭' : '电视墙声音已关闭，点击开启';
+    if (icon) icon.innerHTML = wallAudioEnabled ? WALL_AUDIO_ICON_ON : WALL_AUDIO_ICON_OFF;
+    if (label) label.textContent = wallAudioEnabled ? '声音开' : '声音关';
+}
+
+// 全局开关：所有画面统一跟随全局状态（清空单路单独设置）
+function applyWallAudio() {
+    screenAudioState = {};
+    screens.forEach(function(screen, index) {
+        applyScreenAudio(index);
+    });
+    updateWallAudioButton();
+}
+
+function toggleWallAudio() {
+    wallAudioEnabled = !wallAudioEnabled;
+    try {
+        localStorage.setItem(WALL_AUDIO_STORAGE_KEY, wallAudioEnabled ? '1' : '0');
+    } catch (e) {}
+    applyWallAudio();
+    showNotification(wallAudioEnabled ? '电视墙声音已开启' : '电视墙声音已关闭', 'success');
+}
+
+// 单路声音开关：只影响当前这一路画面
+function toggleScreenAudio(screenIndex, event) {
+    if (event) event.stopPropagation();
+    screenAudioState[screenIndex] = !isScreenAudioEnabled(screenIndex);
+    applyScreenAudio(screenIndex);
 }
 
 // ========================================
@@ -3658,6 +3773,32 @@ async function renderEventTrendChart() {
 }
 
 // 人员统计（各区域进入/离开人数柱状图）
+// 多区域展示：按区域数量撑开画布宽度并横向滚动，坐标轴标签折行显示，
+// 保证区域数量较多时每个区域的统计都能被看到，且标签不被自动跳过。
+var PEOPLE_STATS_ZONE_WIDTH = 58;   // 单个区域（标签 + 三根柱子）的最小占宽（px）
+var PEOPLE_STATS_MIN_WIDTH = 240;   // 画布最小宽度（px）
+var PEOPLE_STATS_LABEL_CHARS = 7;   // 坐标轴标签每行最多字符数
+var PEOPLE_STATS_MANY_ZONES = 6;    // 超过该区域数量按多区域展示（缩小标签字号）
+
+// 截断过长文本（超出部分用省略号）
+function _truncateText(text, maxChars) {
+    var s = String(text == null ? '' : text);
+    return s.length > maxChars ? s.slice(0, maxChars - 1) + '…' : s;
+}
+
+// 区域标签折行：超长时按每行 maxChars 折行，Chart.js 按数组分行渲染
+function _wrapZoneLabel(text, maxChars) {
+    var s = String(text == null ? '' : text).trim();
+    if (!s || s.length <= maxChars) return s;
+    var lines = [];
+    while (s.length > maxChars && lines.length < 2) {
+        lines.push(s.slice(0, maxChars));
+        s = s.slice(maxChars);
+    }
+    if (s) lines.push(_truncateText(s, maxChars));
+    return lines;
+}
+
 async function renderPeopleStatsChart() {
     var canvas = document.getElementById('peopleStatsChart');
     if (!canvas || typeof Chart === 'undefined') return;
@@ -3671,16 +3812,37 @@ async function renderPeopleStatsChart() {
     } catch (e) {
         console.error('加载人员统计失败，使用空数据:', e);
     }
-    var labels = zones.map(function(z) { return z.zone_name || '未知区域'; });
+    // 无计数记录时显示占位提示，隐藏画布
+    var emptyTip = document.getElementById('peopleStatsEmpty');
+    var scroll = document.getElementById('peopleStatsScroll');
+    var inner = document.getElementById('peopleStatsInner');
+    if (emptyTip) emptyTip.style.display = zones.length ? 'none' : 'flex';
+    if (scroll) scroll.style.visibility = zones.length ? 'visible' : 'hidden';
+
+    // 按区域数量撑开画布：区域少时铺满面板，区域多时横向滚动
+    if (inner) {
+        inner.style.minWidth = Math.max(zones.length * PEOPLE_STATS_ZONE_WIDTH, PEOPLE_STATS_MIN_WIDTH) + 'px';
+    }
+
+    var manyZones = zones.length > PEOPLE_STATS_MANY_ZONES;
+    // 坐标轴只展示区域名称；完整名称供 tooltip 展示（折行时可能被截断）
+    var fullLabels = zones.map(function(z) { return z.zone_name || '未知区域'; });
+    var labels = fullLabels.map(function(t) { return _wrapZoneLabel(t, PEOPLE_STATS_LABEL_CHARS); });
     var entered = zones.map(function(z) { return z.entered; });
     var left = zones.map(function(z) { return z.left; });
+    // 当前人数 = 进入 - 离开（后端按区域聚合的 current_count）
+    var current = zones.map(function(z) { return (typeof z.current === 'number') ? z.current : (z.entered - z.left); });
+    var totalPeople = current.reduce(function(a, b) { return a + b; }, 0);
     var th = _chartsTheme();
 
     if (_peopleStatsChart) {
         _peopleStatsChart.data.labels = labels;
         _peopleStatsChart.data.datasets[0].data = entered;
         _peopleStatsChart.data.datasets[1].data = left;
-        _peopleStatsChart.options.plugins.title.text = '区域总数: ' + totalZones;
+        _peopleStatsChart.data.datasets[2].data = current;
+        _peopleStatsChart.$fullLabels = fullLabels;
+        _peopleStatsChart.options.scales.x.ticks.font.size = manyZones ? 10 : 11;
+        _peopleStatsChart.options.plugins.title.text = '区域总数: ' + totalZones + '    当前人数: ' + totalPeople;
         _peopleStatsChart.update();
         return;
     }
@@ -3698,6 +3860,11 @@ async function renderPeopleStatsChart() {
                     label: '离开人数',
                     data: left,
                     backgroundColor: _chartColors.warning
+                },
+                {
+                    label: '当前人数',
+                    data: current,
+                    backgroundColor: _chartColors.success
                 }
             ]
         },
@@ -3708,17 +3875,37 @@ async function renderPeopleStatsChart() {
                 legend: { position: 'bottom', labels: { boxWidth: 12, padding: 8, font: { size: 11 }, color: th.text } },
                 title: {
                     display: true,
-                    text: '区域总数: ' + totalZones,
+                    text: '区域总数: ' + totalZones + '    当前人数: ' + totalPeople,
                     font: { size: 13 },
                     color: th.textStrong
+                },
+                tooltip: {
+                    callbacks: {
+                        // 坐标轴标签已折行/截断，tooltip 展示完整区域名称
+                        title: function(items) {
+                            if (!items || !items.length) return '';
+                            var full = items[0].chart.$fullLabels || [];
+                            return full[items[0].dataIndex] || items[0].label;
+                        }
+                    }
                 }
             },
             scales: {
-                x: { ticks: { font: { size: 11 }, maxRotation: 40, minRotation: 0, color: th.text }, grid: { color: th.grid } },
+                x: {
+                    ticks: {
+                        autoSkip: false,
+                        maxRotation: 0,
+                        minRotation: 0,
+                        font: { size: manyZones ? 10 : 11 },
+                        color: th.text
+                    },
+                    grid: { color: th.grid }
+                },
                 y: { beginAtZero: true, ticks: { precision: 0, font: { size: 11 }, color: th.text }, grid: { color: th.grid } }
             }
         }
     });
+    _peopleStatsChart.$fullLabels = fullLabels;
 }
 
 // ========================================
@@ -3727,8 +3914,9 @@ async function renderPeopleStatsChart() {
 return {
     setLayout: setLayout,
     clearAllScreens: clearAllScreens,
+    toggleWallAudio: toggleWallAudio,
+    toggleScreenAudio: toggleScreenAudio,
     cleanup: cleanupMonitorPage,
-    autoArrange: autoArrange,
     toggleMonitorWallFullscreen: toggleMonitorWallFullscreen,
     playCurrentStream: playCurrentStream,
     toggleStreamSelector: toggleStreamSelector,

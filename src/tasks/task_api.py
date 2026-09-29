@@ -22,29 +22,6 @@ _task_manager = None
 _process_manager = None
 _socketio = None
 
-def _normalize_detector_gpu_mem_limit(detector_config: dict) -> dict:
-    """归一化 detector_config.gpu_mem_limit 为 int（统一字节单位，入库前调用）。
-
-    单位契约（统一传字节）：所有调用方——AI 前端 config_modal.js 与边缘平台——
-    提交时均已将 MB 乘以 1024*1024 转成字节，因此这里不再做单位猜测：
-      - > 0 的值视为已是字节，保持原值（仅转 int）；
-      - 0 或 None 表示不限制，保持不变。
-    禁止再做"< 1GB 视为 MB 再乘"的启发式，否则会把已转字节的小值
-    （如 512MB=536870912）误判为 MB 二次放大。
-    """
-    if not isinstance(detector_config, dict):
-        return detector_config
-    if 'gpu_mem_limit' not in detector_config:
-        return detector_config
-    val = detector_config['gpu_mem_limit']
-    if val is None:
-        return detector_config
-    try:
-        detector_config['gpu_mem_limit'] = int(val)
-    except (TypeError, ValueError):
-        pass
-    return detector_config
-
 
 def get_task_manager():
     """获取任务管理器实例"""
@@ -177,7 +154,11 @@ def create_task():
     if not data.get('task_name'):
         return jsonify({'error': '缺少必填字段: task_name'}), 400
 
-    from src.tasks.task_manager import DetectionTask
+    from src.tasks.task_manager import (
+        DetectionTask,
+        TASK_SWITCH_COLUMNS,
+        coerce_switch_value,
+    )
     from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager, DeviceChannelPool
     from src.cameras.camera_manager import get_camera_manager
 
@@ -185,33 +166,23 @@ def create_task():
     # 配置来源（config/*.yaml 为单一真相源）
     # ========================================
     # 任务表仅保存"按任务动态调整"的少量参数，其余配置一律由 config/*.yaml 提供：
-    #   detector_config -> conf_threshold（另由算法库派生 input_width/input_height）
-    #   event_config    -> enabled
-    #   decoder/tracker/motion/display_config -> 不再写入任务表
-    # TaskManager._row_to_task 读取时会合并 YAML 默认值，因此这里无需补齐默认值，
-    # 避免把 YAML 快照固化到任务表、造成同一参数存在多个来源。
-
-    # gpu_mem_limit 入库前 MB→字节（前端表单单位为 MB，后端统一转字节存储）
-    detector_config = _normalize_detector_gpu_mem_limit(dict(data.get('detector_config') or {}))
-    event_config = dict(data.get('event_config') or {})
-    decoder_config = data.get('decoder_config') or {}
-    tracker_config = data.get('tracker_config') or {}
-    motion_config = data.get('motion_config') or {}
-    display_config = data.get('display_config') or {}
-
-    # 区域配置唯一来源为通道表（device_channel_pool.zones_config），
-    # 任务表不再保存区域配置：剥离 event_config.capture.required_zones，防止重复来源
-    if isinstance(event_config, dict):
-        capture_cfg = event_config.get('capture', {})
-        if isinstance(capture_cfg, dict) and 'required_zones' in capture_cfg:
-            del capture_cfg['required_zones']
-            logger.info("[TaskApi] 创建任务：已剥离 event_config.capture.required_zones（区域配置仅存于通道表）")
+    #   conf_threshold -> 任务级独立列
+    #   event_output.yaml / display_config.yaml 中的布尔开关 -> 任务级独立列
+    #   decoder/detector/tracker/motion 及事件/显示的非开关参数 -> 全局配置，不写入任务表
+    # 区域配置唯一来源为通道表（device_channel_pool.zones_config），任务表不保存
 
     # target_classes：空数组表示不限制检测类别（检测所有类别）
     target_classes = data.get('target_classes', [])
+    conf_threshold = float(data.get('conf_threshold') if data.get('conf_threshold') is not None else 0.25)
+
+    # 事件输出 / 显示开关（任务级独立列，未提交时取 config/*.yaml 默认值）
+    switch_values = {
+        column: coerce_switch_value(column, data.get(column))
+        for column in TASK_SWITCH_COLUMNS
+    }
 
     # ========================================
-    # 从算法库获取标签路径和模型输入尺寸（算法库为单一真相源）
+    # 从算法库获取标签路径（算法库为单一真相源）
     # ========================================
     algorithm_name = data.get('algorithm', 'yolov11')
     labels_file = ''
@@ -221,25 +192,13 @@ def create_task():
         if algo_config:
             # 标签路径：从算法库 labels_file 拷贝到任务表（独立字段）
             labels_file = algo_config.labels_file or ''
-            # 模型输入尺寸：解析算法库 input_size（如 '640x640'）写入 detector_config
-            # 算法库为模型尺寸单一真相源，覆盖 merge_config 中的默认 640
-            input_size_str = algo_config.input_size or '640x640'
-            try:
-                # 兼容 '640x640' 和 '640*640' 两种分隔符写法
-                parts = input_size_str.lower().replace('*', 'x').split('x')
-                if len(parts) == 2:
-                    detector_config['input_width'] = int(parts[0])
-                    detector_config['input_height'] = int(parts[1])
-            except Exception as e:
-                logger.warning(f"解析算法库 input_size 失败: {input_size_str}, 错误: {e}")
         else:
-            logger.warning(f"算法库中未找到算法: {algorithm_name}, labels_file/模型尺寸使用默认值")
+            logger.warning(f"算法库中未找到算法: {algorithm_name}, labels_file 使用默认值")
     except Exception as e:
-        logger.error(f"查询算法库失败: {e}, labels_file/模型尺寸使用默认值")
+        logger.error(f"查询算法库失败: {e}, labels_file 使用默认值")
 
-    # 语义检测类型（事件类型）：人员统计任务未显式指定时自动联动为 people_counting
-    event_type = data.get('event_type', '') or \
-        ('people_counting' if data.get('detection_type') == 'people_counting' else 'tracking')
+    # 语义检测类型（事件类型）：未显式指定时默认目标跟踪（人员统计由 event_type 判定）
+    event_type = data.get('event_type') or 'tracking'
 
     task = DetectionTask(
         task_name=data.get('task_name', ''),
@@ -257,20 +216,15 @@ def create_task():
         voice_loop_count=int(data.get('voice_loop_count', 1)),  # 播放循环次数
         voice_interval_ms=int(data.get('voice_interval_ms', 1000)),  # 循环播放时间间隙（毫秒）
         voice_volume=float(data.get('voice_volume', 1.0)),  # 播放音量
-        count_alarm_threshold=int(data.get('count_alarm_threshold', 0) or 0),  # 区域人数报警阈值（仅人员统计）
         algorithm=data.get('algorithm', 'yolov11'),
         model_path=data.get('model_path', 'models/yolov11n.onnx'),
         model_type=data.get('model_type', 'yolov11n'),  # 模型类型字段
         labels_file=labels_file,  # 标签文件路径（从算法库拷贝）
         target_classes=target_classes,
+        conf_threshold=conf_threshold,  # 检测置信度阈值（任务级）
         motion_detection_enabled=data.get('motion_detection_enabled', True),
         tracking_enabled=data.get('tracking_enabled', True),
-        decoder_config=decoder_config,
-        detector_config=detector_config,
-        tracker_config=tracker_config,
-        motion_config=motion_config,
-        event_config=event_config,
-        display_config=display_config
+        **switch_values
     )
 
     task_manager = get_task_manager()
@@ -349,85 +303,10 @@ def update_task(task_id: int):
         return jsonify({'error': '任务不存在'}), 404
 
     # ========================================
-    # 配置合并逻辑（更新任务时）
-    # ========================================
-    # 规则：
-    # 1. 读取数据库中的现有配置（如果有）
-    # 2. 如果前端传了配置，合并前端配置（前端值覆盖现有值）
-    # 3. 如果前端未传配置，保持数据库中的现有配置（不修改）
-    # 4. 重要：保留现有配置中前端未包含的字段（防止配置丢失）
-
-    def merge_config_for_update(existing_config: dict, frontend_config: dict) -> dict:
-        """
-        更新时合并配置（前端值覆盖现有值，保留未提交的字段）
-
-        Args:
-            existing_config: 数据库中的现有配置
-            frontend_config: 前端传入值（可能为None或空字典）
-
-        Returns:
-            合并后的完整配置
-        """
-        if not frontend_config or not isinstance(frontend_config, dict) or len(frontend_config) == 0:
-            return existing_config
-
-        # 深拷贝现有配置，避免修改原数据
-        merged = {}
-        
-        # 1. 先复制现有配置中的所有字段（保留未提交的字段）
-        for key, value in existing_config.items():
-            if isinstance(value, dict):
-                # 字典类型：深拷贝
-                merged[key] = value.copy()
-            elif isinstance(value, list):
-                # 列表类型：复制列表
-                merged[key] = value.copy()
-            else:
-                # 其他类型：直接复制
-                merged[key] = value
-        
-        # 2. 合并前端配置（前端值覆盖现有值）
-        for key, value in frontend_config.items():
-            if isinstance(value, dict) and key in merged and isinstance(merged[key], dict):
-                # 如果都是字典，递归合并
-                merged[key].update(value)
-            else:
-                # 否则直接覆盖
-                merged[key] = value
-        
-        return merged
-
-    # 配置字段列表
-    config_fields = ['decoder_config', 'detector_config', 'tracker_config',
-                     'motion_config', 'event_config', 'display_config']
-
     # 准备更新数据（深拷贝避免修改原始数据）
+    # 任务级配置仅由"独立列"承载（conf_threshold、事件输出/显示开关等），
+    # 其余由 config/*.yaml 全局提供；此处不再做 JSON 配置合并
     update_data = data.copy()
-
-    # 处理配置字段的合并
-    # 任务表只保存"按任务动态调整"的覆盖值（YAML 提供其余配置），
-    # 因此以库中原始覆盖值为基准合并，避免把 YAML 快照写回任务表
-    raw_overrides = task_manager.get_config_overrides(task_id, config_fields)
-    for config_field in config_fields:
-        if config_field in update_data:
-            existing_config = raw_overrides.get(config_field, {})
-            # 合并前端配置
-            merged_config = merge_config_for_update(existing_config, update_data[config_field])
-            # 更新到待更新数据
-            update_data[config_field] = merged_config
-
-    # gpu_mem_limit 入库前 MB→字节（前端表单单位为 MB，后端统一转字节存储）
-    if 'detector_config' in update_data:
-        update_data['detector_config'] = _normalize_detector_gpu_mem_limit(update_data['detector_config'])
-
-    # 区域配置唯一来源为通道表（device_channel_pool.zones_config），
-    # 任务表不再保存区域配置：剥离 event_config.capture.required_zones，防止重复来源
-    merged_event_config = update_data.get('event_config')
-    if isinstance(merged_event_config, dict):
-        capture_cfg = merged_event_config.get('capture', {})
-        if isinstance(capture_cfg, dict) and 'required_zones' in capture_cfg:
-            del capture_cfg['required_zones']
-            logger.info(f"[TaskApi] 更新任务 {task_id}：已剥离 event_config.capture.required_zones（区域配置仅存于通道表）")
 
     # 1. 更新任务本身的配置
     success = task_manager.update_task(task_id, update_data)
@@ -1132,25 +1011,69 @@ def delete_channel_zones(task_id: int, channel_id: int):
 
 
 # ========================================
-# 人员统计计数区域 API（任务级）
+# 人员统计计数区域 API
+#   单机画线（模式A）：通道级，/channels/<channel_id>/counting-lines
+#   多机进出（模式B）：任务级，/tasks/<task_id>/counting-zones
 # ========================================
+
+@task_bp.route('/channels/<int:channel_id>/counting-lines', methods=['GET'])
+def get_channel_counting_lines(channel_id: int):
+    """获取通道的单机画线计数区域（通道级）"""
+    task_manager = get_task_manager()
+    lines = task_manager.get_channel_counting_lines(channel_id)
+    return jsonify({'channel_id': channel_id, 'lines': lines})
+
+
+@task_bp.route('/channels/<int:channel_id>/counting-lines', methods=['POST'])
+def save_channel_counting_lines(channel_id: int):
+    """保存通道的单机画线计数区域（通道级，清空替换）"""
+    data = request.json
+    if not data:
+        return jsonify({'error': '请求数据无效'}), 400
+
+    lines = data.get('lines', [])
+    task_manager = get_task_manager()
+
+    success = task_manager.save_channel_counting_lines(channel_id, lines)
+    if not success:
+        return jsonify({'error': '通道画线计数区域保存失败'}), 400
+
+    if _socketio:
+        _socketio.emit('counting_zones_updated', {'channel_id': channel_id})
+    return jsonify({
+        'message': '通道画线计数区域保存成功',
+        'channel_id': channel_id,
+        'lines_count': len(lines)
+    })
+
+
+@task_bp.route('/channels/<int:channel_id>/counting-lines', methods=['DELETE'])
+def delete_channel_counting_lines(channel_id: int):
+    """删除通道的单机画线计数区域（重置为空）"""
+    task_manager = get_task_manager()
+    success = task_manager.delete_channel_counting_lines(channel_id)
+    if not success:
+        return jsonify({'error': '通道画线计数区域删除失败'}), 500
+
+    if _socketio:
+        _socketio.emit('counting_zones_updated', {'channel_id': channel_id})
+    return jsonify({'message': '通道画线计数区域已删除', 'channel_id': channel_id})
+
 
 @task_bp.route('/tasks/<int:task_id>/counting-zones', methods=['GET'])
 def get_counting_zones(task_id: int):
-    """获取任务的计数区域配置"""
+    """获取任务的多机进出计数区域配置（任务级）"""
     task_manager = get_task_manager()
-    zones = task_manager.get_counting_zones(task_id)
+    zones = task_manager.get_counting_directions(task_id)
     return jsonify({'task_id': task_id, 'zones': zones})
 
 
 @task_bp.route('/tasks/<int:task_id>/counting-zones', methods=['POST'])
 def save_counting_zones(task_id: int):
-    """保存任务的计数区域配置（清空替换）
+    """保存任务的多机进出计数区域配置（清空替换）
 
-    人员统计任务保存计数区域时兜底：
-    - event_config.filter.target_classes 含 person（或空=不限），min_confidence<=1.0，
-      避免 person 计数事件被 should_send 过滤
-    - tracking_enabled=True（分界线跨越需要跟踪轨迹）
+    人员统计任务保存计数区域时兜底：tracking_enabled=True（分界线跨越需要跟踪轨迹）。
+    事件过滤参数（target_classes / min_confidence）由 config/event_output.yaml 全局提供，不再按任务保存。
     """
     data = request.json
     if not data:
@@ -1164,37 +1087,17 @@ def save_counting_zones(task_id: int):
     if task is None:
         return jsonify({'error': f'任务不存在: task_id={task_id}'}), 404
 
-    success = task_manager.save_counting_zones(task_id, zones)
+    success = task_manager.save_counting_directions(task_id, zones)
     if not success:
         return jsonify({'error': '计数区域保存失败'}), 400
 
-    # people_counting 任务兜底事件过滤与跟踪开关，保证计数事件不被过滤
-    if task and task.detection_type == 'people_counting' and zones:
-        adjusted = False
-        update_data = {}
+    # 人员统计兜底跟踪开关：画线跨越与方向去重都依赖跟踪轨迹。
+    # 人员统计以事件类型为唯一判定依据。
+    if task.event_type == 'people_counting' and zones and not task.tracking_enabled:
         try:
-            event_config = task.event_config or {}
-            ec = dict(event_config)
-            filt = dict(ec.get('filter') or {})
-            target_classes = list(filt.get('target_classes') or [])
-            if target_classes and 'person' not in target_classes:
-                target_classes.append('person')
-                filt['target_classes'] = target_classes
-                adjusted = True
-            mc = filt.get('min_confidence')
-            if mc is None or float(mc) > 1.0:
-                filt['min_confidence'] = 1.0
-                adjusted = True
-            if adjusted:
-                ec['filter'] = filt
-                update_data['event_config'] = ec
-            if not task.tracking_enabled:
-                update_data['tracking_enabled'] = True
-                adjusted = True
-            if update_data:
-                task_manager.update_task(task_id, update_data)
+            task_manager.update_task(task_id, {'tracking_enabled': True})
         except Exception as e:
-            logger.warning(f"人员统计事件过滤兜底配置失败: {e}")
+            logger.warning(f"人员统计跟踪开关兜底失败: {e}")
 
     if _socketio:
         _socketio.emit('counting_zones_updated', {'task_id': task_id})

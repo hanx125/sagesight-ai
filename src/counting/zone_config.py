@@ -1,9 +1,11 @@
 """
 人员统计 - 计数区域配置结构
 
-CountingZone 描述一个被独立计数的区域（任务级），支持两种计数模式：
+CountingZone 描述一个被独立计数的区域，按层级存放，支持两种计数模式：
   - line      （模式A）单摄像机画分界线，跟踪目标跨越方向判断进出
+                区域配置属于通道级别，存于 device_channel_pool.counting_lines
   - direction （模式B）多摄像机按进出方向汇总（入口机+1 / 出口机-1）
+                跨通道关系，存于任务级 counting_zones 表
 
 与通道级 zones_config（多边形进出/徘徊）物理隔离，互不影响。
 """
@@ -71,9 +73,14 @@ class CountingZone:
     in_channels: List[int] = field(default_factory=list)    # 入口机通道ID列表
     out_channels: List[int] = field(default_factory=list)   # 出口机通道ID列表
 
+    # 区域人数报警阈值（仅人员统计）：当前区域人数达到该值时触发语音报警；
+    # 0 表示不使用人数阈值触发（维持检测到目标即触发的默认行为）
+    alarm_threshold: int = 0
+
     @classmethod
     def from_row(cls, row, role: str = ROLE_LINE) -> 'CountingZone':
-        """从 counting_zones 表行构造；role 标识本相机在该区域承担的角色"""
+        """从计数区域行构造（画线行来自通道 counting_lines，方向行来自 counting_zones）；
+        role 标识本相机在该区域承担的角色"""
         return cls(
             task_id=row.get('task_id'),
             zone_name=row.get('zone_name', ''),
@@ -86,6 +93,7 @@ class CountingZone:
             min_displacement=float(row.get('min_displacement', 0.02)),
             in_channels=_load_id_list(row.get('in_channels')),
             out_channels=_load_id_list(row.get('out_channels')),
+            alarm_threshold=int(row.get('alarm_threshold', 0) or 0),
         )
 
     def is_line(self) -> bool:

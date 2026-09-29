@@ -321,7 +321,6 @@ sagesight-AI/
 │   ├── event_output.yaml     # 事件输出配置（GIF、存储方式、推送）
 │   ├── tracker_config.yaml   # 跟踪器配置（Norfair参数）
 │   ├── motion_config.yaml    # 运动检测配置
-│   ├── zones_config.yaml     # 区域检测配置
 │   └── display_config.yaml   # 显示配置
 ├── src/                 # 源代码目录
 │   ├── decoders/        # 视频解码器

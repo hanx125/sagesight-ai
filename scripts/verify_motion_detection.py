@@ -11,7 +11,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.tasks.task_manager import TaskManager
+from src.tasks.task_manager import TaskManager, get_default_motion_config
 
 def verify_motion_detection():
     """验证运动检测配置"""
@@ -36,8 +36,8 @@ def verify_motion_detection():
         print(f"\n任务: {task.task_name} (ID: {task.id})")
         print(f"  运动检测启用: {task.motion_detection_enabled}")
 
-        # 检查 motion_config
-        motion_config = task.motion_config
+        # 检查 motion_config（全局配置：config/motion_config.yaml，所有任务一致）
+        motion_config = get_default_motion_config()
         print(f"  运动检测配置:")
         print(f"    history: {motion_config.get('history', 'N/A')}")
         print(f"    var_threshold: {motion_config.get('var_threshold', 'N/A')}")

@@ -52,6 +52,9 @@
 !*.svg
 !*.ico
 
+# 音频资源（报警语音 MP3，static/alarm_mp3/）
+!*.mp3
+
 # RK3588 平台头文件（libs/librga/include/）
 !*.h
 
