@@ -531,7 +531,7 @@ class CameraManager:
             row = cursor.fetchone()
             
             if row:
-                return self._row_to_camera(row)
+                return self._row_to_camera(row, self._columns(cursor))
             return None
     
     def get_camera_by_ip(self, ip: str) -> Optional[Camera]:
@@ -542,7 +542,7 @@ class CameraManager:
             row = cursor.fetchone()
             
             if row:
-                return self._row_to_camera(row)
+                return self._row_to_camera(row, self._columns(cursor))
             return None
     
     def get_camera_by_mac(self, mac: str) -> Optional[Camera]:
@@ -553,7 +553,7 @@ class CameraManager:
             row = cursor.fetchone()
             
             if row:
-                return self._row_to_camera(row)
+                return self._row_to_camera(row, self._columns(cursor))
             return None
     
     def get_all_cameras(self) -> List[Camera]:
@@ -562,8 +562,9 @@ class CameraManager:
             cursor = conn.cursor()
             cursor.execute('SELECT * FROM cameras ORDER BY created_at DESC')
             rows = cursor.fetchall()
+            columns = self._columns(cursor)
             
-            return [self._row_to_camera(row) for row in rows]
+            return [self._row_to_camera(row, columns) for row in rows]
     
     def get_cameras_by_directory(self, directory_id: int) -> List[Camera]:
         """获取指定目录下的摄像机"""
@@ -571,8 +572,9 @@ class CameraManager:
             cursor = conn.cursor()
             cursor.execute('SELECT * FROM cameras WHERE directory_id = ? ORDER BY name', (directory_id,))
             rows = cursor.fetchall()
+            columns = self._columns(cursor)
             
-            return [self._row_to_camera(row) for row in rows]
+            return [self._row_to_camera(row, columns) for row in rows]
     
     def update_camera(self, camera_id: str, update_data: Dict) -> bool:
         """更新摄像机
@@ -619,66 +621,70 @@ class CameraManager:
             logger.info(f"[CameraManager] 删除摄像机成功: ID={camera_id}")
             return True
     
-    def _row_to_camera(self, row) -> Camera:
+    @staticmethod
+    def _columns(cursor) -> List[str]:
+        """取本次查询结果的列名列表（供 _row_to_camera 按列名解析）"""
+        return [col[0] for col in cursor.description]
+
+    def _row_to_camera(self, row, columns=None) -> Camera:
         """数据库行转换为Camera对象
 
-        注意：字段映射必须严格按照PRAGMA table_info的实际顺序
-        实际字段顺序（2026-06-29验证）：
-        0-16: 基础字段
-        17-18: protocol和ai_detection（ALTER TABLE添加，在基础字段后）
-        19-24: 流媒体字段
-        25-30: 状态和配置字段
-        31-32: 时间戳
+        按列名取值，不依赖列顺序：cameras 表的物理列顺序会随历史
+        ALTER TABLE 追加列而改变（如 iot_product_key / iot_device_name
+        在早期创建的库中位于表末尾），按下标取值会导致整段字段错位。
+        columns 为 cursor.description 中的列名列表。
         """
+        data = dict(zip(columns, row)) if columns else {}
+
+        def val(name, default=None):
+            """按列名取值，列缺失或值为 NULL 时返回默认值"""
+            value = data.get(name)
+            return default if value is None else value
+
         def parse_datetime(value):
-            if value is None or value == '':
+            if not value:
                 return None
             try:
                 return datetime.fromisoformat(value.replace('Z', '+00:00'))
-            except:
+            except Exception:
                 return None
 
         return Camera(
-            # [0-16] 基础字段
-            id=row[0] or '',
-            name=row[1] or '',
-            source=row[2] if len(row) > 2 else '',
-            ip=row[3] if len(row) > 3 else '',
-            port=row[4] if len(row) > 4 else 80,
-            username=row[5] if len(row) > 5 else '',
-            password=row[6] if len(row) > 6 else '',
-            mac=row[7] if len(row) > 7 else '',
-            manufacturer=row[8] if len(row) > 8 else '',
-            model=row[9] if len(row) > 9 else '',
-            firmware_version=row[10] if len(row) > 10 else '',
-            serial_number=row[11] if len(row) > 11 else '',
-            hardware_id=row[12] if len(row) > 12 else '',
-            support_move=bool(row[13]) if len(row) > 13 else False,
-            support_zoom=bool(row[14]) if len(row) > 14 else False,
-            ptz_address=row[15] if len(row) > 15 else '',
-            support_audio_talk=bool(row[16]) if len(row) > 16 else False,
-            # [17-18] protocol和ai_detection（ALTER TABLE添加）
-            protocol=row[17] if len(row) > 17 else 'rtsp',
-            ai_detection=bool(row[18]) if len(row) > 18 else True,
-            # [19-24] 流媒体字段
-            rtmp_stream=row[19] if len(row) > 19 else '',
-            rtsp_stream=row[20] if len(row) > 20 else '',
-            http_stream=row[21] if len(row) > 21 else '',
-            ws_stream=row[22] if len(row) > 22 else '',
-            rtc_stream=row[23] if len(row) > 23 else '',
-            rtcs_stream=row[24] if len(row) > 24 else '',
-            # [25-30] 状态和配置字段
-            enable_forward=bool(row[25]) if len(row) > 25 else False,
-            status=row[26] if len(row) > 26 else 'offline',
-            connection_status=row[27] if len(row) > 27 else '',
-            directory_id=row[28] if len(row) > 28 else None,
-            iot_product_key=row[29] if len(row) > 29 else '',
-            iot_device_name=row[30] if len(row) > 30 else '',
-            description=row[31] if len(row) > 31 else '',
-            enabled=bool(row[32]) if len(row) > 32 else True,
-            # [33-34] 时间戳
-            created_at=parse_datetime(row[33]) if len(row) > 33 else None,
-            updated_at=parse_datetime(row[34]) if len(row) > 34 else None
+            id=val('id', ''),
+            name=val('name', ''),
+            source=val('source', ''),
+            ip=val('ip', ''),
+            port=val('port', 80),
+            username=val('username', ''),
+            password=val('password', ''),
+            mac=val('mac', ''),
+            manufacturer=val('manufacturer', ''),
+            model=val('model', ''),
+            firmware_version=val('firmware_version', ''),
+            serial_number=val('serial_number', ''),
+            hardware_id=val('hardware_id', ''),
+            support_move=bool(val('support_move', False)),
+            support_zoom=bool(val('support_zoom', False)),
+            ptz_address=val('ptz_address', ''),
+            support_audio_talk=bool(val('support_audio_talk', False)),
+            protocol=val('protocol', 'rtsp'),
+            ai_detection=bool(val('ai_detection', True)),
+            rtmp_stream=val('rtmp_stream', ''),
+            rtsp_stream=val('rtsp_stream', ''),
+            http_stream=val('http_stream', ''),
+            ws_stream=val('ws_stream', ''),
+            rtc_stream=val('rtc_stream', ''),
+            rtcs_stream=val('rtcs_stream', ''),
+            enable_forward=bool(val('enable_forward', False)),
+            status=val('status', 'offline'),
+            connection_status=val('connection_status', ''),
+            directory_id=val('directory_id'),
+            iot_product_key=val('iot_product_key', ''),
+            iot_device_name=val('iot_device_name', ''),
+            description=val('description', ''),
+            enabled=bool(val('enabled', True)),
+            created_at=parse_datetime(val('created_at')),
+            updated_at=parse_datetime(val('updated_at'))
         )
     
     # ========================================
