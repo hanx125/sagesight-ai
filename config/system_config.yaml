@@ -87,3 +87,13 @@ node_management:
   ai_root: /opt/AI
   video_root: /opt/VIDEO
   media_cluster_root: /opt/media-cluster
+voice:
+  # 报警语音的输出设备（服务端播放，留空表示使用系统默认设备）
+  # 多声卡设备上必须指定，否则会落到没有播放能力的声卡（如 HDMI 输入）上。
+  # 用 aplay -l 查看可用声卡，例如 ES8388 模拟输出为 plughw:1,0
+  audio_device: ''
+  # SDL 音频驱动：alsa / pulseaudio（留空由 SDL 自动选择）
+  audio_driver: ''
+  # 每轮播放前执行的 shell 命令（用于打开功放使能开关，留空则不执行）
+  # 例：amixer -c 1 sset "hp switch" on; amixer -c 1 sset "spk switch" on
+  pre_play_command: ''

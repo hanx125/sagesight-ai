@@ -6,17 +6,21 @@ SageSight AI - 报警语音播报服务（服务端播放）
 - 播放参数（循环次数 / 时间间隙 / 音量）优先级：任务级配置 > 全局配置 > 默认值
 
 播放后端（按可用性自动选择）：
-1. pygame.mixer：跨平台，支持 MP3 / 音量
-2. ffplay（FFmpeg 附带）：跨平台，通过 -volume 控制音量
+1. ffplay（FFmpeg 附带）：通过 -volume 控制音量；输出设备由 config/system_config.yaml
+   的 voice.audio_device / voice.audio_driver 指定（留空则用系统默认设备）
+2. pygame.mixer：跨平台，支持 MP3 / 音量
 3. 均不可用时仅记录告警日志，不抛出异常，不影响检测主流程
 """
 
 import logging
 import os
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
+
+from src.system.system_config_loader import get_voice_config
 
 logger = logging.getLogger(__name__)
 
@@ -182,11 +186,62 @@ def _terminate_proc(proc):
         pass
 
 
+def _run_pre_play_command():
+    """播放前执行配置的 shell 命令（如打开功放开关）
+
+    部分板卡的功放使能开关会在一次播放结束后被驱动复位，因此每轮播放前都要执行。
+    """
+    cmd = (get_voice_config().get('pre_play_command') or '').strip()
+    if not cmd:
+        return
+    try:
+        subprocess.run(cmd, shell=True, timeout=5,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        logger.warning(f"[Voice] 播放前命令执行失败: {cmd}, 错误: {e}")
+
+
+def _build_ffplay_env() -> dict:
+    """构造 ffplay 运行环境，按配置指定音频驱动与输出设备"""
+    env = os.environ.copy()
+    audio_cfg = get_voice_config()
+    driver = (audio_cfg.get('audio_driver') or '').strip()
+    device = (audio_cfg.get('audio_device') or '').strip()
+    if driver:
+        env['SDL_AUDIODRIVER'] = driver
+    if device:
+        env['AUDIODEV'] = device
+    return env
+
+
+# ffplay 打开音频设备失败时的 stderr 特征（此时退出码仍可能为 0，必须按内容判定）
+_FFPLAY_FAIL_MARKERS = (
+    'audio open failed',
+    'could not open audio device',
+    'failed to open file',
+)
+
+
+def _extract_ffplay_error(stderr_text: str, returncode: int) -> str:
+    """返回 ffplay 播放失败的说明，无失败时返回空字符串
+
+    ffplay 打不开音频设备时仍可能以 0 退出，仅看退出码会误判为播放成功。
+    """
+    text = ' '.join(stderr_text.split())
+    for marker in _FFPLAY_FAIL_MARKERS:
+        if marker in text.lower():
+            return text
+    if returncode != 0:
+        return text or f'exit code {returncode}'
+    return ''
+
+
 def _play_with_ffplay(path: str, volume: float, cancel: threading.Event = None,
                       on_spawn=None, timeout: int = 120) -> bool:
     """使用 ffplay（FFmpeg 附带）播放 MP3
 
     on_spawn(proc) 把子进程登记给调用方，打断时可直接终止该进程。
+    stderr 写入临时文件而非丢弃：用于识别「设备打不开但退出码为 0」的假成功。
     """
     volume_pct = int(round(max(0.0, min(1.0, volume)) * 100))
     cmd = [
@@ -194,27 +249,38 @@ def _play_with_ffplay(path: str, volume: float, cancel: threading.Event = None,
         "-volume", str(volume_pct), path,
     ]
     try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        with tempfile.TemporaryFile() as errfile:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=errfile,
+                env=_build_ffplay_env(),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if on_spawn:
+                on_spawn(proc)
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                logger.warning(f"[Voice] ffplay 播放超时，已终止: {path}")
+                _terminate_proc(proc)
+                return True
+            errfile.seek(0)
+            err_text = errfile.read().decode('utf-8', 'ignore')
     except FileNotFoundError:
         return False
     except Exception as e:
         logger.warning(f"[Voice] ffplay 启动失败: {e}")
         return False
 
-    if on_spawn:
-        on_spawn(proc)
-    try:
-        proc.wait(timeout=timeout)
-        return proc.returncode == 0
-    except subprocess.TimeoutExpired:
-        logger.warning(f"[Voice] ffplay 播放超时，已终止: {path}")
-        _terminate_proc(proc)
-        return True
+    error = _extract_ffplay_error(err_text, proc.returncode)
+    if error:
+        device = (get_voice_config().get('audio_device') or '').strip() or '系统默认设备'
+        logger.warning(
+            f"[Voice] ffplay 播放失败(rc={proc.returncode}, 设备={device}): {error[:200]}"
+        )
+        return False
+    return True
 
 
 # ========================================
@@ -307,6 +373,7 @@ class VoiceBroadcaster:
             return
 
         path = str(fpath)
+        start = time.time()
         logger.info(
             f"[Voice] 开始报警语音播报: {mp3_name}, 循环={loop_count}, 间隙={interval_ms}ms, 音量={volume}"
         )
@@ -315,6 +382,7 @@ class VoiceBroadcaster:
                 logger.info("[Voice] 本次语音播报被新的报警打断，停止")
                 return
 
+            _run_pre_play_command()
             played = _play_with_ffplay(path, volume, cancel, on_spawn=self._register_proc)
             if not played:
                 played = _play_with_pygame(path, volume, cancel)
@@ -329,7 +397,7 @@ class VoiceBroadcaster:
             if i < loop_count - 1 and interval_ms > 0 and not cancel.is_set():
                 cancel.wait(interval_ms / 1000.0)
 
-        logger.info(f"[Voice] 报警语音播报完成: {mp3_name}")
+        logger.info(f"[Voice] 报警语音播报完成: {mp3_name}, 耗时 {time.time() - start:.1f}s")
 
 
 _voice_broadcaster = None

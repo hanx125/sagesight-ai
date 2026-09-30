@@ -121,7 +121,7 @@ function renderVoiceFiles(files) {
     list.innerHTML = files.map(f => `
         <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border,#e5e7eb);">
             <span style="flex:1;">${f.name} <span class="form-hint">(${f.size_display})</span></span>
-            <audio controls preload="none" style="height:32px;" src="${f.url}"></audio>
+            <button class="btn btn-sm" onclick="System.playVoiceFile('${f.name}')">试听</button>
             <button class="btn btn-sm btn-danger" onclick="System.deleteVoiceFile('${f.name}')">删除</button>
         </div>`).join('');
 }
@@ -164,6 +164,22 @@ async function testVoice() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { showNotification(data.error || '试听失败', 'error'); return; }
+        showNotification('已触发服务端试听', 'success');
+    } catch (e) {
+        showNotification('试听失败', 'error');
+    }
+}
+
+// 试听指定预置文件（服务端播放，由盒子本地声卡发声，与报警播报链路一致）
+async function playVoiceFile(name) {
+    try {
+        const resp = await fetch('/api/system/voice-test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mp3: name }),
         });
         const data = await resp.json();
         if (!resp.ok) { showNotification(data.error || '试听失败', 'error'); return; }
@@ -2129,6 +2145,7 @@ return {
     toggleLLMEnabled: toggleLLMEnabled,
     saveVoiceConfig: saveVoiceConfig,
     testVoice: testVoice,
+    playVoiceFile: playVoiceFile,
     uploadVoiceFile: uploadVoiceFile,
     deleteVoiceFile: deleteVoiceFile
 };

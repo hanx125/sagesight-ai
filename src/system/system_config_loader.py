@@ -116,6 +116,12 @@ def get_mqtt_config() -> Dict[str, Any]:
     return config.get('mqtt', {})
 
 
+def get_voice_config() -> Dict[str, Any]:
+    """获取报警语音的输出设备配置（服务端播放用）"""
+    config = load_system_config()
+    return config.get('voice', {})
+
+
 def get_websocket_config() -> Dict[str, Any]:
     """获取 WebSocket 配置"""
     config = load_system_config()
