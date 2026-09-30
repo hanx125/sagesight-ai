@@ -1948,9 +1948,29 @@ class TrackedObjectProcessor(mp.Process):
         except Exception as e:
             logger.warning(f"[Event] 终态切换状态失败 event={event_id[:8]}: {e}")
 
-        # 推送状态切换到前端（驾驶舱实时刷新徽章）
+        # 读取终态记录：大模型描述等字段在事件创建推送之后才产生，
+        # 需随本次状态切换一并补推，驾驶舱卡片/详情才能拿到描述
+        extra_data = {}
+        try:
+            record = tm.get_event_by_id(event_id)
+            if record is not None:
+                d = record.to_dict()
+                extra_data = {
+                    'ai_description': d['ai_description'],
+                    'ai_description_model': d['ai_description_model'],
+                    'ai_description_time': d['ai_description_time'],
+                    'end_time': d['end_time'],
+                    'local_gif_url': d['local_gif_url'],
+                    'minio_gif_url': d['minio_gif_url'],
+                    'ftp_gif_url': d['ftp_gif_url'],
+                }
+        except Exception as e:
+            logger.debug(f"[Event] 读取终态事件失败 event={event_id[:8]}: {e}")
+
+        # 推送状态切换到前端（驾驶舱实时刷新徽章 + 补推终态字段）
         self._push_status_to_frontend(
-            event_id, final_status, gate['dedup_status'], gate['dedup_reason']
+            event_id, final_status, gate['dedup_status'], gate['dedup_reason'],
+            extra_data=extra_data,
         )
 
         # MQTT：单推终态消息（final / duplicate）
@@ -1965,8 +1985,13 @@ class TrackedObjectProcessor(mp.Process):
                 logger.debug(f"[MQTT] 推送终态事件失败 event={event_id[:8]}: {e}")
 
     def _push_status_to_frontend(self, event_id: str, status: str,
-                                 dedup_status: str, dedup_reason: str) -> None:
-        """推送事件状态切换到前端（驾驶舱实时刷新徽章）"""
+                                 dedup_status: str, dedup_reason: str,
+                                 extra_data: Optional[dict] = None) -> None:
+        """推送事件状态切换到前端（驾驶舱实时刷新徽章）
+
+        extra_data：终态才具备的字段（大模型描述、GIF 地址等），
+        供前端更新已显示的事件卡片与详情弹窗。
+        """
         try:
             from src.system.system_config_loader import get_web_server_host, get_web_server_port
             payload = {
@@ -1974,7 +1999,7 @@ class TrackedObjectProcessor(mp.Process):
                 'status': status,
                 'dedup_status': dedup_status,
                 'dedup_reason': dedup_reason,
-                'data': {},
+                'data': extra_data or {},
             }
             if self._http_session is not None:
                 self._http_session.post(

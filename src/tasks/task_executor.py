@@ -1038,6 +1038,8 @@ class MultiCameraTaskExecutor:
                         decoder_cfg.get('height', 640),
                         decoder_cfg.get('width', 640)
                     ),
+                    # 摄像机通道名称：事件描述需展示通道名而非 camera_id
+                    'camera_name': cam.get('camera_name') or cam.get('channel_name') or cam_id,
                     'threshold': detector_config['conf_threshold'],
                     'stationary_threshold': self.task_config.get('stationary_threshold', 10),
                     'zones_config': cam.get('zones_config', []),  # 通道级 Zone 配置

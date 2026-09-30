@@ -439,7 +439,7 @@ def set_llm_enabled():
 
 # 全局语音配置键（与 system_settings 表对应）
 _VOICE_KEYS = {
-    'enabled': ('voice_broadcast_enabled', '0'),   # 全局总开关
+    'enabled': ('voice_broadcast_enabled', '1'),   # 全局总开关（默认开启）
     'mp3': ('voice_mp3', ''),                      # 默认 MP3 文件名
     'loop_count': ('voice_loop_count', '1'),       # 默认循环次数
     'interval_ms': ('voice_interval_ms', '1000'),  # 默认循环时间间隙（毫秒）

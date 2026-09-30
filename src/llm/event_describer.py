@@ -23,17 +23,39 @@ _SYSTEM_PROMPT = (
     "你是一个智能视频监控助手。根据提供的监控快照和检测信息，"
     "生成规范统一的事件描述。必须严格按照以下四行模板输出，"
     "每行以【字段】开头，不要添加任何额外解释或技术细节：\n"
-    "【目标】事件中的目标类别\n"
-    "【行为】一句话客观描述目标的行为过程\n"
-    "【位置】所在监控点位和区域\n"
-    "【时间】事件发生时间及持续时间\n"
+    "【目标】目标类别与数量，并补充画面中可见的显著外观特征（如颜色、衣着、车型、大小等）\n"
+    "【行为】用一句话具体描述目标的行为过程：从画面哪个方位出现、朝哪个方向移动、"
+    "以何种方式移动（快速/缓慢/静止/徘徊）以及正在做什么；"
+    "只描述画面中确实可见的内容，信息不足时不要臆测\n"
+    "【位置】只使用下方检测信息中给出的摄像头名称；提供了区域名称时补充区域名，"
+    "未提供区域时只写摄像头名称，禁止编造地点\n"
+    "【时间】事件开始时间（年-月-日 时:分:秒）及持续时间\n"
     "示例：\n"
-    "【目标】行人\n"
-    "【行为】一名行人从画面右侧快速横穿警戒区\n"
-    "【位置】东门入口摄像头 · 警戒区\n"
-    "【时间】10:23:45 起，持续约 5 秒\n"
+    "【目标】1 名行人，身穿深色上衣、背双肩包\n"
+    "【行为】该行人从画面右侧进入，快速横穿警戒区后向画面左上方离开\n"
+    "【位置】东门入口摄像头；区域：警戒区\n"
+    "【时间】2026-09-30 10:23:45 起，持续约 5 秒\n"
     "不要描述检测框、置信度等技术细节。"
 )
+
+
+def _format_time(value) -> str:
+    """将事件开始时间统一格式化为可读字符串
+
+    事件管道传入的是 epoch 秒（float），直接交给大模型会输出
+    「1790745950.5585804」这类原始时间戳；此处统一转成
+    「年-月-日 时:分:秒」，并兼容 datetime 与字符串。
+    """
+    if value is None or value == '':
+        return ''
+    if isinstance(value, datetime):
+        return value.strftime('%Y-%m-%d %H:%M:%S')
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value).strftime('%Y-%m-%d %H:%M:%S')
+        except (OverflowError, OSError, ValueError):
+            return str(value)
+    return str(value)
 
 
 class EventDescriber:
@@ -51,9 +73,9 @@ class EventDescriber:
             event_info: 事件元数据，包含:
                 - class_name: 目标类别
                 - confidence: 置信度
-                - camera_name: 摄像机名称
+                - camera_name: 摄像机通道名称
                 - zone_name: 区域名称（可选）
-                - start_time: 事件开始时间
+                - start_time: 事件开始时间（epoch 秒或时间字符串，输出前统一格式化）
                 - end_time: 事件结束时间
                 - duration: 持续时间（秒）
                 - event_type: 事件类型（tracking/zone/loitering）
@@ -94,11 +116,11 @@ class EventDescriber:
     def _build_prompt(self, info: dict) -> str:
         """构建事件描述提示词"""
         class_name = info.get('class_name', '未知目标')
-        camera_name = info.get('camera_name', '监控摄像头')
+        camera_name = info.get('camera_name') or '未知摄像头'
         zone_name = info.get('zone_name', '')
         event_type = info.get('event_type', 'tracking')
         duration = info.get('duration', 0)
-        start_time = info.get('start_time', '')
+        start_time = _format_time(info.get('start_time'))
 
         # 事件类型转中文描述
         type_desc = {
@@ -110,15 +132,17 @@ class EventDescriber:
         parts = [
             f"这是一张监控快照。检测信息如下：",
             f"- 检测目标：{class_name}",
-            f"- 摄像头：{camera_name}",
+            f"- 摄像头名称：{camera_name}",
+            f"- 所在区域：{zone_name}" if zone_name else "- 所在区域：未设置",
+            f"- 事件类型：{type_desc}",
         ]
-        if zone_name:
-            parts.append(f"- 所在区域：{zone_name}")
-        parts.append(f"- 事件类型：{type_desc}")
         if duration and duration > 0:
             parts.append(f"- 持续时间：{duration:.1f}秒")
         if start_time:
-            parts.append(f"- 开始时间：{start_time}")
+            parts.append(f"- 事件开始时间：{start_time}")
 
-        parts.append("请根据图片和以上信息，严格按照系统规定的四行模板输出事件描述。")
+        parts.append(
+            "请根据图片和以上信息，严格按照系统规定的四行模板输出事件描述；"
+            "【位置】行只能使用上面给出的摄像头名称与区域名称，未提供区域时不要编造地点名称。"
+        )
         return "\n".join(parts)

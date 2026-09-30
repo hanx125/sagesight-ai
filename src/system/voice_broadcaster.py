@@ -41,7 +41,7 @@ _KEYS = {
 
 # 默认值
 _DEFAULTS = {
-    "enabled": False,
+    "enabled": True,
     "mp3": "",
     "loop_count": 1,
     "interval_ms": 1000,
@@ -253,7 +253,7 @@ class VoiceBroadcaster:
             from src.system.system_manager import get_system_manager
             mgr = get_system_manager()
             return {
-                _KEYS["enabled"]: mgr.get_setting(_KEYS["enabled"], "0"),
+                _KEYS["enabled"]: mgr.get_setting(_KEYS["enabled"], "1"),
                 _KEYS["mp3"]: mgr.get_setting(_KEYS["mp3"], ""),
                 _KEYS["loop_count"]: mgr.get_setting(_KEYS["loop_count"], "1"),
                 _KEYS["interval_ms"]: mgr.get_setting(_KEYS["interval_ms"], "1000"),

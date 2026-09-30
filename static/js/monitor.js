@@ -3485,9 +3485,24 @@ function updateMonitorEventCard(data) {
     const eventIdx = monitorEvents.findIndex(e => e.event_id === data.event_id);
     if (eventIdx >= 0) {
         if (data.status) monitorEvents[eventIdx].status = data.status;
+        if (data.dedup_status) monitorEvents[eventIdx].dedup_status = data.dedup_status;
+        if (data.dedup_reason) monitorEvents[eventIdx].dedup_reason = data.dedup_reason;
         if (data.data) {
-            if (data.data.confidence !== undefined) monitorEvents[eventIdx].confidence = data.data.confidence;
-            if (data.data.end_time) monitorEvents[eventIdx].end_time = data.data.end_time;
+            // 终态补推字段（大模型描述、GIF 地址等），事件创建推送时这些字段还不存在
+            ['confidence', 'end_time', 'ai_description', 'ai_description_model',
+             'ai_description_time', 'local_gif_url', 'minio_gif_url', 'ftp_gif_url']
+                .forEach(key => {
+                    if (data.data[key] !== undefined) monitorEvents[eventIdx][key] = data.data[key];
+                });
+        }
+    }
+
+    // 详情弹窗正打开该事件：重新渲染，显示补推的大模型描述
+    if (eventIdx >= 0 && data.data && data.data.ai_description) {
+        const current = window._currentMonitorEvent;
+        if (current && current.event_id === data.event_id) {
+            window._currentMonitorEvent = monitorEvents[eventIdx];
+            showMonitorEventDetail(monitorEvents[eventIdx]);
         }
     }
 }
