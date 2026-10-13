@@ -574,6 +574,11 @@ class ZoneCanvasEditor {
             enable_loitering_detection: z.enable_loitering_detection,
             loitering_time: z.loitering_time,
             inertia: z.inertia,
+            enable_pileup: z.enable_pileup || false,
+            pileup_dwell_seconds: z.pileup_dwell_seconds || 300,
+            enable_occupancy: z.enable_occupancy || false,
+            occupancy_dwell_seconds: z.occupancy_dwell_seconds || 60,
+            min_area_ratio: (z.min_area_ratio !== undefined && z.min_area_ratio !== null) ? z.min_area_ratio : 0.02,
             polygon_type: 'normalized'
         }));
     }
@@ -613,7 +618,12 @@ class ZoneCanvasEditor {
                 required: zd.required || false,
                 enable_loitering_detection: zd.enable_loitering_detection || false,
                 loitering_time: zd.loitering_time || 30,
-                inertia: zd.inertia || 3
+                inertia: zd.inertia || 3,
+                enable_pileup: zd.enable_pileup || false,
+                pileup_dwell_seconds: zd.pileup_dwell_seconds || 300,
+                enable_occupancy: zd.enable_occupancy || false,
+                occupancy_dwell_seconds: zd.occupancy_dwell_seconds || 60,
+                min_area_ratio: (zd.min_area_ratio !== undefined && zd.min_area_ratio !== null) ? zd.min_area_ratio : 0.02
             });
         }
 

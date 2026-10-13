@@ -133,9 +133,11 @@
                                     <option value="motion_gated">运动门控检测</option>
                                     <option value="file">离线文件检测</option>
                                     <option value="scheduled">定时批量检测</option>
+                                    <option value="pile_up">物品堆积检测</option>
+                                    <option value="abnormal_occupancy">异常占用检测</option>
                                 </select>
                             </div>
-                            <div class="form-group">
+                            <div class="form-group" id="algorithmConfigGroup">
                                 <label for="algorithmConfig">算法配置 <span class="required">*</span></label>
                                 <select id="algorithmConfig" name="algorithm_config" onchange="Tasks.onAlgorithmConfigChange()">
                                     <option value="">-- 请选择算法配置 --</option>
@@ -152,9 +154,13 @@
                                     <option value="zone">区域入侵</option>
                                     <option value="loitering">徘徊检测</option>
                                     <option value="people_counting">人员统计</option>
+                                    <option value="face">人脸检测</option>
+                                    <option value="plate">车牌检测</option>
+                                    <option value="pile_up">物品堆积检测</option>
+                                    <option value="abnormal_occupancy">异常占用检测</option>
                                 </select>
                             </div>
-                            <div class="form-group">
+                            <div class="form-group" id="confThresholdGroup">
                                 <label for="taskConfThreshold">置信度阈值</label>
                                 <input type="number" id="taskConfThreshold" name="conf_threshold" step="0.01" min="0" max="1" value="0.25" placeholder="0.25">
                                 <small style="color: #888; font-size: 12px;">低于此阈值的检测框会被过滤</small>
@@ -519,6 +525,43 @@
                     </div>
                 </div>
 
+                <!-- 边缘库比对（任务级）：检测到人脸/车牌后调用边缘集成平台库接口比对，结果随事件上报云平台 -->
+                <div class="form-section">
+                    <h4 class="form-section-title">边缘库比对（任务级）</h4>
+
+                    <div class="switch-grid">
+                        <label class="switch-item">
+                            <span class="toggle-switch">
+                                <input type="checkbox" data-switch="library_match_enabled">
+                                <span class="toggle-slider"></span>
+                            </span>
+                            <span class="switch-text">启用边缘库比对</span>
+                        </label>
+                    </div>
+
+                    <div class="form-row" style="margin-top: 12px;">
+                        <div class="form-group">
+                            <label for="faceLibraryName">人脸库名称</label>
+                            <input type="text" id="faceLibraryName" name="face_library_name" value="" placeholder="与边缘平台人脸库名称一致">
+                        </div>
+                        <div class="form-group">
+                            <label for="plateLibraryName">车牌库名称</label>
+                            <input type="text" id="plateLibraryName" name="plate_library_name" value="" placeholder="与边缘平台车牌库名称一致">
+                        </div>
+                    </div>
+
+                    <div class="form-row" style="margin-top: 8px;">
+                        <div class="form-group form-group-full">
+                            <small style="color: var(--text-secondary); font-size: 12px;">
+                                启用后，检测到人脸 / 车牌会调用边缘集成平台的人脸库 / 车牌库接口比对，
+                                命中结果随事件上报云平台。库名称留空表示该类不比对，
+                                名称需与边缘平台库管理中的库名称完全一致；
+                                边缘平台地址、令牌与超时在系统管理中统一设置。
+                            </small>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 显示配置（任务级开关；其余显示参数由 config/display_config.yaml 全局提供） -->
                 <div class="form-section">
                     <h4 class="form-section-title">显示开关（任务级）</h4>
@@ -669,6 +712,13 @@
             <button class="modal-close" onclick="closeChannelZoneConfig()">&times;</button>
         </div>
         <div class="modal-body">
+            <!-- 基线状态栏（仅占用/堆积检测任务编辑时显示） -->
+            <div id="zoneBaselineBar" style="display: none; align-items: center; gap: 12px; padding: 8px 12px; margin-bottom: 10px; background: var(--bg-color, #f7f8fa); border: 1px solid var(--border-color); border-radius: 4px;">
+                <span style="font-size: 13px; color: #888;">基线：</span>
+                <span id="zoneBaselineBadge" style="font-size: 12px; padding: 2px 10px; border-radius: 10px; background: #9e9e9e; color: #fff;">--</span>
+                <span id="zoneBaselineTime" style="font-size: 12px; color: #888;"></span>
+                <button type="button" class="btn btn-sm btn-primary" id="captureBaselineBtn" onclick="captureChannelBaseline()">拍摄基线</button>
+            </div>
             <div class="zone-config-layout">
                 <!-- 左侧：区域列表 -->
                 <div class="zone-panel-section">
@@ -725,6 +775,32 @@
                             <div class="form-group">
                                 <label for="zonePropInertia">进入惯性（帧）</label>
                                 <input type="number" id="zonePropInertia" min="1" max="60" value="3" onchange="onZonePropChange()">
+                            </div>
+                            <div class="form-group">
+                                <label for="zonePropPileup">物品堆积检测</label>
+                                <select id="zonePropPileup" onchange="onZonePropChange()">
+                                    <option value="false">禁用</option>
+                                    <option value="true">启用</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="zonePropPileupTime">堆积时长阈值（秒）</label>
+                                <input type="number" id="zonePropPileupTime" min="10" max="86400" value="300" disabled onchange="onZonePropChange()">
+                            </div>
+                            <div class="form-group">
+                                <label for="zonePropOccupancy">异常占用检测</label>
+                                <select id="zonePropOccupancy" onchange="onZonePropChange()">
+                                    <option value="false">禁用</option>
+                                    <option value="true">启用</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="zonePropOccupancyTime">占用时长阈值（秒）</label>
+                                <input type="number" id="zonePropOccupancyTime" min="10" max="86400" value="60" disabled onchange="onZonePropChange()">
+                            </div>
+                            <div class="form-group">
+                                <label for="zonePropMinAreaRatio">最小面积占比</label>
+                                <input type="number" id="zonePropMinAreaRatio" step="0.001" min="0.001" max="0.5" value="0.02" onchange="onZonePropChange()">
                             </div>
                             <button type="button" class="btn btn-sm btn-secondary zone-redraw-btn" id="redrawZoneBtn" onclick="redrawActiveZone()" disabled>重新绘制多边形</button>
                         </div>
@@ -909,6 +985,7 @@
         border: 1px solid var(--border-color);
         border-radius: 6px;
         padding: 12px;
+        overflow: hidden;
     }
     .zone-panel-block h4 {
         margin: 0 0 8px 0;
@@ -941,6 +1018,12 @@
         flex: 1;
         overflow-y: auto;
         min-height: 0;
+    }
+    /* 属性面板表单：占满 block 剩余高度并纵向滚动，避免字段过多溢出弹窗 */
+    .zone-prop-form {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
     }
     .zone-list-empty {
         text-align: center;
@@ -1119,7 +1202,7 @@
 
 {% block extra_scripts %}
 <script src="{{ url_for('static', filename='js/tasks.js') }}?v=20260929e"></script>
-<script src="{{ url_for('static', filename='js/config_modal.js') }}?v=20260929c"></script>
+<script src="{{ url_for('static', filename='js/config_modal.js') }}?v=20261009libname"></script>
 <script src="{{ url_for('static', filename='js/zone_canvas_editor.js') }}?v=20260801a"></script>
 <script src="{{ url_for('static', filename='js/channel_zone_config.js') }}?v=20260801a"></script>
 <script src="{{ url_for('static', filename='js/counting_zone_config.js') }}?v=20260929drag"></script>

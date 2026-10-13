@@ -36,7 +36,14 @@ function getDetectionTypeText(detection_type) {
     if (detection_type === 'motion_gated') return '运动门控检测';
     if (detection_type === 'file') return '离线文件检测';
     if (detection_type === 'scheduled') return '定时批量检测';
+    if (detection_type === 'pile_up') return '物品堆积检测';
+    if (detection_type === 'abnormal_occupancy') return '异常占用检测';
     return '实时检测';
+}
+
+// 是否为遗留物检测类型（物品堆积 / 异常占用）：不加载检测模型，事件类型与检测类型同名
+function isOccupancyDetectionType(type) {
+    return type === 'pile_up' || type === 'abnormal_occupancy';
 }
 
 // 检测类型切换：动态显示对应参数
@@ -53,10 +60,25 @@ function onDetectionTypeChange() {
     if (filePathGroup) filePathGroup.style.display = (type === 'file' || type === 'scheduled') ? '' : 'none';
     if (fileLoopGroup) fileLoopGroup.style.display = type === 'file' ? '' : 'none';
 
-    // 事件类型正常输出；人员统计 = 实时检测 + 事件类型=人员统计，故不强制联动
+    const occupancy = isOccupancyDetectionType(type);
+    // 遗留物检测不依赖检测模型：隐藏算法配置与置信度阈值
+    const algoGroup = document.getElementById('algorithmConfigGroup');
+    if (algoGroup) algoGroup.style.display = occupancy ? 'none' : '';
+    const confGroup = document.getElementById('confThresholdGroup');
+    if (confGroup) confGroup.style.display = occupancy ? 'none' : '';
+
+    // 事件类型：遗留物检测锁定为与检测类型同名；其余类型正常输出
     const eventTypeSelect = document.getElementById('eventType');
-    if (eventTypeSelect && !eventTypeSelect.value) {
-        eventTypeSelect.value = 'tracking';
+    if (eventTypeSelect) {
+        if (occupancy) {
+            eventTypeSelect.value = type;
+            eventTypeSelect.disabled = true;
+        } else {
+            eventTypeSelect.disabled = false;
+            if (!eventTypeSelect.value) {
+                eventTypeSelect.value = 'tracking';
+            }
+        }
     }
 }
 
@@ -1603,7 +1625,7 @@ function renderChannelPool() {
                 <div class="camera-pool-url">${escapeHtml(channel.rtsp_url || '')}</div>
             </div>
             <div class="camera-pool-actions" style="display: flex; gap: 8px; align-items: center;">
-                ${!channel.temp_id ? `<button type="button" class="btn btn-sm btn-secondary" onclick="openChannelZoneConfig(${channel.id}, '${escapeHtml(channel.channel_name)}', event)" title="配置Zone区域">
+                ${!channel.temp_id ? `<button type="button" class="btn btn-sm btn-secondary" onclick="openChannelZoneConfig(${channel.id}, '${escapeHtml(channel.channel_name)}', event, ${isEditMode && currentTaskId ? currentTaskId : 'null'})" title="配置Zone区域">
                     <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;">
                         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
                     </svg>
@@ -1758,7 +1780,16 @@ async function saveTask() {
         return;
     }
 
-    if (!formData.algorithm) {
+    // 遗留物检测不加载模型：算法仅作占位提交，事件类型与检测类型同名
+    const occupancyTask = isOccupancyDetectionType(formData.detection_type);
+    if (occupancyTask) {
+        formData.event_type = formData.detection_type;
+        if (!formData.algorithm) {
+            formData.algorithm = 'yolov11';
+        }
+    }
+
+    if (!occupancyTask && !formData.algorithm) {
         showNotification('请选择算法配置', 'error');
         return;
     }

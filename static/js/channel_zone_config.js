@@ -9,21 +9,32 @@
 let zoneConfigContext = {
     channelId: null,
     channelName: '',
+    taskId: null,       // 所属任务（遗留物检测任务编辑时用于基线拍摄/状态查询）
     editor: null,
-    loading: false
+    loading: false,
+    baselineTimer: null  // 基线状态轮询定时器
+};
+
+// 基线状态 → 徽标文案与颜色
+const BASELINE_STATE_BADGES = {
+    uncalibrated: { text: '未校准', color: '#9e9e9e' },
+    monitoring:   { text: '监测中', color: '#4caf50' },
+    alerted:      { text: '已告警', color: '#ff9800' },
+    invalid:      { text: '已失效', color: '#f44336' }
 };
 
 /**
  * 打开通道 Zone 配置模态框
  *
  * 由 tasks.js 中的通道列表按钮调用:
- *   onclick="openChannelZoneConfig(channelId, channelName, event)"
+ *   onclick="openChannelZoneConfig(channelId, channelName, event, taskId)"
  *
  * @param {number} channelId - 设备通道 ID
  * @param {string} channelName - 通道名称
  * @param {Event} event - 点击事件
+ * @param {number|null} taskId - 所属任务 ID（遗留物检测任务编辑时传入，用于基线操作）
  */
-function openChannelZoneConfig(channelId, channelName, event) {
+function openChannelZoneConfig(channelId, channelName, event, taskId) {
     if (event) event.preventDefault();
 
     // Zone 配置为通道级数据，无需任务上下文
@@ -34,6 +45,7 @@ function openChannelZoneConfig(channelId, channelName, event) {
 
     zoneConfigContext.channelId = channelId;
     zoneConfigContext.channelName = channelName || `通道${channelId}`;
+    zoneConfigContext.taskId = taskId || null;
 
     // 更新模态框标题
     document.getElementById('zoneConfigChannelName').textContent = zoneConfigContext.channelName;
@@ -43,6 +55,13 @@ function openChannelZoneConfig(channelId, channelName, event) {
     if (modal) {
         modal.style.display = 'flex';
     }
+
+    // 基线状态栏：仅编辑遗留物检测任务时显示，并启动 3s 轮询
+    const bar = document.getElementById('zoneBaselineBar');
+    if (bar) {
+        bar.style.display = zoneConfigContext.taskId ? 'flex' : 'none';
+    }
+    startBaselineStatusPolling();
 
     // 初始化编辑器（如果尚未初始化）
     if (!zoneConfigContext.editor) {
@@ -80,7 +99,114 @@ function closeChannelZoneConfig() {
         zoneConfigContext.editor.cancelDrawing();
     }
 
+    stopBaselineStatusPolling();
     zoneConfigContext.channelId = null;
+    zoneConfigContext.taskId = null;
+}
+
+// ========================================
+// 基线拍摄与状态轮询（遗留物检测任务）
+// ========================================
+
+/**
+ * 启动基线状态轮询（3s）：查询任务各通道基线与区域状态并更新徽标
+ */
+function startBaselineStatusPolling() {
+    stopBaselineStatusPolling();
+    if (!zoneConfigContext.taskId) return;
+    refreshBaselineStatus();
+    zoneConfigContext.baselineTimer = setInterval(refreshBaselineStatus, 3000);
+}
+
+/**
+ * 停止基线状态轮询
+ */
+function stopBaselineStatusPolling() {
+    if (zoneConfigContext.baselineTimer) {
+        clearInterval(zoneConfigContext.baselineTimer);
+        zoneConfigContext.baselineTimer = null;
+    }
+}
+
+/**
+ * 请求拍摄基线：写入拍摄标记，管线进程下一循环连取 5 帧取中值落盘
+ */
+function captureChannelBaseline() {
+    if (!zoneConfigContext.taskId) return;
+
+    const btn = document.getElementById('captureBaselineBtn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '下发中...';
+    }
+
+    fetch(`/api/tasks/${zoneConfigContext.taskId}/capture-baseline`, { method: 'POST' })
+        .then(async resp => {
+            const body = await resp.json().catch(() => ({}));
+            if (resp.ok) {
+                showToast(body.message || '拍摄请求已下发', 'success');
+                refreshBaselineStatus();
+            } else {
+                showToast(body.error || `拍摄请求失败: ${resp.status}`, 'error');
+            }
+        })
+        .catch(err => {
+            console.error('[ZoneConfig] 拍摄基线请求失败:', err);
+            showToast('拍摄基线请求失败: ' + err.message, 'error');
+        })
+        .finally(() => {
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '拍摄基线';
+            }
+        });
+}
+
+/**
+ * 查询当前通道基线状态并刷新徽标（失败时保留上次显示）
+ */
+function refreshBaselineStatus() {
+    if (!zoneConfigContext.taskId || !zoneConfigContext.channelId) return;
+
+    fetch(`/api/tasks/${zoneConfigContext.taskId}/baseline-status`)
+        .then(resp => (resp.ok ? resp.json() : Promise.reject(new Error(`HTTP ${resp.status}`))))
+        .then(data => {
+            const entry = (data.channels || []).find(
+                ch => String(ch.channel_id) === String(zoneConfigContext.channelId)
+            );
+            if (!entry) return;
+            updateBaselineBadge(entry.state, entry.baseline_captured_at);
+        })
+        .catch(err => {
+            console.error('[ZoneConfig] 查询基线状态失败:', err);
+        });
+}
+
+/**
+ * 更新基线状态徽标与拍摄时间
+ */
+function updateBaselineBadge(state, capturedAt) {
+    const badge = document.getElementById('zoneBaselineBadge');
+    const timeEl = document.getElementById('zoneBaselineTime');
+    if (!badge) return;
+
+    const info = BASELINE_STATE_BADGES[state] || BASELINE_STATE_BADGES.uncalibrated;
+    badge.textContent = info.text;
+    badge.style.background = info.color;
+
+    if (timeEl) {
+        timeEl.textContent = capturedAt ? `拍摄于 ${formatBaselineTime(capturedAt)}` : '';
+    }
+}
+
+/**
+ * 格式化基线拍摄时间（本地时区，精确到分钟）
+ */
+function formatBaselineTime(isoStr) {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return isoStr;
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /**
@@ -309,6 +435,27 @@ function onZoneSelected(zone) {
         document.getElementById('zonePropLoiteringTime').disabled = !zone.enable_loitering_detection;
         document.getElementById('zonePropInertia').value = zone.inertia || 3;
 
+        // 遗留物检测参数（物品堆积 / 异常占用）
+        const pileupEl = document.getElementById('zonePropPileup');
+        const pileupTimeEl = document.getElementById('zonePropPileupTime');
+        const occupancyEl = document.getElementById('zonePropOccupancy');
+        const occupancyTimeEl = document.getElementById('zonePropOccupancyTime');
+        const minRatioEl = document.getElementById('zonePropMinAreaRatio');
+        if (pileupEl) {
+            pileupEl.value = zone.enable_pileup ? 'true' : 'false';
+            pileupTimeEl.value = zone.pileup_dwell_seconds || 300;
+            pileupTimeEl.disabled = !zone.enable_pileup;
+        }
+        if (occupancyEl) {
+            occupancyEl.value = zone.enable_occupancy ? 'true' : 'false';
+            occupancyTimeEl.value = zone.occupancy_dwell_seconds || 60;
+            occupancyTimeEl.disabled = !zone.enable_occupancy;
+        }
+        if (minRatioEl) {
+            minRatioEl.value = (zone.min_area_ratio !== undefined && zone.min_area_ratio !== null)
+                ? zone.min_area_ratio : 0.02;
+        }
+
         // “重新绘制”按钮：选中区域后可用
         if (redrawBtn) redrawBtn.disabled = false;
 
@@ -376,6 +523,8 @@ function renderZoneList(zones) {
                 ${isUndrawn ? '<span class="zone-undrawn-badge">未绘制</span>' : ''}
                 ${zone.required ? '<span class="zone-required-badge">必需</span>' : ''}
                 ${zone.enable_loitering_detection ? '<span class="zone-loitering-badge">徘徊</span>' : ''}
+                ${zone.enable_pileup ? '<span class="zone-required-badge">堆积</span>' : ''}
+                ${zone.enable_occupancy ? '<span class="zone-loitering-badge">占用</span>' : ''}
                 <button class="zone-delete-btn" onclick="event.stopPropagation(); deleteZoneByIndex(${index})" title="删除区域">
                     <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px;">
                         <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
@@ -425,6 +574,23 @@ function clearZoneProperties() {
     }
     const inertiaEl = document.getElementById('zonePropInertia');
     if (inertiaEl) inertiaEl.value = 3;
+    // 遗留物检测参数复位为默认值（禁用 + 默认时长）
+    const pileupEl = document.getElementById('zonePropPileup');
+    if (pileupEl) pileupEl.value = 'false';
+    const pileupTimeEl = document.getElementById('zonePropPileupTime');
+    if (pileupTimeEl) {
+        pileupTimeEl.value = 300;
+        pileupTimeEl.disabled = true;
+    }
+    const occupancyEl = document.getElementById('zonePropOccupancy');
+    if (occupancyEl) occupancyEl.value = 'false';
+    const occupancyTimeEl = document.getElementById('zonePropOccupancyTime');
+    if (occupancyTimeEl) {
+        occupancyTimeEl.value = 60;
+        occupancyTimeEl.disabled = true;
+    }
+    const minRatioEl = document.getElementById('zonePropMinAreaRatio');
+    if (minRatioEl) minRatioEl.value = 0.02;
     // 无选中区域时禁用“重新绘制”按钮
     const redrawBtn = document.getElementById('redrawZoneBtn');
     if (redrawBtn) redrawBtn.disabled = true;
@@ -449,6 +615,27 @@ function onZonePropChange() {
 
     // 启用/禁用徘徊时间输入
     document.getElementById('zonePropLoiteringTime').disabled = !zone.enable_loitering_detection;
+
+    // 遗留物检测参数（物品堆积 / 异常占用）
+    const pileupEl = document.getElementById('zonePropPileup');
+    if (pileupEl) {
+        zone.enable_pileup = pileupEl.value === 'true';
+        const dwell = parseInt(document.getElementById('zonePropPileupTime').value, 10);
+        zone.pileup_dwell_seconds = (dwell >= 10 && dwell <= 86400) ? dwell : 300;
+        document.getElementById('zonePropPileupTime').disabled = !zone.enable_pileup;
+    }
+    const occupancyEl = document.getElementById('zonePropOccupancy');
+    if (occupancyEl) {
+        zone.enable_occupancy = occupancyEl.value === 'true';
+        const dwell = parseInt(document.getElementById('zonePropOccupancyTime').value, 10);
+        zone.occupancy_dwell_seconds = (dwell >= 10 && dwell <= 86400) ? dwell : 60;
+        document.getElementById('zonePropOccupancyTime').disabled = !zone.enable_occupancy;
+    }
+    const minRatioEl = document.getElementById('zonePropMinAreaRatio');
+    if (minRatioEl) {
+        const ratio = parseFloat(minRatioEl.value);
+        zone.min_area_ratio = (ratio >= 0.001 && ratio <= 0.5) ? ratio : 0.02;
+    }
 
     // 更新区域列表显示（用 editor.zones 保持 id 一致，便于列表高亮匹配）
     renderZoneList(zoneConfigContext.editor.zones);

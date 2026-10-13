@@ -32,6 +32,9 @@ from pathlib import Path
 # 配置日志
 logger = logging.getLogger(__name__)
 
+# 占道/堆积类检测类型（物品堆积 / 异常占用，共用差分引擎，不使用检测模型）
+OCCUPANCY_DETECTION_TYPES = ('pile_up', 'abnormal_occupancy')
+
 # 添加项目路径
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
@@ -344,6 +347,12 @@ class CameraWorker:
             logger.debug(f"[CameraWorker-{self.camera_id}] 初始化失败，退出")
             return
 
+        # 占道/堆积检测：不创建检测组件（不加载模型、不开运动检测/跟踪），
+        # 直接进入差分管线主循环
+        if detection_type in OCCUPANCY_DETECTION_TYPES:
+            self._run_occupancy_pipeline(detection_type)
+            return
+
         logger.debug(f"[CameraWorker-{self.camera_id}] 开始检测")
 
         try:
@@ -549,6 +558,39 @@ class CameraWorker:
             self.cleanup()
 
         logger.debug(f"[CameraWorker-{self.camera_id}] 已退出")
+
+    def _run_occupancy_pipeline(self, detection_type: str):
+        """占道/堆积检测专用入口：仅解码器 + 差分引擎，不创建任何检测组件"""
+        try:
+            self.frame_shape = (
+                self.decoder_cfg.get('height', 640),
+                self.decoder_cfg.get('width', 640)
+            )
+            logger.info(
+                f"[CameraWorker-{self.camera_id}] 占道检测启动: "
+                f"detection_type={detection_type}, zones={len(self.zones_config or [])}"
+            )
+            logger.info(f"[CameraWorker-{self.camera_id}] pipeline 组件就绪，启动解码器")
+            self.decoder.start()
+
+            from src.pipeline.occupancy_pipeline import run_occupancy_pipeline
+            run_occupancy_pipeline(
+                camera_id=self.camera_id,
+                task_id=str(self.task_id),
+                detection_type=detection_type,
+                decoder=self.decoder,
+                detected_objects_queue=self.detected_objects_queue,
+                frame_shape=self.frame_shape,
+                zones_config=self.zones_config,
+                stop_event=self.stop_event,
+                channel_id=self.camera_config.get('channel_id'),
+            )
+        except Exception as e:
+            logger.debug(f"[CameraWorker-{self.camera_id}] 占道检测运行异常: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            self.cleanup()
 
     def _resolve_batch_file_paths(self) -> List[str]:
         """解析批处理（file/scheduled）待处理文件列表
@@ -970,31 +1012,49 @@ class MultiCameraTaskExecutor:
 
             input_shape = (1, input_height, input_width, 3)
 
-            # 注册任务（创建共享内存 + RemoteObjectDetector）
-            # 注意：返回的 RemoteObjectDetector 仅用于主进程持有引用（防止 GC），
-            # 子进程会用相同参数重建。
-            self.detector_pool_manager.register_task(
-                task_id=str(self.task_id),
-                camera_ids=camera_ids,
-                model_type=factory_algorithm,
-                detector_config=detector_config_dict,
-                class_names=list(class_names),
-                num_detectors=num_detectors,
-                input_shape=input_shape,
-            )
+            # 占道/堆积检测不使用检测模型：跳过检测器池注册（不加载模型、
+            # 不创建检测共享内存），仅填充占位参数供进程创建流程使用
+            detection_type_now = self.task_config.get('detection_type', 'realtime')
+            if detection_type_now in OCCUPANCY_DETECTION_TYPES:
+                logger.info(
+                    f"[MultiCameraExecutor-{self.task_id}] "
+                    f"占道/堆积检测不加载检测模型，跳过检测器池初始化"
+                )
+                for cam_id in camera_ids:
+                    self.detector_params_by_camera[cam_id] = {
+                        'camera_id': cam_id,
+                        'model_type': '',
+                        'class_names': [],
+                        'input_shape': (1, 640, 640, 3),
+                        'input_height': 640,
+                        'input_width': 640,
+                    }
+            else:
+                # 注册任务（创建共享内存 + RemoteObjectDetector）
+                # 注意：返回的 RemoteObjectDetector 仅用于主进程持有引用（防止 GC），
+                # 子进程会用相同参数重建。
+                self.detector_pool_manager.register_task(
+                    task_id=str(self.task_id),
+                    camera_ids=camera_ids,
+                    model_type=factory_algorithm,
+                    detector_config=detector_config_dict,
+                    class_names=list(class_names),
+                    num_detectors=num_detectors,
+                    input_shape=input_shape,
+                )
 
-            # 保存每个相机的 detector_params 和 out_event（传给子进程用）
-            pool = self.detector_pool_manager.pools[factory_algorithm]
-            for cam_id in camera_ids:
-                self.detector_params_by_camera[cam_id] = {
-                    'camera_id': cam_id,
-                    'model_type': factory_algorithm,
-                    'class_names': list(class_names),
-                    'input_shape': input_shape,
-                    'input_height': input_height,
-                    'input_width': input_width,
-                }
-                self.out_events[cam_id] = pool.out_events[cam_id]
+                # 保存每个相机的 detector_params 和 out_event（传给子进程用）
+                pool = self.detector_pool_manager.pools[factory_algorithm]
+                for cam_id in camera_ids:
+                    self.detector_params_by_camera[cam_id] = {
+                        'camera_id': cam_id,
+                        'model_type': factory_algorithm,
+                        'class_names': list(class_names),
+                        'input_shape': input_shape,
+                        'input_height': input_height,
+                        'input_width': input_width,
+                    }
+                    self.out_events[cam_id] = pool.out_events[cam_id]
 
             logger.debug(f"[MultiCameraExecutor-{self.task_id}] 检测器进程池初始化成功")
             logger.debug(f"[MultiCameraExecutor-{self.task_id}]   模型类型: {factory_algorithm}")
@@ -1112,9 +1172,9 @@ class MultiCameraTaskExecutor:
         以文件 I/O 方式检测某摄像机是否启用 AI 流（替代 Manager dict 代理）。
         """
         try:
-            from src.system.system_config_loader import get_web_server_host, get_web_server_port
-            host = get_web_server_host('127.0.0.1')
-            port = get_web_server_port()
+            from src.system.system_config_loader import get_webhook_base_url
+            # 子进程回调主进程属本机内部通信，固定走回环地址（不依赖 web_server.host 配置，
+            # 换设备部署时无需修改任何地址）
 
             # 显示配置（框颜色、线宽等）
             display_config = self.task_config.get('display_config', {})
@@ -1125,7 +1185,7 @@ class MultiCameraTaskExecutor:
 
             ai_stream_config = {
                 'interval': display_cfg.get('ai_stream_interval', 2),
-                'api_url': f'http://{host}:{port}/api/ai-stream/push',
+                'api_url': f'{get_webhook_base_url()}/api/ai-stream/push',
                 'display_config': display_config,
                 'flag_dir': flag_dir,
             }
@@ -1135,13 +1195,11 @@ class MultiCameraTaskExecutor:
 
         except Exception as e:
             logger.debug(f"[MultiCameraExecutor-{self.task_id}] AI 流配置构建失败，使用默认值: {e}")
-            # 兜底通过集中访问器读取 host/port（单一真相源，避免硬编码）
-            from src.system.system_config_loader import get_web_server_host, get_web_server_port
-            _host = get_web_server_host('127.0.0.1')
-            _port = get_web_server_port()
+            # 兜底同样走回环地址（单一真相源，避免硬编码）
+            from src.system.system_config_loader import get_webhook_base_url
             return {
                 'interval': 2,
-                'api_url': f'http://{_host}:{_port}/api/ai-stream/push',
+                'api_url': f'{get_webhook_base_url()}/api/ai-stream/push',
                 'display_config': {},
                 'flag_dir': str(Path(project_root) / 'data' / 'ai_stream_flags'),
             }
@@ -1150,28 +1208,43 @@ class MultiCameraTaskExecutor:
         """启动多摄像机检测"""
         self.running = True
 
+        # 就绪心跳：供主进程判定任务是否真正启动成功（方案：启动自检 + 自愈）
+        from src.system.health_check import write_heartbeat
+        import os as _os
+        self._hb_task_id = self.task_config.get('id')
+        write_heartbeat(self._hb_task_id, _os.getpid(), 'started')
+
         # 初始化共享组件
         if not self.init_shared_components():
             logger.debug(f"[MultiCameraExecutor-{self.task_id}] 初始化失败，无法启动")
+            write_heartbeat(self._hb_task_id, _os.getpid(), 'error', {'error': 'init_shared_components_failed'})
             return False
 
         # 1. 启动所有检测器进程（必须先于 CameraWorker，确保共享内存已就绪）
-        self.detector_pool_manager.start_all()
-
-        # 等待检测器进程就绪（模型加载+SHM连接完成）
-        # 不等待的话 CameraWorker 启动后检测全部超时，帧被环形缓冲区覆盖
-        logger.info(f"[MultiCameraExecutor-{self.task_id}] 等待检测器进程加载模型...")
-        _wait_start = time.time()
-        if not self.detector_pool_manager.wait_ready(timeout=120):
-            logger.warning(
-                f"[MultiCameraExecutor-{self.task_id}] "
-                f"等待检测器就绪超时(120s)，部分检测器可能未就绪，继续启动"
-            )
-        else:
+        # 占道/堆积检测不使用检测模型，跳过检测器启动与模型加载等待
+        if self.task_config.get('detection_type') in OCCUPANCY_DETECTION_TYPES:
             logger.info(
                 f"[MultiCameraExecutor-{self.task_id}] "
-                f"所有检测器已就绪（模型加载+SHM连接完成），耗时 {time.time()-_wait_start:.2f}s"
+                f"占道/堆积检测无检测器池，跳过检测器启动"
             )
+        else:
+            self.detector_pool_manager.start_all()
+
+            # 等待检测器进程就绪（模型加载+SHM连接完成）
+            # 不等待的话 CameraWorker 启动后检测全部超时，帧被环形缓冲区覆盖
+            logger.info(f"[MultiCameraExecutor-{self.task_id}] 等待检测器进程加载模型...")
+            _wait_start = time.time()
+            if not self.detector_pool_manager.wait_ready(timeout=120):
+                logger.warning(
+                    f"[MultiCameraExecutor-{self.task_id}] "
+                    f"等待检测器就绪超时(120s)，部分检测器可能未就绪，继续启动"
+                )
+            else:
+                logger.info(
+                    f"[MultiCameraExecutor-{self.task_id}] "
+                    f"所有检测器已就绪（模型加载+SHM连接完成），耗时 {time.time()-_wait_start:.2f}s"
+                )
+        write_heartbeat(self._hb_task_id, _os.getpid(), 'detectors_ready')
 
         # 2. 启动 TrackedObjectProcessorPool（多进程并行处理事件）
         _proc_start = time.time()
@@ -1193,11 +1266,20 @@ class MultiCameraTaskExecutor:
                 f"[MultiCameraExecutor-{self.task_id}] "
                 f"TrackedObjectProcessorPool 所有 worker 已就绪，耗时 {time.time()-_proc_start:.2f}s，开始启动 CameraWorker"
             )
+        write_heartbeat(self._hb_task_id, _os.getpid(), 'processors_ready')
 
         # 3. 为每个摄像机创建工作进程
+        # 占道/堆积检测无检测器池：检测队列为 None、输出事件为 None（CameraWorker 不消费）
+        is_occupancy = self.task_config.get('detection_type') in OCCUPANCY_DETECTION_TYPES
         for camera in self.cameras:
             camera_id = camera.get('camera_id')
-            model_type = self.detector_params_by_camera[camera_id]['model_type']
+            if is_occupancy:
+                detection_queue = None
+                out_event = None
+            else:
+                model_type = self.detector_params_by_camera[camera_id]['model_type']
+                detection_queue = self.detector_pool_manager.pools[model_type].detection_queue
+                out_event = self.out_events[camera_id]
 
             process = Process(
                 target=_camera_worker_process_wrapper,
@@ -1205,8 +1287,8 @@ class MultiCameraTaskExecutor:
                     camera,
                     self.task_config,
                     self.detector_params_by_camera[camera_id],
-                    self.detector_pool_manager.pools[model_type].detection_queue,
-                    self.out_events[camera_id],
+                    detection_queue,
+                    out_event,
                     self.detected_objects_queue,
                     self.stop_event,
                     self.ptz_metrics.get(camera_id) if self.ptz_metrics else None,
@@ -1239,6 +1321,9 @@ class MultiCameraTaskExecutor:
             logger.debug(f"[MultiCameraExecutor-{self.task_id}] 启动摄像机工作进程: {camera_id}")
 
         logger.debug(f"[MultiCameraExecutor-{self.task_id}] 所有摄像机已启动")
+        # 全部组件就绪（检测器+事件处理池+CameraWorker），进入 running 心跳
+        write_heartbeat(self._hb_task_id, _os.getpid(), 'running')
+        self._hb_last_ts = 0.0
         return True
 
     def run(self):
@@ -1276,6 +1361,15 @@ class MultiCameraTaskExecutor:
                     self.running = False
                     break
 
+                # 周期刷新就绪心跳（节流 10s；主进程 60s 内未见刷新视为任务失联）
+                from src.system.health_check import write_heartbeat as _write_hb
+                _now = time.time()
+                if _now - getattr(self, '_hb_last_ts', 0) >= 10:
+                    import os as _os
+                    _write_hb(self._hb_task_id, _os.getpid(), 'running',
+                              {'cameras_alive': alive_processes, 'cameras_total': len(self.worker_processes)})
+                    self._hb_last_ts = _now
+
                 # 每5秒检查一次进程状态
                 time.sleep(5)
 
@@ -1285,6 +1379,10 @@ class MultiCameraTaskExecutor:
         except Exception as e:
             logger.debug(f"[MultiCameraExecutor-{self.task_id}] 主循环异常: {e}")
             self.stop(reason=f"run_loop_error: {e}")
+        finally:
+            # 正常退出路径（批处理完成/所有工作进程结束）也执行清理，
+            # 停掉检测器进程池与事件处理进程并释放共享内存，防止残留块影响下次启动
+            self.stop(reason="run_exit")
 
         logger.debug(f"[MultiCameraExecutor-{self.task_id}] 任务执行器已退出")
 

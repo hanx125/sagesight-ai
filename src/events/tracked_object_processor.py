@@ -46,6 +46,7 @@ import signal
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, Future
+from datetime import datetime
 from typing import Optional, Tuple
 
 import cv2
@@ -670,6 +671,129 @@ class TrackedObjectProcessor(mp.Process):
         if cam_id in self.ptz_metrics:
             state.on("autotrack", self._on_object_autotrack)
 
+    def _on_occupancy_message(self, msg: dict):
+        """处理占道/堆积检测消息（区域遗留物引擎状态迁移）
+
+        消息字段: __type__='occupancy', camera_id, detection_type, task_id,
+                  event(alert/recovery/global_change), zone_name, area_ratio,
+                  dwell_seconds, diff_bbox, shm_block_id, shm_name,
+                  sequence_num, timestamp
+        """
+        camera_id = msg.get('camera_id')
+        event = msg.get('event')
+        detection_type = msg.get('detection_type', 'pile_up')
+        zone_name = msg.get('zone_name', '')
+
+        if camera_id not in self.camera_states:
+            logger.warning(f"[occupancy] 未知的 camera_id: {camera_id}")
+            return
+
+        if event == 'alert':
+            self._on_occupancy_alert(camera_id, msg, detection_type, zone_name)
+        elif event == 'recovery':
+            self._on_occupancy_recovery(camera_id, msg, detection_type, zone_name)
+        elif event == 'global_change':
+            # 全局突变（昼夜切换/相机位移）：区域已转 INVALID，不产生告警事件；
+            # 前端经基线状态接口轮询感知，提示重拍基线
+            logger.warning(
+                f"[{camera_id}] 基线失效(全局突变 area_ratio={msg.get('area_ratio')}), "
+                f"区域 {zone_name} 待重拍"
+            )
+
+    def _on_occupancy_alert(self, camera_id: str, msg: dict,
+                            detection_type: str, zone_name: str):
+        """占道/堆积告警：回读触发帧快照 → 创建事件（落库+MQTT+WebSocket）"""
+        event_output = self.event_outputs.get(camera_id)
+        if event_output is None:
+            logger.warning(f"[{camera_id}] EventOutput 未初始化,丢弃占道告警")
+            return
+
+        now = time.time()
+
+        # 回读触发帧快照（帧序号校验块是否已被环形缓冲区覆盖）
+        shm_info = {
+            'shm_block_id': msg.get('shm_block_id'),
+            'shm_name': msg.get('shm_name'),
+            'frame_time': msg.get('timestamp', now),
+            'frame_seq': msg.get('sequence_num'),
+        }
+        frame, _aligned = self._read_frame_from_shm(camera_id, shm_info)
+
+        event_data = {
+            'class_name': detection_type,
+            'confidence': msg.get('area_ratio', 0.0),
+            'bbox': msg.get('diff_bbox') or [0, 0, 0, 0],
+            'status': 'active',
+            'start_time': now,
+            'current_zones': [zone_name],
+            'dwell_seconds': msg.get('dwell_seconds', 0),
+        }
+        event_id = event_output.emit(
+            event_type=detection_type,
+            data=event_data,
+            image=frame,
+            frame_id=msg.get('sequence_num', 0),
+            lifecycle=False,  # 无跟踪状态机，创建即推送
+            defer_db=False,
+            bypass_filter=True,  # confidence 为面积占比，不适用检测置信度过滤
+        )
+        if event_id:
+            if not hasattr(self, 'occupancy_events'):
+                self.occupancy_events = {}
+            self.occupancy_events.setdefault(camera_id, {})[zone_name] = event_id
+
+        logger.info(
+            f"[{camera_id}] 占道告警: zone={zone_name}, type={detection_type}, "
+            f"area_ratio={msg.get('area_ratio')}, event_id={event_id}"
+        )
+        self._trigger_alarm_voice(camera_id)
+
+    def _on_occupancy_recovery(self, camera_id: str, msg: dict,
+                               detection_type: str, zone_name: str):
+        """占道/堆积恢复：结束对应事件，可选推送恢复通知"""
+        event_output = self.event_outputs.get(camera_id)
+        event_id = getattr(self, 'occupancy_events', {}) \
+            .get(camera_id, {}).pop(zone_name, None)
+        if not event_id:
+            logger.debug(f"[{camera_id}] 占道恢复无对应事件: zone={zone_name}")
+            return
+
+        now = time.time()
+        try:
+            from src.tasks.task_manager import TaskManager
+            TaskManager().update_event(
+                event_id,
+                end_time=datetime.now().isoformat(),
+                status='final',
+            )
+        except Exception as e:
+            logger.debug(f"[{camera_id}] 占道事件收尾失败 event={event_id[:8]}: {e}")
+
+        # 恢复通知（默认开启）：以原事件 ID 推送一条 recovery 消息，不新建事件记录
+        event_cfg = self.camera_configs.get(camera_id, {}).get('event_config', {})
+        if event_output is not None \
+                and event_cfg.get('occupancy_recovery_notify', True) \
+                and getattr(event_output, 'mqtt_outputter', None):
+            try:
+                event_output.mqtt_outputter.send({
+                    'event_id': event_id,
+                    'type': detection_type,
+                    'camera_id': camera_id,
+                    'camera_name': event_output._get_camera_name(),
+                    'task_id': self.camera_configs.get(camera_id, {}).get('task_id'),
+                    'timestamp': datetime.utcnow().isoformat() + 'Z',
+                    'data': {
+                        'status': 'recovery',
+                        'zone_name': zone_name,
+                    },
+                })
+            except Exception as e:
+                logger.debug(f"[{camera_id}] 占道恢复通知发送失败: {e}")
+
+        logger.info(
+            f"[{camera_id}] 占道恢复: zone={zone_name}, event_id={event_id[:8]}"
+        )
+
     def _process_detection_data(self, data: tuple):
         """
         处理从队列获取的检测数据
@@ -677,7 +801,12 @@ class TrackedObjectProcessor(mp.Process):
         数据格式: (camera_id, frame_time, tracked_objects_dict,
                    motion_boxes, regions, shm_block_id, shm_name,
                    detection_results, frame_seq)
+        占道/堆积检测消息为 dict（__type__='occupancy'），走独立处理分支
         """
+        if isinstance(data, dict):
+            self._on_occupancy_message(data)
+            return
+
         if len(data) < 7:
             logger.warning(f"检测数据格式错误,长度不足: {len(data)}")
             return
@@ -845,21 +974,23 @@ class TrackedObjectProcessor(mp.Process):
             return None
 
         # 采集开始快照（复用主循环已读帧），绘制检测框（与 AI 视频流保持一致）
+        # 人脸/车牌类走精简路径：抓拍图取自主生命周期最优帧的裁剪图，采集阶段不取帧
         image = None
-        if event_output.capture_save_full_on_start:
-            image = self._current_frame
+        if event_output.capture_save_full_on_start and event_output.library_match_kind(class_name) is None:
+            raw_image = self._current_frame
             image_aligned = self._current_frame_aligned
-            if image is None:
+            if raw_image is None:
                 # 兜底读 shm，返回 (frame, aligned)
-                image, image_aligned = self._read_frame_from_shm(camera_id)
-            if image is not None:
+                raw_image, image_aligned = self._read_frame_from_shm(camera_id)
+            if raw_image is not None:
                 if not image_aligned:
                     logger.warning(
                         f"[{camera_id}] 事件开始快照帧未对齐(降级使用最新帧): "
                         f"track_id={obj_dict.get('id')}, "
                         f"检测框可能滞后于画面"
                     )
-                image = self._prepare_event_image(camera_id, image)
+                # 事件快照按需绘制检测框（_prepare_event_image 内部已 copy，不影响原始帧）
+                image = self._prepare_event_image(camera_id, raw_image)
 
         track_id = obj_dict.get("id", "")
         bbox = obj_dict.get("box", [0, 0, 0, 0])
@@ -878,7 +1009,7 @@ class TrackedObjectProcessor(mp.Process):
             "loitered_zones": obj_dict.get("loitered_zones", []),
         }
 
-        return event_output.emit(
+        event_id = event_output.emit(
             event_type=self._get_task_event_type(camera_id),
             data=event_data,
             image=image,
@@ -886,6 +1017,7 @@ class TrackedObjectProcessor(mp.Process):
             lifecycle=True,  # 参与去重状态机：创建阶段不推 MQTT，状态切换为最终事件后再推送
             defer_db=True,   # 跟踪中不写库：事件仅在跟踪完成并通过区域过滤后首次落库
         )
+        return event_id
 
     def _get_task_event_type(self, camera_id: str) -> str:
         """获取任务配置的语义检测类型（事件类型）
@@ -899,7 +1031,8 @@ class TrackedObjectProcessor(mp.Process):
         """触发当前摄像机所属任务的报警语音播报
 
         依据任务配置（voice_*）与全局配置解析播放参数，由 VoiceBroadcaster
-        在后台线程通过服务器音频设备播放。任务禁用且全局关闭时不播报。
+        在后台线程通过服务器音频设备播放。全局关闭时一律不播；
+        全局开启时由任务 voice_enabled 决定（人脸/车牌比对事件不触发）。
         """
         try:
             task_id = self.camera_configs.get(camera_id, {}).get("task_id")
@@ -965,9 +1098,12 @@ class TrackedObjectProcessor(mp.Process):
         # 无匹配：创建新事件
         # ========================================
 
+        # 人脸/车牌类走精简路径：不做必需区域过滤，出现即创建事件
+        is_library_class = event_output.library_match_kind(class_name) is not None
+
         # 必需区域过滤：延迟事件创建到目标首次进入必需区域
         # start 阶段 entered_zones 必为空（目标刚出现，尚未确认进入任何区域），无法判定
-        if event_output.has_required_zones():
+        if event_output.has_required_zones() and not is_library_class:
             self.active_events[camera_id][track_id] = {
                 "event_id": None,                # None = pending（尚未进入必需区域）
                 "pending_required_zones": True,
@@ -1046,6 +1182,8 @@ class TrackedObjectProcessor(mp.Process):
         event_id = active_event.get("event_id", "")
 
         # 生成快照（仅在 thumbnail 更新时，复用主循环已读帧）
+        class_name = obj_dict.get("label", "unknown")
+        is_library_class = event_output.library_match_kind(class_name) is not None
         image = None
         if obj_dict.get("snapshot") is not None:
             image = self._current_frame
@@ -1059,11 +1197,16 @@ class TrackedObjectProcessor(mp.Process):
                     f"event_id={event_id}, track_id={obj_dict.get('id')}, "
                     f"检测框可能滞后于画面"
                 )
-            # 绘制检测框（与 AI 视频流保持一致，best_thumbnail 也带检测框）
-            image = self._prepare_event_image(camera_id, image)
+            if is_library_class:
+                # 人脸/车牌精简路径：以检测框外扩裁剪干净小图作为候选抓拍（无绘制框，
+                # 避免干扰边缘识别），生命周期内置信度最高者即最终事件图
+                bbox_now = obj_dict.get("box", [0, 0, 0, 0])
+                image = event_output.crop_library_image(image, tuple(bbox_now))
+            else:
+                # 绘制检测框（与 AI 视频流保持一致，best_thumbnail 也带检测框）
+                image = self._prepare_event_image(camera_id, image)
 
         # 构建更新数据
-        class_name = obj_dict.get("label", "unknown")
         confidence = obj_dict.get("score", 0.0)
         bbox = obj_dict.get("box", [0, 0, 0, 0])
 
@@ -1126,8 +1269,10 @@ class TrackedObjectProcessor(mp.Process):
 
         # 获取结束快照（目标消失时的帧，复用主循环已读帧）
         # 宽限期后 _current_frame 已变，所以现在保存
+        # 人脸/车牌类走精简路径：不做区域过滤，且结束帧也裁剪为抓拍小图作兜底
+        is_library_class = event_output.library_match_kind(class_name) is not None
         entered_zones = obj_dict.get("entered_zones", []) or []
-        passes_zones = event_output.passes_required_zones(entered_zones)
+        passes_zones = True if is_library_class else event_output.passes_required_zones(entered_zones)
         end_image = None
         if passes_zones and event_output.capture_save_full_on_end:
             end_image = self._current_frame
@@ -1142,7 +1287,10 @@ class TrackedObjectProcessor(mp.Process):
                         f"event_id={event_id}, track_id={obj_dict.get('id')}, "
                         f"检测框可能滞后于画面"
                     )
-                end_image = self._prepare_event_image(camera_id, end_image)
+                if is_library_class:
+                    end_image = event_output.crop_library_image(end_image, tuple(bbox))
+                else:
+                    end_image = self._prepare_event_image(camera_id, end_image)
 
         # 移入 pending_end_events，等待宽限期
         # 宽限期内若有新目标匹配，复用 event_id 延续事件；超时则 _finalize_event_end
@@ -1563,9 +1711,10 @@ class TrackedObjectProcessor(mp.Process):
             "loitered_zones": obj_dict.get("loitered_zones", []),
         }
 
-        # required_zones 过滤
+        # required_zones 过滤；人脸/车牌类走精简路径，不做区域过滤（始终通过）
+        is_library_class = event_output.library_match_kind(class_name) is not None
         entered_zones = obj_dict.get("entered_zones", []) or []
-        passes_zones = event_output.passes_required_zones(entered_zones)
+        passes_zones = True if is_library_class else event_output.passes_required_zones(entered_zones)
 
         # 获取置信度最高的缩略图
         best_thumbnail = event_output.get_best_thumbnail(event_id)
@@ -1614,7 +1763,8 @@ class TrackedObjectProcessor(mp.Process):
             # ========================================
             dedup_status = "normal"
             dedup_reason = ""
-            if self.rule_deduper is not None:
+            # 人脸/车牌类走精简路径：跳过规则去重
+            if self.rule_deduper is not None and not is_library_class:
                 try:
                     dedup_status, dedup_reason = self.rule_deduper.check_duplicate(
                         event_id=event_id,
@@ -1717,13 +1867,16 @@ class TrackedObjectProcessor(mp.Process):
 
                 # 报警语音播报：任务产生非去重初始事件即触发服务端语音
                 # （是否真正播放由任务 voice_enabled 与全局开关共同决定）
-                self._trigger_alarm_voice(camera_id)
+                # 人脸/车牌比对事件走精简路径，不触发语音播报
+                if event_output.library_match_kind(class_name) is None:
+                    self._trigger_alarm_voice(camera_id)
 
                 # 终态门闩：GIF / LLM 全部完成后才单推终态 MQTT，绝不提前投递未定态
                 # 事件（若 initial 提前推送，后续被大模型去重时第三方已收到，无法撤回）。
                 # 先完成帧回取与参数准备（暂存），登记门闩后再提交异步任务。
                 gif_required = False
-                if event_output.gif_enabled and self.gif_executor:
+                # 人脸/车牌类走精简路径：不生成 GIF
+                if not is_library_class and event_output.gif_enabled and self.gif_executor:
                     frame_cache = self.frame_caches.get(camera_id)
                     if frame_cache is not None:
                         gif_cfg = event_output.gif_cfg
@@ -1756,7 +1909,12 @@ class TrackedObjectProcessor(mp.Process):
                             }
 
                 # 语义去重（大模型，前提打开大模型功能）+ 描述
-                llm_required = final_image is not None and self.llm_executor is not None
+                # 人脸/车牌类走精简路径：跳过语义去重与 AI 描述，仅保留一张最优抓拍图
+                llm_required = (
+                    not is_library_class
+                    and final_image is not None
+                    and self.llm_executor is not None
+                )
                 cam_cfg = self.camera_configs.get(camera_id, {})
                 event_info = {
                     'class_name': class_name,
@@ -1950,22 +2108,39 @@ class TrackedObjectProcessor(mp.Process):
 
         # 读取终态记录：大模型描述等字段在事件创建推送之后才产生，
         # 需随本次状态切换一并补推，驾驶舱卡片/详情才能拿到描述
-        extra_data = {}
+        d = {}
         try:
             record = tm.get_event_by_id(event_id)
             if record is not None:
                 d = record.to_dict()
-                extra_data = {
-                    'ai_description': d['ai_description'],
-                    'ai_description_model': d['ai_description_model'],
-                    'ai_description_time': d['ai_description_time'],
-                    'end_time': d['end_time'],
-                    'local_gif_url': d['local_gif_url'],
-                    'minio_gif_url': d['minio_gif_url'],
-                    'ftp_gif_url': d['ftp_gif_url'],
-                }
         except Exception as e:
             logger.debug(f"[Event] 读取终态事件失败 event={event_id[:8]}: {e}")
+
+        event_output = self.event_outputs.get(gate['camera_id'])
+
+        # 人脸/车牌事件：先异步库比对（结果落库 metadata），再补推前端并单推 MQTT，
+        # 事件"生来带比对信息"（人脸带人名/相似度，车牌带车牌号/命中记录），无 GIF/LLM 环节
+        if event_output is not None and event_output.library_match_kind(d.get('class_name')) is not None:
+            threading.Thread(
+                target=self._finalize_library_event,
+                args=(event_id, gate['camera_id'], final_status,
+                      gate['dedup_status'], gate['dedup_reason']),
+                daemon=True,
+                name=f"lib-final-{event_id[:8]}",
+            ).start()
+            return
+
+        extra_data = {}
+        if d:
+            extra_data = {
+                'ai_description': d['ai_description'],
+                'ai_description_model': d['ai_description_model'],
+                'ai_description_time': d['ai_description_time'],
+                'end_time': d['end_time'],
+                'local_gif_url': d['local_gif_url'],
+                'minio_gif_url': d['minio_gif_url'],
+                'ftp_gif_url': d['ftp_gif_url'],
+            }
 
         # 推送状态切换到前端（驾驶舱实时刷新徽章 + 补推终态字段）
         self._push_status_to_frontend(
@@ -1977,12 +2152,59 @@ class TrackedObjectProcessor(mp.Process):
         # 规则去重复核确认重复（review_mode + duplicate）：维持规则去重结论，不推 MQTT
         # （与"规则去重不推送"约定一致，事件仅以 DB duplicate 状态记录）
         is_review_dup = gate.get('review_mode', False) and final_status == "duplicate"
-        event_output = self.event_outputs.get(gate['camera_id'])
         if event_output is not None and not is_review_dup:
             try:
                 event_output.push_terminal_to_mqtt(event_id)
             except Exception as e:
                 logger.debug(f"[MQTT] 推送终态事件失败 event={event_id[:8]}: {e}")
+
+    def _finalize_library_event(self, event_id: str, camera_id: str,
+                                final_status: str, dedup_status: str,
+                                dedup_reason: str) -> None:
+        """人脸/车牌事件收尾（异步线程执行）：库比对 → 结果落库 → 补推前端 → 单推 MQTT"""
+        event_output = self.event_outputs.get(camera_id)
+        if event_output is None:
+            return
+        try:
+            event_output.run_library_match(event_id)
+        except Exception as e:
+            logger.debug(f"[Event] 人脸/车牌库比对失败 event={event_id[:8]}: {e}")
+        from src.tasks.task_manager import TaskManager
+        # 等待远程图片上传（MinIO/FTP）URL 落库后再推 MQTT：
+        # 上传与终态推送并发执行，若比对先于上传完成，终态消息会缺远程地址。
+        # 仅在启用了远程存储时等待；上传失败最多等 5s 后照常推送
+        expected_uploaders = {
+            o.__class__.__name__ for o in (getattr(event_output, 'image_outputters', None) or [])
+        }
+        if expected_uploaders:
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                try:
+                    r = TaskManager().get_event_by_id(event_id)
+                    if r is None or (
+                        ('MinIOOutputter' not in expected_uploaders or r.minio_image_url)
+                        and ('FTPOutputter' not in expected_uploaders or r.ftp_image_url)
+                    ):
+                        break
+                except Exception:
+                    break
+                time.sleep(0.2)
+        record = TaskManager().get_event_by_id(event_id)
+        d = record.to_dict() if record is not None else {}
+        self._push_status_to_frontend(
+            event_id, final_status, dedup_status, dedup_reason,
+            extra_data={
+                'end_time': d.get('end_time'),
+                'local_gif_url': d.get('local_gif_url'),
+                'minio_gif_url': d.get('minio_gif_url'),
+                'ftp_gif_url': d.get('ftp_gif_url'),
+                'metadata': d.get('metadata') or {},
+            },
+        )
+        try:
+            event_output.push_terminal_to_mqtt(event_id)
+        except Exception as e:
+            logger.debug(f"[MQTT] 推送终态事件失败 event={event_id[:8]}: {e}")
 
     def _push_status_to_frontend(self, event_id: str, status: str,
                                  dedup_status: str, dedup_reason: str,
@@ -2931,7 +3153,14 @@ class TrackedObjectProcessorPool:
             if not data:
                 continue
 
-            camera_id = data[0]
+            # 遗留物消息为 dict（__type__='occupancy'），camera_id 在字段中；
+            # 普通检测消息为元组，首元素是 camera_id
+            if isinstance(data, dict):
+                camera_id = data.get('camera_id')
+            else:
+                camera_id = data[0]
+            if not camera_id:
+                continue
             worker_idx = self.camera_to_worker.get(camera_id)
             if worker_idx is None:
                 continue

@@ -385,7 +385,28 @@ class DeviceChannelPoolManager:
     # ========================================
     # 摄像机-设备通道池关联管理
     # ========================================
-    
+
+    def get_bound_camera_id(self, channel_id: int) -> Optional[str]:
+        """查询通道绑定的摄像机 ID（直接读绑定表，规避 device_channel_pool 中的历史 JSON 数据）
+
+        Args:
+            channel_id: 设备通道池 ID
+
+        Returns:
+            摄像机 ID，未绑定返回 None
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                row = conn.execute(
+                    'SELECT camera_id FROM camera_device_channel_bindings '
+                    'WHERE channel_id = ? AND enabled = 1 LIMIT 1',
+                    (channel_id,)
+                ).fetchone()
+                return row[0] if row else None
+        except Exception as e:
+            logger.warning(f"[DeviceChannelPoolManager] 查询通道绑定摄像机失败: channel_id={channel_id}, error={e}")
+            return None
+
     def bind_camera_to_channel(self, camera_id: str, channel_id: int) -> int:
         """将摄像机绑定到设备通道池
         

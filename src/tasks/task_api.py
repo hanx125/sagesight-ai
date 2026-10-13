@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Dict, List
 import sqlite3
 import logging
+import time
 
 # 创建 Blueprint
 task_bp = Blueprint('tasks', __name__, url_prefix='/api')
@@ -34,28 +35,24 @@ def get_task_manager():
 
 
 def get_process_manager():
-    """获取进程管理器实例（从 run.py 全局变量获取）"""
+    """获取进程管理器实例（从 run.py 全局变量获取）
+
+    注意：`python run.py` 启动时 run.py 以 __main__ 身份存在，import run 会重新
+    执行模块得到第二个实例（空进程表）。必须优先从 sys.modules['__main__'] 取。
+    """
     global _process_manager
     if _process_manager is None:
-        # ✅ 方法1：尝试从 run.py 获取全局 pm（如果已初始化）
         try:
-            import run
-            if hasattr(run, 'pm') and run.pm is not None:
-                _process_manager = run.pm
-            elif hasattr(run, 'process_manager') and run.process_manager is not None:
-                # ✅ 兼容旧版本
-                _process_manager = run.process_manager
-            elif hasattr(run, 'get_process_manager'):
-                # ✅ 方法2：调用 run.py 的 get_process_manager() 函数
-                _process_manager = run.get_process_manager()
+            import sys
+            main_mod = sys.modules.get('__main__')
+            if main_mod is not None and hasattr(main_mod, 'get_process_manager'):
+                _process_manager = main_mod.get_process_manager()
             else:
-                # ✅ 方法3：创建临时实例（兜底）
-                logger.warning("[get_process_manager] run.pm 未初始化，创建临时实例")
+                # 兜底：独立导入场景（如测试脚本）创建临时实例
                 from run import TaskProcessManager
                 _process_manager = TaskProcessManager()
         except Exception as e:
             logger.error(f"[get_process_manager] 获取进程管理器失败: {e}")
-            # ✅ 方法4：创建一个新的实例（最后手段）
             from run import TaskProcessManager
             _process_manager = TaskProcessManager()
 
@@ -184,6 +181,20 @@ def create_task():
     # ========================================
     # 从算法库获取标签路径（算法库为单一真相源）
     # ========================================
+    detection_type = data.get('detection_type', 'realtime')
+    # 遗留物检测（物品堆积/异常占用）不加载检测模型：算法/模型路径仅作占位，
+    # 前端隐藏相关配置后可能不提交这些字段，此处兜底避免落库为空
+    if detection_type in ('pile_up', 'abnormal_occupancy'):
+        if not data.get('algorithm'):
+            data['algorithm'] = 'yolov11'
+        if not data.get('model_path'):
+            data['model_path'] = 'models/yolov11n.onnx'
+        if not data.get('event_type'):
+            data['event_type'] = detection_type
+        # 面积占比语义与检测置信度不同，事件不走置信度过滤，落库 0 保持一致
+        if not data.get('conf_threshold'):
+            data['conf_threshold'] = 0.0
+
     algorithm_name = data.get('algorithm', 'yolov11')
     labels_file = ''
     try:
@@ -224,6 +235,10 @@ def create_task():
         conf_threshold=conf_threshold,  # 检测置信度阈值（任务级）
         motion_detection_enabled=data.get('motion_detection_enabled', True),
         tracking_enabled=data.get('tracking_enabled', True),
+        # 边缘库比对（任务级）：人脸/车牌库名称由边缘集成平台维护
+        library_match_enabled=bool(data.get('library_match_enabled', False)),
+        face_library_name=(data.get('face_library_name') or '').strip(),
+        plate_library_name=(data.get('plate_library_name') or '').strip(),
         **switch_values
     )
 
@@ -307,6 +322,18 @@ def update_task(task_id: int):
     # 任务级配置仅由"独立列"承载（conf_threshold、事件输出/显示开关等），
     # 其余由 config/*.yaml 全局提供；此处不再做 JSON 配置合并
     update_data = data.copy()
+
+    # 遗留物检测兜底：前端隐藏算法配置后可能提交空值，仅对显式传空字段占位（不覆盖未提交字段）
+    detection_type_now = update_data.get('detection_type') or (task.detection_type or 'realtime')
+    if detection_type_now in ('pile_up', 'abnormal_occupancy'):
+        if 'algorithm' in update_data and not update_data['algorithm']:
+            update_data['algorithm'] = 'yolov11'
+        if 'model_path' in update_data and not update_data['model_path']:
+            update_data['model_path'] = 'models/yolov11n.onnx'
+        if 'event_type' in update_data and not update_data['event_type']:
+            update_data['event_type'] = detection_type_now
+        if 'conf_threshold' in update_data and not update_data['conf_threshold']:
+            update_data['conf_threshold'] = 0.0
 
     # 1. 更新任务本身的配置
     success = task_manager.update_task(task_id, update_data)
@@ -930,6 +957,27 @@ def _validate_zones_config(zones_config):
             if not isinstance(objects, list) or not all(isinstance(o, str) for o in objects):
                 return False, f'Zone {zone["name"]} 的objects必须是字符串列表'
 
+        # 可选字段校验：占道/堆积检测（遗留物引擎）
+        # enable_pileup / enable_occupancy 控制该区域分别参与物品堆积/异常占用检测
+        for enable_key in ('enable_pileup', 'enable_occupancy'):
+            if enable_key in zone and not isinstance(zone[enable_key], bool):
+                return False, f'Zone {zone["name"]} 的{enable_key}必须是布尔值'
+
+        # 区域级持续时长覆盖（秒）：10~86400
+        for dwell_key in ('pileup_dwell_seconds', 'occupancy_dwell_seconds'):
+            if dwell_key in zone:
+                dwell = zone[dwell_key]
+                if not isinstance(dwell, int) or isinstance(dwell, bool) \
+                        or dwell < 10 or dwell > 86400:
+                    return False, f'Zone {zone["name"]} 的{dwell_key}必须是10-86400之间的整数'
+
+        # 区域级最小面积占比：0.001~0.5
+        if 'min_area_ratio' in zone:
+            min_ratio = zone['min_area_ratio']
+            if not isinstance(min_ratio, (int, float)) or isinstance(min_ratio, bool) \
+                    or min_ratio < 0.001 or min_ratio > 0.5:
+                return False, f'Zone {zone["name"]} 的min_area_ratio必须是0.001-0.5之间的数值'
+
     return True, None
 
 
@@ -1008,6 +1056,87 @@ def save_channel_zones(task_id: int, channel_id: int):
 def delete_channel_zones(task_id: int, channel_id: int):
     """删除通道的Zone配置（兼容路由，task_id 忽略）"""
     return delete_channel_zones_by_channel(channel_id)
+
+
+# ========================================
+# 占道/堆积检测基线管理 API
+# ========================================
+
+@task_bp.route('/tasks/<int:task_id>/capture-baseline', methods=['POST'])
+def capture_baseline(task_id: int):
+    """请求拍摄基线（物品堆积/异常占用检测专用）
+
+    任务必须处于运行中且检测类型为 pile_up/abnormal_occupancy。
+    基线必须来自管线解码链路（与运行时参与比对的帧同源、同尺寸），
+    任务未运行时无法离线补拍。
+    """
+    task_manager = get_task_manager()
+    task = task_manager.get_task(task_id)
+    if task is None:
+        return jsonify({'error': '任务不存在'}), 404
+
+    detection_type = task.detection_type or 'realtime'
+    if detection_type not in ('pile_up', 'abnormal_occupancy'):
+        return jsonify({'error': '仅物品堆积检测/异常占用检测任务支持拍摄基线'}), 400
+
+    process_manager = get_process_manager()
+    if task_id not in process_manager.task_processes:
+        return jsonify({'error': '任务未运行，请先启动任务后再拍摄基线'}), 400
+
+    from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager
+    from src.occupancy.baseline_manager import BaselineManager
+
+    channels = get_device_channel_pool_manager().get_task_device_channels(task_id)
+    if not channels:
+        return jsonify({'error': '任务未关联通道'}), 400
+
+    # 逐通道写拍摄请求标记，管线进程下一循环响应（连取5帧取中值落盘）
+    requested = []
+    for ch in channels:
+        channel_id = str(ch.id)
+        BaselineManager.request_capture(task_id, channel_id)
+        requested.append({
+            'channel_id': channel_id,
+            'channel_name': getattr(ch, 'channel_name', '') or channel_id,
+        })
+
+    logger.info(f"[capture-baseline] 任务 {task_id} 请求拍摄基线: {len(requested)} 个通道")
+    return jsonify({
+        'message': '拍摄请求已下发，管线将在数秒内完成采集',
+        'channels': requested,
+    })
+
+
+@task_bp.route('/tasks/<int:task_id>/baseline-status', methods=['GET'])
+def baseline_status(task_id: int):
+    """获取任务各通道基线与区域状态（物品堆积/异常占用检测专用）
+
+    数据来源：管线进程定期（5s）回写的状态摘要；无运行时状态时按
+    基线文件存在性给出缺省状态（monitoring / uncalibrated）。
+    """
+    from src.tasks.device_channel_pool_manager import get_device_channel_pool_manager
+    from src.occupancy.baseline_manager import BaselineManager
+
+    channels = get_device_channel_pool_manager().get_task_device_channels(task_id)
+    result = []
+    for ch in channels:
+        channel_id = str(ch.id)
+        meta = BaselineManager.meta(channel_id) or {}
+        status = BaselineManager.load_status(channel_id) or {}
+        if status.get('state'):
+            state = status['state']
+        elif BaselineManager.exists(channel_id):
+            state = 'monitoring'
+        else:
+            state = 'uncalibrated'
+        result.append({
+            'channel_id': channel_id,
+            'channel_name': getattr(ch, 'channel_name', '') or channel_id,
+            'baseline_captured_at': status.get('captured_at') or meta.get('captured_at'),
+            'state': state,
+            'zones': status.get('zones', []),
+        })
+    return jsonify({'task_id': task_id, 'channels': result})
 
 
 # ========================================
@@ -1142,7 +1271,8 @@ def get_channel_snapshot(channel_id: int):
     Returns:
         JPEG 图片（Response），响应头包含 X-Snapshot-Width / X-Snapshot-Height
     """
-    import threading
+    import sys
+    import subprocess
     import cv2
     import numpy as np
     from io import BytesIO
@@ -1160,90 +1290,92 @@ def get_channel_snapshot(channel_id: int):
     from src.cameras.camera_manager import get_camera_manager
     camera_manager = get_camera_manager()
 
-    if channel.camera_id:
-        camera_info = camera_manager.get_camera(channel.camera_id)
+    # 直连摄像机源地址：转发流地址回源超时时回退使用。
+    # camera_id 从绑定表查询（channel.camera_id 存的是历史 JSON 数据，不可直接使用）
+    fallback_url = ''
+    bound_camera_id = channel_pool_manager.get_bound_camera_id(channel_id)
+    if bound_camera_id:
+        camera_info = camera_manager.get_camera(bound_camera_id)
         if camera_info and camera_info.protocol == 'file':
             source = camera_info.source if hasattr(camera_info, 'source') else ''
             rtsp_url = source.replace('file://', '') if source.startswith('file://') else source
+        elif camera_info and getattr(camera_info, 'source', ''):
+            source = camera_info.source
+            fallback_url = source.replace('file://', '') if source.startswith('file://') else source
 
     if not rtsp_url:
         return jsonify({'error': '通道未配置视频流地址'}), 400
 
-    # 截取参数：RTSP 首次连接较慢，给予充足超时与重试
+    # localhost 解析包含 IPv6 (::1)，FFmpeg 先连 ::1 卡满 30s 超时才回退 IPv4；
+    # 统一替换为 127.0.0.1 规避该延迟
+    rtsp_url = rtsp_url.replace('://localhost:', '://127.0.0.1:')
+    fallback_url = fallback_url.replace('://localhost:', '://127.0.0.1:')
+
+    # 抓帧超时：RTSP 首次连接较慢，给予充足时间
     SNAPSHOT_TIMEOUT = 15.0       # 整体超时（秒）
-    OPEN_RETRY_COUNT = 3          # VideoCapture 打开重试次数
-    OPEN_RETRY_INTERVAL = 1.0     # 重试间隔（秒）
-    READ_FRAME_LIMIT = 10         # 最多读取帧数（丢弃前几帧不稳定画面）
 
-    result = {'frame': None, 'error': None, 'detail': None}
+    # 抓帧在独立子进程中执行：转发流按需回源可能长时间阻塞，
+    # 阻塞中的 FFmpeg 会拖慢同进程内其他 VideoCapture，子进程隔离互不影响且超时可强制终止
+    _snapshot_child_code = (
+        "import sys, cv2\n"
+        "url = sys.argv[1]\n"
+        "cap = cv2.VideoCapture(url)\n"
+        "try:\n"
+        "    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)\n"
+        "except Exception:\n"
+        "    pass\n"
+        "frame = None\n"
+        "if cap.isOpened():\n"
+        "    for _ in range(10):\n"
+        "        ret, f = cap.read()\n"
+        "        if ret and f is not None and f.size > 0:\n"
+        "            frame = f\n"
+        "            break\n"
+        "cap.release()\n"
+        "if frame is None:\n"
+        "    sys.exit(1)\n"
+        "ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])\n"
+        "if not ok:\n"
+        "    sys.exit(2)\n"
+        "sys.stdout.buffer.write(buf.tobytes())\n"
+    )
 
-    def _capture():
-        cap = None
+    def _capture_in_subprocess(url, timeout):
+        """子进程抓一帧；成功返回 (frame, None)，失败返回 (None, 错误信息)"""
         try:
-            for attempt in range(1, OPEN_RETRY_COUNT + 1):
-                cap = cv2.VideoCapture(rtsp_url)
-                if cap is None or not cap.isOpened():
-                    logger.warning(f"[Snapshot] VideoCapture 打开失败 (尝试 {attempt}/{OPEN_RETRY_COUNT}): {rtsp_url}")
-                    if cap is not None:
-                        cap.release()
-                        cap = None
-                    if attempt < OPEN_RETRY_COUNT:
-                        import time as _time
-                        _time.sleep(OPEN_RETRY_INTERVAL)
-                    continue
+            proc = subprocess.run(
+                [sys.executable, '-c', _snapshot_child_code, url],
+                capture_output=True, timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            return None, f'获取快照超时（{int(timeout)}秒）'
+        if proc.returncode == 1:
+            return None, '无法读取视频帧'
+        if proc.returncode == 2:
+            return None, '帧编码失败'
+        if proc.returncode != 0 or not proc.stdout:
+            return None, '无法打开视频流'
+        frame = cv2.imdecode(np.frombuffer(proc.stdout, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            return None, '快照数据解码失败'
+        return frame, None
 
-                # 减少缓冲，尽快拿到最新帧
-                try:
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                except Exception:
-                    pass
+    frame, snap_err = _capture_in_subprocess(rtsp_url, SNAPSHOT_TIMEOUT)
 
-                # 读取多帧，跳过首帧可能的黑帧/损坏帧
-                for i in range(READ_FRAME_LIMIT):
-                    ret, frame = cap.read()
-                    if ret and frame is not None and frame.size > 0:
-                        result['frame'] = frame
-                        return
-                # 本轮打开成功但读不到有效帧
-                logger.warning(f"[Snapshot] 打开成功但读取帧失败 (尝试 {attempt}/{OPEN_RETRY_COUNT})")
-                cap.release()
-                cap = None
-                if attempt < OPEN_RETRY_COUNT:
-                    import time as _time
-                    _time.sleep(OPEN_RETRY_INTERVAL)
+    # 转发流地址在无观看者时会被服务端释放，按需回源拉流可能超过超时时间；
+    # 此时回退直连摄像机源地址再试一次
+    if frame is None and fallback_url and fallback_url != rtsp_url:
+        logger.warning(f"[Snapshot] 通道地址取帧失败，回退直连摄像机源重试: channel_id={channel_id}, fallback={fallback_url}, error={snap_err}")
+        frame, snap_err = _capture_in_subprocess(fallback_url, SNAPSHOT_TIMEOUT)
 
-            result['error'] = '无法读取视频帧'
-            result['detail'] = f'已重试 {OPEN_RETRY_COUNT} 次，请确认视频流地址可达：{rtsp_url}'
-        except Exception as e:
-            result['error'] = str(e)
-            result['detail'] = 'VideoCapture 异常'
-        finally:
-            if cap is not None:
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-
-    thread = threading.Thread(target=_capture, daemon=True)
-    thread.start()
-    thread.join(timeout=SNAPSHOT_TIMEOUT)
-
-    if thread.is_alive():
-        # 超时（线程仍为 daemon，进程退出时自动结束）
-        logger.error(f"[Snapshot] 获取快照超时({SNAPSHOT_TIMEOUT}s): channel_id={channel_id}, url={rtsp_url}")
+    if frame is None:
+        logger.error(f"[Snapshot] 获取快照失败: channel_id={channel_id}, error={snap_err}, url={rtsp_url}")
+        status_code = 504 if '超时' in (snap_err or '') else 500
         return jsonify({
-            'error': f'获取快照超时（{int(SNAPSHOT_TIMEOUT)}秒），请检查视频流是否可用',
+            'error': snap_err,
             'detail': f'视频流地址: {rtsp_url}'
-        }), 504
+        }), status_code
 
-    if result['error']:
-        logger.error(f"[Snapshot] 获取快照失败: channel_id={channel_id}, error={result['error']}, detail={result['detail']}, url={rtsp_url}")
-        return jsonify({
-            'error': f'获取快照失败: {result["error"]}',
-            'detail': result['detail'] or '请检查视频流地址是否正确、设备是否在线'
-        }), 500
-
-    frame = result['frame']
     orig_h, orig_w = frame.shape[:2]
 
     # 可选缩放
@@ -1281,8 +1413,55 @@ def get_channel_snapshot(channel_id: int):
 
 @task_bp.route('/health', methods=['GET'])
 def health_check():
-    """健康检查"""
-    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
+    """健康检查（只读，无需登录，供人工查看或外部看门狗轮询）
+
+    - status: ok(全部就绪) / degraded(存在未就绪或异常任务) / starting(服务刚启动)
+    - tasks:  应运行任务的进程存活与心跳就绪状态（stage: started → detectors_ready
+              → processors_ready → running，running 且心跳 60s 内为就绪）
+    - components: 启动自检报告各组件状态
+    """
+    try:
+        pm = get_process_manager()
+        tm = get_task_manager()
+        from src.system.health_check import collect_task_health
+        task_health = collect_task_health(pm, tm)
+
+        # 启动自检报告与启动时间（run.py 全局，未初始化时降级）
+        started_at = time.time()
+        items, self_healed = [], {}
+        try:
+            import run as _run_mod
+            report = getattr(_run_mod, 'STARTUP_REPORT', None)
+            if report:
+                started_at = report.get('started_at', started_at)
+                items = report.get('items', [])
+                self_healed = report.get('self_healed', {})
+        except Exception:
+            pass
+
+        uptime = round(time.time() - started_at, 1)
+        expected = task_health['expected_count']
+        healthy = task_health['healthy_count']
+        if expected > 0 and healthy < expected:
+            # 启动宽限期内视为 starting，之后仍有缺口则 degraded
+            status = 'starting' if uptime < 150 else 'degraded'
+        else:
+            status = 'ok'
+
+        return jsonify({
+            'status': status,
+            'uptime': uptime,
+            'tasks': task_health['tasks'],
+            'summary': {
+                'expected': expected,
+                'healthy': healthy,
+                'self_healed': self_healed,
+            },
+            'components': items,
+        })
+    except Exception as e:
+        logger.error(f"[HealthCheck] 健康检查异常: {e}")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
 
 
 # ========================================

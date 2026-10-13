@@ -73,9 +73,10 @@ class EventOutput:
         self.cleanup_interval_hours = image_cfg.get('cleanup_interval_hours', 24)  # 清理间隔
 
         # 读取服务器配置（统一通过 system_config_loader 获取，单一真相源）
-        # host 用于生成事件图片/GIF 的可访问 URL，必须填盒子实际 IP（非 0.0.0.0/localhost）
-        from src.system.system_config_loader import get_web_server_host, get_web_server_port
-        self.server_host = get_web_server_host('0.0.0.0')
+        # host 用于生成事件图片/GIF 的可访问 URL（MQTT 云端拉图）：
+        # 未配置时自动探测本机局域网 IP，换设备部署无需手动改地址
+        from src.system.system_config_loader import get_event_image_host, get_web_server_port
+        self.server_host = get_event_image_host()
         self.server_port = get_web_server_port()
 
         # 上次清理时间
@@ -98,6 +99,15 @@ class EventOutput:
 
         # 过滤配置
         self.filter_cfg = config.get('filter', {})
+
+        # 边缘库比对配置（人脸/车牌目标作为任务主检测模型输出；命中后走精简事件：
+        # 只保留一张按检测框外扩裁剪的抓拍小图，随事件上报并送边缘识别+比对）
+        self.library_match_cfg = config.get('library_match', {}) or {}
+        self.library_crop_margin = float(self.library_match_cfg.get('crop_margin', 0.2) or 0.0)
+        self.library_client = None
+        if self.library_match_cfg.get('enabled'):
+            from src.library.edge_library_client import EdgeLibraryClient
+            self.library_client = EdgeLibraryClient(self.library_match_cfg)
 
         # GIF 配置（供 TrackedObjectProcessor 读取）
         self.gif_cfg = config.get('gif', {})
@@ -549,7 +559,7 @@ class EventOutput:
     def emit(self, event_type: str, data: Dict, image: Optional[np.ndarray] = None,
             frame_id: int = 0, task_id: int = None, algorithm: str = None,
             metadata: Optional[Dict] = None, lifecycle: bool = False,
-            defer_db: bool = False) -> Optional[str]:
+            defer_db: bool = False, bypass_filter: bool = False) -> Optional[str]:
         """
         发送事件
 
@@ -580,10 +590,11 @@ class EventOutput:
             logger.debug(f"[EventOutput]   事件未启用，跳过")
             return None
         
-        # 检查过滤条件
+        # 检查过滤条件（bypass_filter=True 时跳过：置信度/类别过滤面向模型
+        # 检测输出，非模型类事件如占道告警的面积占比语义不同，不适用）
         class_name = data.get('class_name', '')
         confidence = data.get('confidence', 0.0)
-        should_send = self._should_send(class_name, confidence)
+        should_send = True if bypass_filter else self._should_send(class_name, confidence)
         logger.debug(f"[EventOutput]   过滤检查结果: should_send={should_send}, class_name={class_name}, confidence={confidence}, target_classes={self.filter_cfg.get('target_classes', [])}, min_confidence={self.filter_cfg.get('min_confidence', 0.0)}")
         if not should_send:
             logger.debug(f"[EventOutput]   未通过过滤，跳过")
@@ -1179,6 +1190,14 @@ class EventOutput:
                 'ai_description_model': d['ai_description_model'],
                 'ai_description_time': d['ai_description_time'],
             }
+            # 边缘库比对结果：终态前已由 run_library_match 比对并写入事件 metadata，
+            # 此处从库读取附加到 payload（人脸带人名/相似度，车牌带车牌号/命中记录）
+            if d['status'] == 'final':
+                metadata = d.get('metadata') or {}
+                if 'face_match' in metadata:
+                    payload['face_match'] = metadata['face_match']
+                if 'plate_match' in metadata:
+                    payload['plate_match'] = metadata['plate_match']
             self.mqtt_outputter.send(payload)
             logger.info(
                 f"[EventOutput] MQTT 推送终态事件: event_id={event_id[:8]}, "
@@ -1188,6 +1207,117 @@ class EventOutput:
             )
         except Exception as e:
             logger.warning(f"[EventOutput] MQTT 推送终态事件失败: {e}")
+
+    def crop_library_image(self, image: np.ndarray, bbox: tuple) -> Optional[np.ndarray]:
+        """按检测框外扩裁剪人脸/车牌抓拍小图（输入非法返回 None）
+
+        外扩比例取 library_crop_margin（默认 0.2，四周各外扩框宽高的 20%），
+        裁剪范围限制在图像内。裁剪出的干净小图（无绘制框）既作事件图，
+        也作边缘识别+比对的输入。
+        """
+        if image is None or bbox is None or len(bbox) < 4:
+            return None
+        try:
+            h, w = image.shape[:2]
+            x1, y1, x2, y2 = (float(v) for v in bbox[:4])
+        except Exception:
+            return None
+        bw, bh = x2 - x1, y2 - y1
+        if bw <= 0 or bh <= 0:
+            return None
+        mx, my = bw * self.library_crop_margin, bh * self.library_crop_margin
+        cx1 = max(0, int(x1 - mx))
+        cy1 = max(0, int(y1 - my))
+        cx2 = min(w, int(x2 + mx))
+        cy2 = min(h, int(y2 + my))
+        if cx2 <= cx1 or cy2 <= cy1:
+            return None
+        return image[cy1:cy2, cx1:cx2].copy()
+
+    def library_match_kind(self, class_name: str) -> Optional[str]:
+        """按类别名判断是否需要库比对：'face' / 'plate' / None
+
+        任务未启用库比对、未配置边缘地址或该类未配库 ID 时返回 None。
+        该类事件采用精简生成路径（不做区域过滤/去重/GIF，仅保留一张最优抓拍图）。
+        """
+        if self.library_client is None or not self.library_client.usable:
+            return None
+        return self.library_client.match_class(class_name)
+
+    def run_library_match(self, event_id: str) -> Optional[Dict]:
+        """对指定事件执行库比对，结果写入事件 metadata 并返回
+
+        人脸：上传人脸图，边缘抽特征 + 余弦相似度比对
+        车牌：上传车牌图，边缘 OCR 出车牌号，再按车牌号在库内匹配
+        比对结果（人名/相似度 或 车牌号/命中记录）写入 metadata 的
+        face_match / plate_match 键，事件页/驾驶舱/第三方推送统一从库读取。
+        任何失败都不影响事件上报（仅记录日志）。
+
+        Returns:
+            比对结果字典 {'face_match': {...}} 或 {'plate_match': {...}}，未比对返回 None
+        """
+        if self.library_client is None or not self.library_client.usable:
+            return None
+
+        from src.tasks.task_manager import TaskManager
+        d = {}
+        try:
+            record = TaskManager().get_event_by_id(event_id)
+            d = record.to_dict() if record is not None else {}
+        except Exception as e:
+            logger.debug(f"[EventOutput] 库比对读取事件失败: event_id={event_id[:8]}, {e}")
+            return None
+
+        kind = self.library_client.match_class(d.get('class_name'))
+        if kind is None:
+            return None
+
+        image_path = os.path.join(self.local_output_dir, f"{event_id}.jpg")
+        try:
+            with open(image_path, 'rb') as f:
+                image_bytes = f.read()
+        except Exception as e:
+            logger.debug(f"[EventOutput] 库比对读取抓拍图失败: event_id={event_id[:8]}, {e}")
+            return None
+
+        result_meta: Dict = {}
+        try:
+            if kind == 'face':
+                result = self.library_client.match_face(image_bytes)
+                if result is None:
+                    return None
+                best = result.get('best_match') or {}
+                result_meta['face_match'] = {
+                    'library_id': self.library_client.resolve_face_library(),
+                    'library_name': self.library_match_cfg.get('face_library_name'),
+                    'matched': bool(result.get('matched')),
+                    'person_id': best.get('person_id'),
+                    'person_name': best.get('person_name'),
+                    'similarity': best.get('similarity'),
+                    'top_score': result.get('top_score'),
+                    'threshold': result.get('threshold'),
+                }
+            else:
+                plate_no = self.library_client.recognize_plate(image_bytes)
+                match = self.library_client.match_plate(plate_no) if plate_no else None
+                result_meta['plate_match'] = {
+                    'library_id': self.library_client.resolve_plate_library(),
+                    'library_name': self.library_match_cfg.get('plate_library_name'),
+                    'plate_no': plate_no,
+                    'matched': bool((match or {}).get('matched')),
+                    'match_type': (match or {}).get('match_type'),
+                    'entry': (match or {}).get('entry'),
+                }
+            # 比对结果落库（合并进事件 metadata），事件页/驾驶舱/第三方推送统一从库读取
+            try:
+                TaskManager().update_event(event_id, metadata=result_meta)
+            except Exception as e:
+                logger.debug(f"[EventOutput] 库比对结果落库失败: event_id={event_id[:8]}, {e}")
+            logger.info(f"[EventOutput] 库比对完成: event_id={event_id[:8]}, kind={kind}")
+            return result_meta
+        except Exception as e:
+            logger.warning(f"[EventOutput] 库比对失败（不影响上报）: event_id={event_id[:8]}, {e}")
+            return None
 
     def close(self):
         """关闭所有输出器"""

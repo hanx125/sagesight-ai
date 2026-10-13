@@ -489,6 +489,7 @@ a:hover {
 
 #taskForm .camera-pool-info {
     flex: 1;
+    min-width: 0;
 }
 
 #taskForm .camera-pool-name {
@@ -501,6 +502,12 @@ a:hover {
 #taskForm .camera-pool-url {
     font-size: 11px;
     color: var(--text-secondary);
+    word-break: break-all;
+}
+
+/* 操作按钮组：不参与收缩，避免被长 URL 挤出容器 */
+#taskForm .camera-pool-actions {
+    flex-shrink: 0;
 }
 
 #taskForm .camera-pool-remove {

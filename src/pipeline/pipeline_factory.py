@@ -7,6 +7,7 @@
 - motion_gated → motion_gated_pipeline.run_motion_gated_pipeline（运动门控检测）
 - file         → batch_pipeline.run_batch_pipeline（离线文件检测）
 - scheduled    → batch_pipeline.run_batch_pipeline（定时批量检测，定时由外层 Scheduler 触发）
+- pile_up / abnormal_occupancy → occupancy_pipeline.run_occupancy_pipeline（占道/堆积检测）
 - 其他/未知    → 回退到实时流水线（向后兼容）
 """
 
@@ -14,7 +15,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-VALID_DETECTION_TYPES = ('realtime', 'polling', 'motion_gated', 'file', 'scheduled')
+VALID_DETECTION_TYPES = ('realtime', 'polling', 'motion_gated', 'file', 'scheduled',
+                         'pile_up', 'abnormal_occupancy')
 
 
 def get_pipeline(detection_type: str):
@@ -39,6 +41,11 @@ def get_pipeline(detection_type: str):
     if detection_type in ('file', 'scheduled'):
         from src.pipeline.batch_pipeline import run_batch_pipeline
         return run_batch_pipeline
+
+    # 占道/堆积检测（物品堆积 / 异常占用共用同一引擎）
+    if detection_type in ('pile_up', 'abnormal_occupancy'):
+        from src.pipeline.occupancy_pipeline import run_occupancy_pipeline
+        return run_occupancy_pipeline
 
     # realtime 及未知类型：回退到现有实时流水线
     if detection_type != 'realtime':

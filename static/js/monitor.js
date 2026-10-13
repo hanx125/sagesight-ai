@@ -3187,6 +3187,38 @@ function renderMonitorEvents() {
     scroller.scrollTop = 0;
 }
 
+// 格式化库比对信息（人脸带人名/相似度，车牌带车牌号/登记状态）
+function formatLibMatchText(event) {
+    const meta = event.metadata || {};
+    const fm = meta.face_match, pm = meta.plate_match;
+    if (fm) {
+        return fm.matched
+            ? `库比对: ${fm.person_name || '未知人员'}（${((fm.similarity || 0) * 100).toFixed(1)}%）`
+            : '库比对: 未命中人脸库';
+    }
+    if (pm) {
+        const no = pm.plate_no || '未识别';
+        return pm.matched ? `库比对: ${no}（已登记）` : `库比对: ${no}（未登记）`;
+    }
+    return '';
+}
+
+// 在事件卡片图片左下角叠加库比对信息标签（人脸带人名/相似度，车牌带车牌号）
+function setLibMatchBadge(imageContainer, event) {
+    const text = formatLibMatchText(event);
+    let badge = imageContainer.querySelector('.event-lib-badge');
+    if (!text) {
+        if (badge) badge.remove();
+        return;
+    }
+    if (!badge) {
+        badge = document.createElement('div');
+        badge.className = 'event-lib-badge';
+        imageContainer.appendChild(badge);
+    }
+    badge.textContent = text;
+}
+
 // 创建事件卡片
 function createMonitorEventCard(event) {
     const card = document.createElement('div');
@@ -3233,7 +3265,7 @@ function createMonitorEventCard(event) {
     infoContainer.innerHTML = `
         <div class="event-info-row">
             <span class="event-status ${statusInfo.className}">${statusInfo.text}</span>
-            <span class="event-tag tag-class">${event.class_name || '-'}</span>
+            <span class="event-tag tag-class">${getClassText(event.class_name)}</span>
         </div>
         <div class="event-info-row">
             <span class="event-tag tag-task">${getTaskNameById(event.task_id) || '-'}</span>
@@ -3241,6 +3273,9 @@ function createMonitorEventCard(event) {
         </div>
     `;
     card.appendChild(infoContainer);
+
+    // 库比对信息标签（图片左下角：人脸带人名/相似度，车牌带车牌号）
+    setLibMatchBadge(imageContainer, event);
 
     return card;
 }
@@ -3322,7 +3357,17 @@ function showMonitorEventDetail(event) {
         dedupWrap.style.display = 'none';
     }
 
-    document.getElementById('monitorEventClass').textContent = event.class_name || '-';
+    // 库比对信息（人脸带人名/相似度，车牌带车牌号）
+    const libWrap = document.getElementById('monitorEventLibWrap');
+    const libText = formatLibMatchText(event);
+    if (libText) {
+        document.getElementById('monitorEventLibInfo').textContent = libText;
+        libWrap.style.display = '';
+    } else {
+        libWrap.style.display = 'none';
+    }
+
+    document.getElementById('monitorEventClass').textContent = getClassText(event.class_name);
     document.getElementById('monitorEventChannel').textContent = event.channel_name || event.camera_id || '-';
     document.getElementById('monitorEventTask').textContent = getTaskNameById(event.task_id) || event.task_name || '-';
     document.getElementById('monitorEventAlgorithm').textContent = event.algorithm || '-';
@@ -3494,11 +3539,18 @@ function updateMonitorEventCard(data) {
                 .forEach(key => {
                     if (data.data[key] !== undefined) monitorEvents[eventIdx][key] = data.data[key];
                 });
+            // 终态补推库比对结果（人脸带人名/相似度，车牌带车牌号）
+            if (data.data.metadata !== undefined) monitorEvents[eventIdx].metadata = data.data.metadata;
+        }
+        // 更新卡片图片左下角的库比对标签
+        const imageContainer = card.querySelector('.event-image-container');
+        if (imageContainer) {
+            setLibMatchBadge(imageContainer, monitorEvents[eventIdx]);
         }
     }
 
-    // 详情弹窗正打开该事件：重新渲染，显示补推的大模型描述
-    if (eventIdx >= 0 && data.data && data.data.ai_description) {
+    // 详情弹窗正打开该事件：重新渲染，显示补推的大模型描述/比对信息
+    if (eventIdx >= 0 && data.data && (data.data.ai_description || data.data.metadata)) {
         const current = window._currentMonitorEvent;
         if (current && current.event_id === data.event_id) {
             window._currentMonitorEvent = monitorEvents[eventIdx];
@@ -3557,12 +3609,25 @@ function formatEventType(type) {
         'tracking': '目标跟踪',
         'zone': '区域检测',
         'loitering': '徘徊检测',
+        'face': '人脸检测',
+        'plate': '车牌检测',
+        'pile_up': '物品堆积检测',
+        'abnormal_occupancy': '异常占用检测',
         'track_start': '跟踪开始',
         'track_end': '跟踪结束',
         'track_update': '跟踪更新',
         'detection': '检测'
     };
     return typeMap[type] || type;
+}
+
+// 目标类别 -> 中文（遗留物事件类别与类型同名，其余算法标签本身为中文原样显示）
+function getClassText(className) {
+    const classMap = {
+        'pile_up': '物品堆积',
+        'abnormal_occupancy': '异常占用'
+    };
+    return classMap[className] || className || '-';
 }
 
 // 事件状态 -> 中文 + 样式类的统一映射
@@ -3572,7 +3637,9 @@ function getStatusDisplay(status) {
         'initial':         { text: '初始事件', className: 'status-initial' },
         'final':           { text: '最终事件', className: 'status-final' },
         'duplicate':       { text: '被去重',   className: 'status-duplicate' },
-        'gif_ready':       { text: 'GIF就绪',  className: 'status-gif' }
+        'gif_ready':       { text: 'GIF就绪',  className: 'status-gif' },
+        // 遗留物告警事件：告警创建即 active，恢复后置 final
+        'active':          { text: '告警中',   className: 'status-initial' }
     };
     return statusMap[status] || { text: status || '未知', className: 'status-unknown' };
 }

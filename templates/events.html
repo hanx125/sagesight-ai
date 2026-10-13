@@ -21,6 +21,10 @@
                     <option value="zone">区域检测</option>
                     <option value="loitering">徘徊检测</option>
                     <option value="people_counting">人员统计</option>
+                    <option value="face">人脸检测</option>
+                    <option value="plate">车牌检测</option>
+                    <option value="pile_up">物品堆积检测</option>
+                    <option value="abnormal_occupancy">异常占用检测</option>
                 </select>
             </div>
             <div class="filter-group">
@@ -190,6 +194,10 @@
                         <div class="event-detail-item" id="eventDetailDedupWrap" style="display:none;">
                             <label>去重原因</label>
                             <span id="eventDetailDedupReason" style="color:#c62828; word-break:break-all;"></span>
+                        </div>
+                        <div class="event-detail-item" id="eventDetailLibWrap" style="display:none;">
+                            <label>库比对</label>
+                            <span id="eventDetailLibInfo"></span>
                         </div>
                         <div class="event-detail-item">
                             <label>目标类别</label>
@@ -412,6 +420,25 @@
         pointer-events: none;
     }
 
+    /* 库比对信息标签（叠加在卡片图片左下角：人脸人名/车牌号） */
+    .event-lib-badge {
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        max-width: calc(100% - 8px);
+        background: linear-gradient(135deg, rgba(103, 58, 183, 0.92), rgba(81, 45, 168, 0.92));
+        color: #fff;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 3px 8px;
+        border-top-right-radius: 6px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        z-index: 10;
+        pointer-events: none;
+    }
+
     .event-card-no-image svg {
         width: 36px;
         height: 36px;
@@ -442,10 +469,24 @@
 .event-type-tracking { background: #e8f5e9; color: #2e7d32; }
 .event-type-zone { background: #e3f2fd; color: #1565c0; }
 .event-type-loitering { background: #fff3e0; color: #e65100; }
+.event-type-face { background: #ede7f6; color: #5e35b1; }
+.event-type-plate { background: #e0f2f1; color: #00695c; }
 
     .event-class-badge {
         font-weight: 600;
         color: var(--text-primary);
+    }
+
+    /* ✅ 库比对信息标签（人脸人名/车牌号） */
+    .lib-match-tag {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        background: rgba(103, 58, 183, 0.15);
+        color: #7e57c2;
+        white-space: nowrap;
     }
 
     /* ✅ 事件状态徽章（与 monitor.html 一致） */
@@ -763,7 +804,10 @@ window.Events = (function() {
                     <span class="event-type-badge event-type-${event.type}">${getTypeText(event.type)}</span>
                 </td>
                 <td><span class="event-status ${statusInfo.className}">${statusInfo.text}</span></td>
-                <td><span class="event-class-badge">${event.class_name || '-'}</span></td>
+                <td>
+                    <span class="event-class-badge">${getClassText(event.class_name)}</span>
+                    ${formatLibMatchText(event) ? `<span class="lib-match-tag" title="${formatLibMatchText(event)}">${formatLibMatchText(event)}</span>` : ''}
+                </td>
                 <td>${event.confidence ? (event.confidence * 100).toFixed(1) + '%' : '-'}</td>
                 <td class="channel-cell">${event.channel_name || event.camera_id || '-'}</td>
                 <td>${taskNameMap[event.task_id] || event.task_id || '-'}</td>
@@ -800,10 +844,12 @@ window.Events = (function() {
         const coverUrl = gifUrl || imageUrl;  // ✅ GIF 优先作为封面
 
         // 图片区域：有 GIF 显示 GIF 动画，其次图片，无则占位符
+        // 库比对信息（人脸人名/车牌号）叠加在图片左下角
+        const libMatchText = formatLibMatchText(event);
         let imageSection = '';
         if (coverUrl) {
             const isGif = !!gifUrl;
-            imageSection = `<img src="${coverUrl}" alt="${isGif ? '事件GIF' : '事件图片'}" class="event-card-image" style="object-fit:cover;" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'event-card-no-image\\'><svg viewBox=\\'0 0 24 24\\' fill=\\'currentColor\\'><path d=\\'M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z\\'/></svg><span>图片加载失败</span></div>';">${isGif ? '<div class="gif-badge">🎬 GIF</div>' : ''}`;
+            imageSection = `<div class="event-card-image-container"><img src="${coverUrl}" alt="${isGif ? '事件GIF' : '事件图片'}" class="event-card-image" style="object-fit:cover;" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'event-card-no-image\\'><svg viewBox=\\'0 0 24 24\\' fill=\\'currentColor\\'><path d=\\'M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z\\'/></svg><span>图片加载失败</span></div>';">${isGif ? '<div class="gif-badge">🎬 GIF</div>' : ''}${libMatchText ? `<div class="event-lib-badge">${escapeHtml(libMatchText)}</div>` : ''}</div>`;
         } else {
             imageSection = `
                 <div class="event-card-no-image">
@@ -820,7 +866,7 @@ window.Events = (function() {
                 <div class="event-card-content">
                     <div class="event-card-header">
                         <span class="event-type-badge ${typeClass}">${typeText}</span>
-                        <span class="event-class-badge">${event.class_name || '-'}</span>
+                        <span class="event-class-badge">${getClassText(event.class_name)}</span>
                         <span class="event-status ${statusInfo.className}">${statusInfo.text}</span>
                     </div>
                     <div class="event-card-time">${time}</div>
@@ -852,12 +898,25 @@ window.Events = (function() {
             'tracking': '目标跟踪',
             'zone': '区域检测',
             'loitering': '徘徊检测',
+            'face': '人脸检测',
+            'plate': '车牌检测',
+            'pile_up': '物品堆积检测',
+            'abnormal_occupancy': '异常占用检测',
             'track_start': '跟踪开始',
             'track_end': '跟踪结束',
             'track_update': '跟踪更新',
             'detection': '检测'
         };
         return typeMap[type] || type;
+    }
+
+    // 目标类别 -> 中文（遗留物事件类别与类型同名，其余算法标签本身为中文原样显示）
+    function getClassText(className) {
+        const classMap = {
+            'pile_up': '物品堆积',
+            'abnormal_occupancy': '异常占用'
+        };
+        return classMap[className] || className || '-';
     }
 
     // ✅ 事件状态 -> 中文 + 样式类的统一映射（与 monitor.html 一致）
@@ -867,7 +926,9 @@ window.Events = (function() {
             'initial':         { text: '初始事件', className: 'status-initial' },
             'final':           { text: '最终事件', className: 'status-final' },
             'duplicate':       { text: '被去重',   className: 'status-duplicate' },
-            'gif_ready':       { text: 'GIF就绪',  className: 'status-gif' }
+            'gif_ready':       { text: 'GIF就绪',  className: 'status-gif' },
+            // 遗留物告警事件：告警创建即 active，恢复后置 final
+            'active':          { text: '告警中',   className: 'status-initial' }
         };
         return statusMap[status] || { text: status || '未知', className: 'status-unknown' };
     }
@@ -877,6 +938,22 @@ window.Events = (function() {
         const div = document.createElement('div');
         div.textContent = String(text == null ? '' : text);
         return div.innerHTML;
+    }
+
+    // 格式化库比对信息（人脸带人名/相似度，车牌带车牌号/登记状态）
+    function formatLibMatchText(event) {
+        const meta = event.metadata || {};
+        const fm = meta.face_match, pm = meta.plate_match;
+        if (fm) {
+            return fm.matched
+                ? `库比对: ${fm.person_name || '未知人员'}（${((fm.similarity || 0) * 100).toFixed(1)}%）`
+                : '库比对: 未命中人脸库';
+        }
+        if (pm) {
+            const no = pm.plate_no || '未识别';
+            return pm.matched ? `库比对: ${no}（已登记）` : `库比对: ${no}（未登记）`;
+        }
+        return '';
     }
 
     function updatePagination() {
@@ -990,7 +1067,17 @@ window.Events = (function() {
                 dedupWrap.style.display = 'none';
             }
 
-            document.getElementById('eventDetailClass').textContent = event.class_name || '-';
+            // 库比对信息（人脸带人名/相似度，车牌带车牌号）
+            const libWrap = document.getElementById('eventDetailLibWrap');
+            const libText = formatLibMatchText(event);
+            if (libText) {
+                document.getElementById('eventDetailLibInfo').textContent = libText;
+                libWrap.style.display = '';
+            } else {
+                libWrap.style.display = 'none';
+            }
+
+            document.getElementById('eventDetailClass').textContent = getClassText(event.class_name);
             document.getElementById('eventDetailConfidence').textContent = event.confidence ? (event.confidence * 100).toFixed(2) + '%' : '-';
             document.getElementById('eventDetailCamera').textContent = event.channel_name || event.camera_id || '-';
             document.getElementById('eventDetailTask').textContent = taskNameMap[event.task_id] || event.task_id || '-';
