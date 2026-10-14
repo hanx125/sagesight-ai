@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>单点登录 - 睿观 SageSight AI</title>
+    <style>
+        :root {
+            --bg: #050b14;
+            --accent: #00e5c3;
+            --danger: #ef5350;
+            --text: #e8f1f5;
+            --muted: rgba(232, 241, 245, 0.52);
+            --line: rgba(148, 196, 210, 0.14);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html, body { height: 100%; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .result-card {
+            text-align: center;
+            padding: 44px 48px;
+            border-radius: 18px;
+            background: rgba(11, 21, 36, 0.9);
+            border: 1px solid var(--line);
+            box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+            animation: fadeIn 0.35s ease;
+            max-width: 90vw;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(14px) scale(0.97); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .result-icon {
+            width: 58px;
+            height: 58px;
+            margin: 0 auto 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .result-card.success .result-icon {
+            background: rgba(0, 229, 195, 0.12);
+            border: 1px solid rgba(0, 229, 195, 0.35);
+            color: var(--accent);
+        }
+
+        .result-card.error .result-icon {
+            background: rgba(239, 83, 80, 0.12);
+            border: 1px solid rgba(239, 83, 80, 0.35);
+            color: var(--danger);
+        }
+
+        .result-icon svg { width: 30px; height: 30px; }
+
+        .result-title {
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+
+        .result-card.error .result-title { color: var(--danger); }
+
+        .result-msg {
+            margin-top: 12px;
+            font-size: 13px;
+            color: var(--muted);
+            letter-spacing: 0.5px;
+            word-break: break-all;
+        }
+
+        .result-hint {
+            margin-top: 22px;
+            font-size: 11.5px;
+            color: rgba(232, 241, 245, 0.32);
+            letter-spacing: 1px;
+        }
+
+        .spinner {
+            width: 14px;
+            height: 14px;
+            display: inline-block;
+            vertical-align: -2px;
+            margin-right: 6px;
+            border: 2px solid rgba(0, 229, 195, 0.25);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="result-card {{ 'success' if result_type == 'success' else 'error' }}">
+        {% if result_type == 'success' %}
+        <div class="result-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 6L9 17l-5-5"/>
+            </svg>
+        </div>
+        <div class="result-title">授权成功</div>
+        <div class="result-msg">{{ message }}，正在进入系统…</div>
+        {% else %}
+        <div class="result-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                <path d="M12 8v5"/><circle cx="12" cy="16.5" r="0.6" fill="currentColor"/><circle cx="12" cy="12" r="10" stroke-width="2"/>
+            </svg>
+        </div>
+        <div class="result-title">单点登录失败</div>
+        <div class="result-msg">{{ message }}</div>
+        {% endif %}
+        <div class="result-hint"><span class="spinner"></span>此窗口将自动关闭</div>
+    </div>
+
+    <script>
+        // popup 弹窗模式：把结果回传给主窗口（登录页）后自动关窗；
+        // 整页跳转兜底（弹窗被拦截、无 opener）：直接跳转首页或登录页。
+        (function () {
+            const isPopup = !!window.opener && window.opener !== window;
+            const resultType = {{ result_type | tojson }};
+            const message = {{ message | tojson }};
+
+            if (isPopup) {
+                try {
+                    // 登录会话 Cookie 建立在本回调页所在的主机上；浏览器访问登录页
+                    // 的主机与回调主机不一致时（如 localhost 与 192.168.x.x 混用），
+                    // 主窗口当前主机没有会话，须回传本页 origin 让主窗口跳转过来。
+                    window.opener.postMessage({
+                        source: 'sso-callback',
+                        type: resultType,
+                        message: message,
+                        redirect: resultType === 'success' ? window.location.origin + '/' : undefined
+                    }, '*');
+                } catch (e) { /* 回传失败时仍走关窗，主窗口消息监听不到则由用户手动重试 */ }
+                setTimeout(() => window.close(), 600);
+            } else if (resultType === 'success') {
+                setTimeout(() => window.location.replace('/'), 500);
+            } else {
+                setTimeout(() => window.location.replace('/login?sso_error=' + encodeURIComponent(message)), 800);
+            }
+        })();
+    </script>
+</body>
+</html>

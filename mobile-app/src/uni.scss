@@ -1,0 +1,36 @@
+/**
+ * SageSight 移动端主题变量（每个 vue 文件编译时自动注入，无需 import）
+ * 浅色清爽风：浅灰底 + 白卡片 + 青蓝渐变主色
+ */
+
+/* ===== 色板 ===== */
+$bg: #F5F7FA;               // 页面底色
+$bg-deep: #EDF1F7;          // 更深层（播放器）
+$surface: #FFFFFF;          // 卡片
+$surface-2: #F2F5F9;        // 卡片悬浮/输入框
+$surface-3: #E8EEF5;        // 高亮块
+$border: rgba(16, 24, 40, 0.08);
+$border-strong: rgba(16, 24, 40, 0.18);
+
+$primary: #0a5fd9;          // 主色（与 Web 端亮色主题一致）
+$primary-2: #0E9BD8;        // 青蓝（渐变另一端）
+$grad-primary: linear-gradient(135deg, #0E9BD8 0%, #0a5fd9 100%);
+
+$success: #079455;
+$warning: #B45309;
+$danger: #D92D20;
+$info: #1570EF;
+
+$text-1: #101828;           // 主文本
+$text-2: #475467;           // 次文本
+$text-3: #98A2B3;           // 弱文本
+
+/* ===== 尺寸 ===== */
+$radius: 24rpx;             // 统一圆角
+$radius-sm: 16rpx;
+$radius-lg: 32rpx;
+$pad: 24rpx;                // 统一内边距
+
+/* ===== 阴影 ===== */
+$shadow-card: 0 8rpx 32rpx rgba(16, 24, 40, 0.06);
+$shadow-glow: 0 8rpx 24rpx rgba(6, 182, 212, 0.22);

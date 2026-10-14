@@ -1,0 +1,74 @@
+{
+  "pages": [
+    {
+      "path": "pages/login/login",
+      "style": {
+        "navigationStyle": "custom",
+        "disableScroll": true
+      }
+    },
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationStyle": "custom",
+        "disableScroll": false
+      }
+    },
+    {
+      "path": "pages/player/player",
+      "style": {
+        "navigationStyle": "custom",
+        "backgroundColor": "#101828"
+      }
+    },
+    {
+      "path": "pages/events/detail",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/tasks/tasks",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/tasks/edit",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/tasks/config",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/cameras/cameras",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/cameras/edit",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/system/system",
+      "style": {
+        "navigationStyle": "custom"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationStyle": "custom",
+    "navigationBarTitleText": "SageSight",
+    "navigationBarBackgroundColor": "#F5F7FA",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#F5F7FA"
+  }
+}

@@ -32,6 +32,8 @@
 !*.css
 !*.js
 !*.ts
+!*.vue
+!*.scss
 !*.wasm
 !*.map
 
