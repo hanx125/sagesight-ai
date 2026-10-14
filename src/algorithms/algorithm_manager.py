@@ -26,7 +26,7 @@ class AlgorithmConfig:
         status: str = 'active',
         description: str = '',
         model_path: str = '',
-        model_type: str = 'yolov11n',  # 模型类型（如 yolov11n, yolov8n, yolo11n）
+        model_type: str = 'yolov11n',  # 模型类型（yolov11n/yolov8n 等规格，人脸/车牌用专属值 face_det/plate_detect 以隔离检测进程池）
         model_format: str = 'onnx',
         input_size: str = '640x640',
         labels_file: str = '',  # 标签文件路径

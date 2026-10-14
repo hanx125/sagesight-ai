@@ -122,11 +122,10 @@ def resolve_voice_config(global_cfg: dict, task: dict = None) -> dict:
         "volume": float(global_cfg.get(_KEYS["volume"], _DEFAULTS["volume"]) or _DEFAULTS["volume"]),
     }
 
-    # 任务级配置覆盖全局（仅当任务启用语音播报时才可能生效）
-    if task:
-        task_enabled = task.get("voice_enabled", False)
-        # 任务显式启用开关为优先真相源；未启用则回退到全局开关
-        cfg["enabled"] = _to_bool(task_enabled) or cfg["enabled"]
+    # 任务级开关语义：全局总开关关闭时一律不播（真总开关）；
+    # 全局开启时由任务开关决定（任务开=播，任务关=不播）
+    if task is not None:
+        cfg["enabled"] = cfg["enabled"] and _to_bool(task.get("voice_enabled", False))
         if task.get("voice_mp3"):
             cfg["mp3"] = task["voice_mp3"]
         if task.get("voice_loop_count"):

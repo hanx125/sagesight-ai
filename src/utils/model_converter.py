@@ -247,13 +247,15 @@ def convert_pt_to_onnx_6t(pt_path: str, output_path: str, input_size: str,
                         else:
                             x = [x if j == -1 else y[j] for j in m.f]
                     if m is self.detect:
-                        # Detect 头：x 为 [P3, P4, P5] 多尺度特征列表，
-                        # 输出 cv2(DFL box) + cv3(class) 中间卷积结果，共 6 张量
+                        # Detect 头：x 为 [P3, P4, P5] 多尺度特征列表。
+                        # cv2(DFL box) 保持原始卷积输出，DFL softmax 由后处理完成；
+                        # cv3(class) 必须带 sigmoid：后处理直接拿它与阈值比较，
+                        # 不带 sigmoid 得到的是 raw logits（会 >1），阈值语义与生产模型不一致。
                         feats = x
                         outputs = []
                         for i in range(self.detect.nl):
                             outputs.append(self.detect.cv2[i](feats[i]))
-                            outputs.append(self.detect.cv3[i](feats[i]))
+                            outputs.append(torch.sigmoid(self.detect.cv3[i](feats[i])))
                         return tuple(outputs)
                     x = m(x)
                     y.append(x if m.i in model.model.save else None)

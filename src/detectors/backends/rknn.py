@@ -338,6 +338,14 @@ class RKNNDetector(BaseDetector):
         if not isinstance(input_data, (list, tuple)) or len(input_data) == 0:
             return []
 
+        # PlateDetect（车牌检测）单输出：(1, N, 14)，见 base._postprocess_plate_detect
+        if (len(input_data) == 1 and input_data[0].ndim == 3
+                and input_data[0].shape[2] == 14):
+            return self._postprocess_plate_detect(
+                input_data[0][0], img_height, img_width, conf_threshold,
+                iou_threshold, class_names, min_box_area
+            )
+
         boxes_list, scores_list, classes_conf_list = [], [], []
         default_branch = 3
         pair_per_branch = len(input_data) // default_branch

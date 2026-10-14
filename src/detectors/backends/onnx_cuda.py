@@ -112,6 +112,9 @@ class ONNXCUDADetector(BaseDetector):
             # 创建会话选项（针对 GPU 优化）
             # ========================================
             session_options = ort.SessionOptions()
+            # 只显示 ERROR 级：C++ 层警告（如 Memcpy nodes 提示）会绕过 Python 日志
+            # 直写 stderr，多检测器进程并发加载模型时会交错成乱码
+            session_options.log_severity_level = 3
 
             # CUDA Graph 在多进程共享 GPU 场景下不安全：
             # - 多个检测器进程在同一 GPU 上各自捕获/重放 CUDA Graph

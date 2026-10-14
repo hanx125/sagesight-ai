@@ -83,6 +83,8 @@ def create_streaming_server():
         rtc_port=data.get('rtc_port', 8000),
         secret=data.get('secret', ''),
         media_server_id=data.get('media_server_id', ''),
+        iot_product_key=data.get('iot_product_key', ''),
+        iot_device_name=data.get('iot_device_name', ''),
         enabled=data.get('enabled', True),
         is_default=data.get('is_default', False),
         description=data.get('description', '')
@@ -160,6 +162,8 @@ def update_streaming_server(server_id: int):
         rtc_port=data.get('rtc_port', existing.rtc_port),
         secret=data.get('secret', existing.secret),
         media_server_id=data.get('media_server_id', existing.media_server_id),
+        iot_product_key=data.get('iot_product_key', existing.iot_product_key),
+        iot_device_name=data.get('iot_device_name', existing.iot_device_name),
         enabled=data.get('enabled', existing.enabled),
         is_default=data.get('is_default', existing.is_default),
         description=data.get('description', existing.description),
@@ -976,13 +980,14 @@ def get_system_config():
     try:
         config = _load_system_config()
         # 节点管理配置统一通过 loader 归一化字段类型，避免前端处理字符串/整数混用
-        from src.system.system_config_loader import get_node_management_config, get_event_dedup_config
+        from src.system.system_config_loader import get_node_management_config, get_event_dedup_config, get_edge_library_config
         return jsonify({
             'storage': config.get('storage', {}),
             'mqtt': config.get('mqtt', {}),
             'web_server': config.get('web_server', {}),
             'database': config.get('database', {}),
             'node_management': get_node_management_config(),
+            'edge_library': get_edge_library_config(),
             'event_dedup': get_event_dedup_config(),
             'video_file_upload': config.get('video_file_upload', {
                 'max_file_size_mb': 100,
@@ -1110,6 +1115,32 @@ def update_system_config():
             if 'media_cluster_root' in nm and nm['media_cluster_root']:
                 nm_cfg['media_cluster_root'] = str(nm['media_cluster_root']).strip()
 
+        # 更新边缘库比对连接配置（人脸库/车牌库接口；库 ID 为任务级，不在此处）
+        if 'edge_library' in data:
+            el = data['edge_library'] or {}
+            el_cfg = config.setdefault('edge_library', {})
+
+            if 'edge_api_url' in el:
+                el_cfg['edge_api_url'] = str(el['edge_api_url']).strip()
+            if 'agent_token' in el:
+                el_cfg['agent_token'] = str(el['agent_token']).strip()
+            if 'timeout' in el:
+                try:
+                    timeout = float(el['timeout'])
+                    if timeout <= 0:
+                        return jsonify({'error': '请求超时必须大于 0 秒'}), 400
+                    el_cfg['timeout'] = timeout
+                except (ValueError, TypeError):
+                    return jsonify({'error': '请求超时必须为数字'}), 400
+            if 'crop_margin' in el and el['crop_margin'] is not None:
+                try:
+                    margin = float(el['crop_margin'])
+                    if margin < 0 or margin > 1:
+                        return jsonify({'error': '抓拍框外扩比例需在 0 ~ 1 之间'}), 400
+                    el_cfg['crop_margin'] = margin
+                except (ValueError, TypeError):
+                    return jsonify({'error': '抓拍框外扩比例必须为数字'}), 400
+
         # 更新事件规则去重配置（事件管理功能，独立于大模型，不消耗 token）
         if 'event_dedup' in data:
             ed = data['event_dedup'] or {}
@@ -1143,7 +1174,7 @@ def update_system_config():
             pass
         logger.info("系统配置已更新")
 
-        return jsonify({'success': True, 'message': '配置已保存，端口/目录/节点管理变更需重启服务后生效'})
+        return jsonify({'success': True, 'message': '配置已保存，MQTT 等任务级配置需重启检测任务后生效'})
     except Exception as e:
         logger.error(f"更新系统配置失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1152,6 +1183,22 @@ def update_system_config():
 # ========================================
 # 节点管理 API（运行状态查询）
 # ========================================
+
+@system_bp.route('/restart', methods=['POST'])
+def restart_system():
+    """整系统重启：清理全部任务进程后退出主进程，由 systemd 自动拉起
+
+    延迟 1.5 秒执行，先让 HTTP 响应返回浏览器。运行中任务的 DB 状态保持
+    running，重启后自动恢复。
+    """
+    from src.system.system_restart import perform_restart
+    perform_restart(delay_seconds=1.5, reason='页面手动触发')
+    logger.warning("[API] 收到重启请求，1.5 秒后开始整系统重启")
+    return jsonify({
+        'success': True,
+        'message': '重启指令已下发，系统正在清理任务进程并重启，请稍候页面自动恢复'
+    })
+
 
 @system_bp.route('/node-management/status', methods=['GET'])
 def get_node_management_status():

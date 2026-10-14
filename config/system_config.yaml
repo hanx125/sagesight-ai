@@ -75,6 +75,17 @@ event_dedup:
   enabled: true
   window_seconds: 300
   iou_threshold: 0.85
+edge_library:
+  edge_api_url: http://127.0.0.1:5000
+  agent_token: ''
+  timeout: 5.0
+  crop_margin: 0.2
+  face_classes:
+  - face
+  plate_classes:
+  - license_plate
+  - licence_plate
+  - plate
 node_management:
   enabled: false
   node_id: ''
@@ -87,32 +98,7 @@ node_management:
   ai_root: /opt/AI
   video_root: /opt/VIDEO
   media_cluster_root: /opt/media-cluster
-# 报警语音播报：声音由本机声卡输出（服务端播放），与浏览器所在电脑无关
-# 盒子（RK3588 A588）配置步骤：
-#   1. aplay -l 查看声卡。该盒子模拟输出为 card1 ES8388，设备名 plughw:1,0；
-#      card0 rockchip,hdmiin 只有采集能力，不能播放。
-#   2. 若系统默认设备指向了不能播放的声卡（表现为 ffplay 秒退、日志报
-#      "audio open failed"），新建 /etc/asound.conf 把默认设备改到模拟输出：
-#        pcm.!default {
-#            type plug
-#            slave.pcm "plughw:1,0"
-#        }
-#        ctl.!default {
-#            type hw
-#            card 1
-#        }
-#      也可不写该文件，改为在下面 audio_device 填 plughw:1,0。
-#   3. 输出使能开关默认关闭，必须在每轮播放前重新打开，见 pre_play_command：
-#      - hp switch / spk switch：板级功放使能，每次播放结束（设备关闭）会被驱动复位为 off
-#      - Headphone / Speaker：编解码器输出开关，默认 off，且被 alsactl 还原后仍为 off
-#      只开 hp/spk 开关时设备能正常打开、日志显示播报成功，但实际没有声音，容易误判。
-#   4. 验证：aplay -D plughw:1,0 /usr/share/sounds/alsa/Front_Center.wav
 voice:
-  # 报警语音的输出设备，留空表示使用系统默认设备（由 /etc/asound.conf 决定）
   audio_device: ''
-  # SDL 音频驱动：alsa / pulseaudio（留空由 SDL 自动选择）
   audio_driver: ''
-  # 每轮播放前执行的 shell 命令（用于打开输出使能开关，留空则不执行）
-  # 盒子取值：amixer -c 1 sset "hp switch" on; amixer -c 1 sset "spk switch" on;
-  #          amixer -c 1 sset "Headphone" on; amixer -c 1 sset "Speaker" on
   pre_play_command: ''

@@ -44,8 +44,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 from flask import Flask, render_template, jsonify, request, Response, redirect, session, url_for
-from flask_socketio import SocketIO, emit
-from eventlet import websocket
+
+# ✅ spawn 子进程会重跑本文件（multiprocessing _fixup_main_from_path 阶段，
+# 模块名 __mp_main__）：Web 服务栈对检测/执行子进程毫无用处，而多个子进程
+# 并发重导入 flask_socketio → socketio → kafka → botocore → jmespath 这条
+# 长依赖链，在 Python 3.11 上存在偶发 import 竞态崩溃（SystemError: error
+# return without exception set）。子进程/import 场景跳过这两条导入，仅保留
+# worker 必需的轻量符号定义（_run_executor_process、TaskProcessManager 等）。
+if __name__ == '__main__':
+    from flask_socketio import SocketIO, emit
+    from eventlet import websocket
 import logging
 
 # 添加项目根目录到路径
@@ -248,6 +256,10 @@ class TaskProcessManager:
 
             process.start()
             self.task_processes[task_id] = process
+
+            # 清除上一次运行残留的心跳，避免健康检查读到旧心跳误判
+            from src.system.health_check import clear_heartbeat
+            clear_heartbeat(task_id)
 
             logger.info(f"[TaskProcessManager] 任务 {task_name} 已启动 (PID: {process.pid})")
 
@@ -465,22 +477,23 @@ class WebSocketManager:
 ws_manager = WebSocketManager()
 
 
-@websocket.WebSocketWSGI
-def _ws_raw_handler(ws):
-    """原生 WebSocket 端点 /ws/raw 的处理函数"""
-    ws_manager.add(ws)
-    try:
-        ws.send(json.dumps({'event': 'connected', 'data': {'message': '已连接到SageSight实时推送服务'}},
-                           ensure_ascii=False))
-        while True:
-            # 等待客户端消息（第三方一般只接收，这里保持连接直到断开）
-            msg = ws.wait()
-            if msg is None:
-                break
-    except Exception:
-        pass
-    finally:
-        ws_manager.remove(ws)
+if __name__ == '__main__':
+    @websocket.WebSocketWSGI
+    def _ws_raw_handler(ws):
+        """原生 WebSocket 端点 /ws/raw 的处理函数"""
+        ws_manager.add(ws)
+        try:
+            ws.send(json.dumps({'event': 'connected', 'data': {'message': '已连接到SageSight实时推送服务'}},
+                               ensure_ascii=False))
+            while True:
+                # 等待客户端消息（第三方一般只接收，这里保持连接直到断开）
+                msg = ws.wait()
+                if msg is None:
+                    break
+        except Exception:
+            pass
+        finally:
+            ws_manager.remove(ws)
 
 
 # WSGI 中间件：分发 /ws/raw 到原生 WebSocket，其他路径交给 socketio
@@ -561,6 +574,10 @@ if _is_main_process:
     register_directory_blueprint(app)
     register_ptz_api(app)
 
+    # 注册推送模块
+    from src.push.push_api import register_push_blueprint
+    register_push_blueprint(app)
+
     # 注册认证模块
     from src.auth.auth_api import register_auth_blueprint, login_required, get_current_user
     register_auth_blueprint(app)
@@ -619,13 +636,17 @@ def get_process_manager():
 # 认证中间件 - 未登录重定向到登录页
 # ========================================
 
-# 不需要认证的路径前缀
-PUBLIC_PATHS = ('/login', '/api/auth/', '/api/ai-stream/', '/api/events/push', '/api/events/update', '/api/events/gif_ready', '/api/display/config', '/static/', '/output/')
+# 不需要认证的路径前缀（/api/health 为健康检查，只读无敏感信息，供人工/看门狗轮询）
+PUBLIC_PATHS = ('/login', '/api/auth/', '/api/health', '/api/ai-stream/', '/api/events/push', '/api/events/update', '/api/events/gif_ready', '/api/display/config', '/static/', '/output/')
 
 if _is_main_process:
     @app.before_request
     def check_auth():
         """全局认证检查"""
+        # CORS 预检请求不携带凭据，直接放行（预检不含业务逻辑，真实请求仍走鉴权）
+        if request.method == 'OPTIONS':
+            return None
+
         # 静态资源、登录页、认证API不需要检查
         if request.path.startswith(PUBLIC_PATHS):
             return None
@@ -634,12 +655,37 @@ if _is_main_process:
         if 'user_id' in session:
             return None
 
+        # URL 参数携带 token（img 标签等无法携带请求头的场景）
+        qs_token = request.args.get('access_token', '')
+        if qs_token:
+            from src.auth.token_manager import get_token_manager
+            if get_token_manager().validate_token(qs_token):
+                return None
+
+        # 移动端 Bearer Token 鉴权
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            from src.auth.token_manager import get_token_manager
+            if get_token_manager().validate_token(auth_header[7:]):
+                return None
+
         # API请求返回401
         if request.path.startswith('/api/'):
             return jsonify({'error': '未登录', 'code': 'UNAUTHORIZED'}), 401
 
         # 页面请求重定向到登录页
         return redirect('/login')
+
+    @app.after_request
+    def add_cors_headers(response):
+        """移动端 H5 联调跨域支持（App 端原生请求不受 CORS 限制）"""
+        origin = request.headers.get('Origin')
+        if origin and request.path.startswith('/api/'):
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
 
 
     # ========================================
@@ -651,7 +697,14 @@ if _is_main_process:
         """登录页面"""
         if 'user_id' in session:
             return redirect('/')
-        return render_template('login.html')
+        # 云平台单点登录开关（关闭时登录页不显示 SSO 入口）
+        sso_enabled = False
+        try:
+            from src.system.system_manager import get_system_manager
+            sso_enabled = get_system_manager().get_setting('sso_enabled', '0') in ('1', 'true', 'True')
+        except Exception:
+            pass
+        return render_template('login.html', sso_enabled=sso_enabled)
 
     @app.route('/')
     def index():
@@ -700,6 +753,8 @@ if _is_main_process:
 # 这里只定义额外的事件相关路由
 
 if _is_main_process:
+    # 健康检查端点 /api/health 在 task_api.py 蓝图中实现（含心跳就绪状态与自检报告）
+
     @app.route('/api/events/stats', methods=['GET'])
     def get_event_stats():
         """获取事件统计
@@ -1206,6 +1261,104 @@ def task_monitor_thread():
 
 
 # ========================================
+# 启动健康自检 + 自愈（方案 A+B）
+# ========================================
+
+# 全局启动自检报告（/api/health 返回 components 字段的数据源）
+STARTUP_REPORT = {'started_at': time.time(), 'items': [], 'self_healed': {}}
+
+# 心跳失联判定阈值（按阶段分级）：
+# - running：子进程主循环每 10s 刷新，>60s 未刷新即失联
+# - 启动中（started/detectors_ready/processors_ready）：检测器模型加载最长 120s，放宽到 180s
+HEARTBEAT_LOST_RUNNING = 60
+HEARTBEAT_LOST_STARTING = 180
+
+
+def _report_item(name: str, status: str, detail: str):
+    """记录启动自检项（status: ok / warn / fail）"""
+    STARTUP_REPORT['items'].append({'name': name, 'status': status, 'detail': detail})
+
+
+def startup_health_check_thread():
+    """启动后延迟健康校验 + 自愈
+
+    task_monitor_thread 只覆盖「进程退出」，覆盖不了「进程活着但内部未就绪/卡死」。
+    本线程在启动后 60s / 120s / 180s 各校验一轮：
+    - 进程已死 / 心跳 stage=error / 心跳失联（按阶段分级阈值）→ 判定失败，自动重拉一次
+    - 尚在启动中（心跳新鲜但 stage 未到 running）→ 正常等待，不干预
+    每个任务最多自动重拉 1 次（结果记入 STARTUP_REPORT['self_healed']）。
+    """
+    pm = get_process_manager()
+    tm = get_task_manager()
+    from src.system.health_check import collect_task_health
+
+    for _round in range(3):
+        time.sleep(60)
+        try:
+            health = collect_task_health(pm, tm)
+            for t in health['tasks']:
+                if not t['expected'] or t['healthy']:
+                    continue
+                task_id = t['task_id']
+
+                # 判定失败原因（启动中阶段按更宽容限判定失联）
+                if not t['process_alive']:
+                    reason = 'process_dead'
+                elif t['stage'] == 'error':
+                    reason = 'heartbeat_error'
+                elif t['stage'] == 'running':
+                    if (t['heartbeat_age'] or 0) > HEARTBEAT_LOST_RUNNING:
+                        reason = f"heartbeat_lost(age={t['heartbeat_age']}s, stage=running)"
+                    else:
+                        continue  # 心跳新鲜但未完全就绪（摄像机暂未全部就绪），等待
+                else:
+                    if (t['heartbeat_age'] or 0) > HEARTBEAT_LOST_STARTING:
+                        reason = f"heartbeat_lost(age={t['heartbeat_age']}s, stage={t['stage']})"
+                    else:
+                        continue  # 启动中（心跳新鲜，模型加载/管线启动中），正常等待
+
+                # 每个任务只自动重拉一次
+                if task_id in STARTUP_REPORT['self_healed']:
+                    logger.warning(
+                        f"[StartupHealth] 任务 {t['task_name']} 仍不健康({reason})，已重拉过 1 次，转人工排查"
+                    )
+                    continue
+
+                task = tm.get_task(task_id)
+                if not task or not task.enabled:
+                    continue
+                # status 可能已被监控线程改为 error（进程死亡路径），running/error 均重拉
+                if task.status not in ('running', 'error'):
+                    continue
+                # 批处理任务正常完成不重启
+                if task.detection_type in ('file', 'scheduled') and t['stage'] == 'no_heartbeat':
+                    continue
+
+                logger.warning(
+                    f"[StartupHealth] 任务 {t['task_name']} 启动异常({reason})，自动重拉..."
+                )
+                # 进程还在但内部卡死：先杀再拉
+                if t['process_alive']:
+                    pm.stop_task(task_id)
+                    time.sleep(3)
+                tm.update_task(task_id, {'status': 'running'})
+                ok = pm.start_task(task.to_dict())
+                STARTUP_REPORT['self_healed'][task_id] = {
+                    'task_name': t['task_name'], 'reason': reason, 'restarted': ok
+                }
+                if ok:
+                    logger.info(f"[StartupHealth] 任务 {t['task_name']} 已自动重拉")
+                else:
+                    logger.error(f"[StartupHealth] 任务 {t['task_name']} 自动重拉失败，需人工排查")
+
+            healthy = health['healthy_count']
+            total = health['expected_count']
+            logger.info(f"[StartupHealth] 校验完成: 就绪 {healthy}/{total} 个任务")
+        except Exception as e:
+            logger.error(f"[StartupHealth] 校验异常: {e}")
+
+
+# ========================================
 # 定时批量检测调度（scheduled）
 # ========================================
 
@@ -1332,61 +1485,15 @@ def scheduled_task_thread():
 # 注意：此处刻意不将运行中任务的 DB 状态改为 stopped，run.py 启动时只会自动拉起
 # status == 'running' 的任务，从而保证整系统重启后任务自动恢复运行。
 
-def _daily_restart_and_exit(pm):
+def _daily_restart_and_exit():
     """清理全部任务进程/子进程后退出主进程，交由 systemd 自动拉起
 
     与 cleanup_handler 的区别：不把 running 任务的 DB 状态改为 stopped，
-    保证重启后任务能自动恢复。
+    保证重启后任务能自动恢复。逻辑统一收敛到 system_restart.perform_restart，
+    供每日定时与页面手动重启共用。
     """
-    logger.warning("[DailyRestart] 到达每日重启时间，开始整系统重启...")
-
-    # 1. 停止任务进程（进程树），但保持 DB 任务状态不变
-    try:
-        pm.running = False
-        pm.stop_all_tasks()
-    except Exception as e:
-        logger.error(f"[DailyRestart] 停止任务进程失败: {e}")
-
-    # 2. 停止节点管理服务（心跳线程 + HTTP 服务）
-    try:
-        from src.node_agent import get_node_agent_service
-        get_node_agent_service().stop()
-    except Exception as e:
-        logger.error(f"[DailyRestart] 停止节点管理服务失败: {e}")
-
-    # 3. 停止事件清理后台调度
-    try:
-        from src.events.event_cleanup_service import stop_event_cleanup_scheduler
-        stop_event_cleanup_scheduler()
-    except Exception:
-        pass
-
-    # 4. 强杀所有残留子进程（最后手段）
-    try:
-        import psutil
-        parent = psutil.Process(os.getpid())
-        children = parent.children(recursive=True)
-        if children:
-            logger.warning(f"[DailyRestart] 发现 {len(children)} 个残留子进程，强制清理")
-            _gone, alive = psutil.wait_procs(children, timeout=3)
-            for child in alive:
-                try:
-                    child.kill()
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.error(f"[DailyRestart] 清理残留子进程失败: {e}")
-
-    # 5. 停止日志监听器（避免退出后残留句柄/日志写入冲突）
-    try:
-        LogManager.get_instance().stop()
-    except Exception:
-        pass
-
-    logger.warning("[DailyRestart] 主进程即将退出，交由 systemd 自动拉起全新进程")
-    # os._exit 强制终止，避免解释器收尾阶段 join 卡住导致的残留；注册的
-    # atexit.cleanup_handler 在此不会执行，任务 DB 状态保持 running 以便重启后恢复。
-    os._exit(0)
+    from src.system.system_restart import perform_restart
+    perform_restart(delay_seconds=0, reason='每日定时')
 
 
 def daily_restart_thread():
@@ -1395,7 +1502,6 @@ def daily_restart_thread():
     每天 23:59:59 触发一次，同一自然日只触发一次（避免秒级抖动重复触发）。
     """
     logger.info("[DailyRestart] 每日定时重启线程启动（每天 23:59:59）")
-    pm = get_process_manager()
     triggered_date = None
 
     while True:
@@ -1403,7 +1509,7 @@ def daily_restart_thread():
         if (now.hour == 23 and now.minute == 59 and now.second >= 59
                 and triggered_date != now.date()):
             triggered_date = now.date()
-            _daily_restart_and_exit(pm)
+            _daily_restart_and_exit()
             return
         time.sleep(1)
 
@@ -1508,6 +1614,10 @@ if __name__ == '__main__':
 
     # 初始化进程管理器
     pm = get_process_manager()
+
+    # 注册进程管理器到系统重启模块（供页面手动重启复用清理逻辑）
+    from src.system.system_restart import register_process_manager
+    register_process_manager(pm)
     
     # 初始化任务管理器
     tm = get_task_manager()
@@ -1592,17 +1702,27 @@ if __name__ == '__main__':
     # 加载所有启用的任务并启动
     tasks = tm.get_all_tasks(enabled_only=True)
     logger.info(f"\n[Main] 发现 {len(tasks)} 个启用的任务")
-    
+
+    # 启动恢复统计（供启动自检报告）
+    resume_expected = [t for t in tasks if t.status == 'running']
+    resume_spawned, resume_failed = [], []
+
     for task in tasks:
         if task.status == 'running':
             task_config = task.to_dict()
-            pm.start_task(task_config)
+            if pm.start_task(task_config):
+                resume_spawned.append(task.task_name)
+            else:
+                resume_failed.append(task.task_name)
             logger.info(f"[Main] 启动任务: {task.task_name} (Algorithm: {task.algorithm})")
     
     # 启动任务监控线程
     pm.running = True
     monitor_thread = threading.Thread(target=task_monitor_thread, daemon=True)
     monitor_thread.start()
+
+    # 启动延迟健康校验 + 自愈线程（60s/120s 两轮，覆盖「进程活着但未就绪/卡死」）
+    threading.Thread(target=startup_health_check_thread, daemon=True).start()
 
     # 启动定时批量检测调度线程（scheduled 任务 cron 触发）
     scheduler_thread = threading.Thread(target=scheduled_task_thread, daemon=True)
@@ -1650,6 +1770,60 @@ if __name__ == '__main__':
     except Exception:
         pass
     logger.info("="*60)
+
+    # ========================================
+    # 启动自检报告（方案 A）：一眼确认重启是否正常
+    # ========================================
+    try:
+        from src.system.health_check import format_startup_report
+        # 1) 数据库可用性
+        try:
+            db_count = len(tm.get_all_tasks(enabled_only=False))
+            _report_item('数据库', 'ok', f'读写正常，共 {db_count} 个任务')
+        except Exception as _db_err:
+            _report_item('数据库', 'fail', f'读写异常: {_db_err}')
+
+        # 2) 任务恢复情况
+        if resume_expected:
+            if resume_failed:
+                _report_item('任务恢复', 'warn',
+                             f'应恢复 {len(resume_expected)} 个，已拉起 {len(resume_spawned)} 个；'
+                             f'拉起失败: {", ".join(resume_failed)}（120s 内自愈线程会重试）')
+            else:
+                _report_item('任务恢复', 'ok',
+                             f'应恢复 {len(resume_expected)} 个，已全部拉起（就绪确认见 60s 后自检日志）')
+        else:
+            _report_item('任务恢复', 'ok', '无待恢复任务')
+
+        # 3) 流媒体服务器（ZLM）可达性（配置存于 DB streaming_servers 表）
+        try:
+            from src.cameras.stream_service import StreamService, call_zlm_api
+            _ss = StreamService(db_path='data/tasks.db')
+            _ms = _ss._get_streaming_server()
+            if _ms:
+                _zlm_resp = call_zlm_api(_ms['host'], _ms['http_port'], _ms['secret'],
+                                         '/index/api/getServerConfig', {})
+                _zlm_ok = isinstance(_zlm_resp, dict) and _zlm_resp.get('code') == 0
+                _report_item('流媒体服务器', 'ok' if _zlm_ok else 'warn',
+                             f"{_ms['host']}:{_ms['http_port']} " + ('API 正常' if _zlm_ok else f'响应异常: {str(_zlm_resp)[:80]}'))
+            else:
+                _report_item('流媒体服务器', 'warn', '未配置默认流媒体服务器')
+        except Exception as _zlm_err:
+            _report_item('流媒体服务器', 'fail', f'不可达: {_zlm_err}')
+
+        # 4) 后台组件
+        _report_item('后台组件', 'ok',
+                     '任务监控 / 定时调度 / 每日重启 / 事件清理 / 自愈校验 线程已启动'
+                     + ('；节点管理已启用' if node_agent else '；节点管理未启用'))
+
+        # 任务详情（就绪状态由子进程心跳判定，此刻刚拉起多为 starting）
+        _report_item('任务就绪', 'ok' if resume_failed else 'warn',
+                     f'拉起 {len(resume_spawned)} 个: {", ".join(resume_spawned) if resume_spawned else "无"}'
+                     + '；60s/120s 后自愈线程校验心跳并输出「就绪 N/M」')
+
+        logger.info(format_startup_report(STARTUP_REPORT))
+    except Exception as _report_err:
+        logger.error(f"[Main] 启动自检报告生成失败: {_report_err}")
 
     # 运行Flask应用（前台）
     try:

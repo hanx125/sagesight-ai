@@ -5,6 +5,7 @@
 """
 
 import logging
+import threading
 from flask import Blueprint, request, jsonify
 
 from .stream_service import get_stream_service
@@ -13,6 +14,10 @@ logger = logging.getLogger(__name__)
 
 # 创建Blueprint
 stream_bp = Blueprint('stream', __name__, url_prefix='/api/stream')
+
+# 快照抓帧并发限制与短缓存（ffmpeg 抓 RTSP 帧较重，避免列表并发刷新压垮摄像机）
+_snapshot_semaphore = threading.Semaphore(4)
+_snapshot_cache = {}
 
 
 # ========================================
@@ -168,6 +173,66 @@ def get_stream_urls(camera_id: str):
         logger.error(f"获取流播放地址异常: {str(e)}", exc_info=True)
         return jsonify({'error': f'获取流播放地址失败: {str(e)}'}), 500
 
+
+
+@stream_bp.route('/snapshot/<camera_id>', methods=['GET'])
+def get_camera_snapshot(camera_id: str):
+    """
+    获取摄像机实时快照（JPEG）
+
+    通过 ffmpeg 从摄像机 RTSP 源直接抓取一帧（部署的 ZLMediaKit 版本无 getSnap 接口），
+    供移动端列表缩略图使用。带并发限制与 2 秒短缓存，避免列表并发刷新时重复抓帧。
+
+    Returns:
+        image/jpeg 图片数据
+    """
+    import time
+    import subprocess
+    from flask import Response
+    from src.cameras.camera_manager import get_camera_manager
+
+    try:
+        camera = get_camera_manager().get_camera(camera_id)
+        if not camera:
+            return jsonify({'error': '摄像机不存在'}), 404
+        if not camera.source:
+            return jsonify({'error': '摄像机未配置取流地址'}), 400
+
+        # 2 秒短缓存：刷新周期内复用同一帧
+        cached = _snapshot_cache.get(camera_id)
+        if cached and time.time() - cached[0] < 2:
+            return Response(cached[1], mimetype='image/jpeg',
+                            headers={'Cache-Control': 'no-store'})
+
+        with _snapshot_semaphore:
+            # 等待并发额度期间其他线程可能已完成抓帧
+            cached = _snapshot_cache.get(camera_id)
+            if cached and time.time() - cached[0] < 2:
+                return Response(cached[1], mimetype='image/jpeg',
+                                headers={'Cache-Control': 'no-store'})
+
+            # ffmpeg 从 RTSP 源抓一帧到 stdout（-loglevel error 防止日志混入图片数据）
+            proc = subprocess.run(
+                ['ffmpeg', '-rtsp_transport', 'tcp', '-y', '-loglevel', 'error',
+                 '-i', camera.source, '-frames:v', '1', '-q:v', '5', '-f', 'image2', '-'],
+                capture_output=True, timeout=15
+            )
+            jpeg = proc.stdout
+            if proc.returncode != 0 or not jpeg:
+                logger.warning(f"ffmpeg 抓帧失败: camera_id={camera_id}, returncode={proc.returncode}, "
+                               f"stderr={proc.stderr[-200:] if proc.stderr else ''}")
+                return jsonify({'error': '抓取快照失败'}), 502
+
+            _snapshot_cache[camera_id] = (time.time(), jpeg)
+            return Response(jpeg, mimetype='image/jpeg',
+                            headers={'Cache-Control': 'no-store'})
+
+    except subprocess.TimeoutExpired:
+        logger.warning(f"抓取快照超时: camera_id={camera_id}")
+        return jsonify({'error': '抓取快照超时'}), 504
+    except Exception as e:
+        logger.error(f"获取快照异常: camera_id={camera_id}, {str(e)}")
+        return jsonify({'error': f'获取快照失败: {str(e)}'}), 500
 
 
 @stream_bp.route('/batch/start', methods=['POST'])

@@ -59,6 +59,10 @@ function loadConfigToForm(task) {
     document.getElementById('voiceLoopCount').value = task.voice_loop_count ?? 1;
     document.getElementById('voiceIntervalMs').value = task.voice_interval_ms ?? 1000;
     document.getElementById('voiceVolume').value = task.voice_volume ?? 1.0;
+
+    // 边缘库比对（任务级独立字段；启用开关走 data-switch，库名称单独回填）
+    document.getElementById('faceLibraryName').value = task.face_library_name || '';
+    document.getElementById('plateLibraryName').value = task.plate_library_name || '';
 }
 
 // 加载报警语音 MP3 预置列表，填充 voiceMp3 下拉选项
@@ -113,7 +117,10 @@ async function saveConfig() {
             voice_interval_ms: parseInt(document.getElementById('voiceIntervalMs').value, 10) || 1000,
             voice_volume: parseFloat(document.getElementById('voiceVolume').value) != null
                 ? parseFloat(document.getElementById('voiceVolume').value)
-                : 1.0
+                : 1.0,
+            // 边缘库比对（任务级独立字段；启用开关由下方 data-switch 循环统一提交）
+            face_library_name: document.getElementById('faceLibraryName').value.trim(),
+            plate_library_name: document.getElementById('plateLibraryName').value.trim()
         };
 
         // 事件输出/显示开关（任务表独立列，列名取自 data-switch）

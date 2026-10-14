@@ -6,6 +6,7 @@
 """
 
 import logging
+import urllib.parse
 import requests
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -210,6 +211,16 @@ def get_stream_media_info(server_host: str, http_port: int, secret: str, app: st
         }
 
 
+def _rewrite_url_host(url: str, new_hostname: str) -> str:
+    """把 URL 的主机部分替换为指定主机名，保留协议/端口/路径/参数。"""
+    parsed = urllib.parse.urlsplit(url)
+    if not parsed.hostname:
+        return url
+    port = parsed.port
+    netloc = new_hostname if port is None else f'{new_hostname}:{port}'
+    return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
 def get_stream_play_urls(server_host: str, http_port: int, rtmp_port: int, rtsp_port: int, app: str, stream_id: str, secret: str = "") -> Dict[str, str]:
     """
     获取流的播放地址
@@ -231,8 +242,8 @@ def get_stream_play_urls(server_host: str, http_port: int, rtmp_port: int, rtsp_
     ws_secret_param = f"?secret={secret}" if secret else ""
     # WebRTC URL已经有一个?了，所以secret需要用&连接
     rtc_secret_param = f"&secret={secret}" if secret else ""
-    
-    return {
+
+    urls = {
         'rtmp': f"rtmp://{server_host}:{rtmp_port}/{app}/{stream_id}",
         'rtsp': f"rtsp://{server_host}:{rtsp_port}/{app}/{stream_id}",
         'http-flv': f"http://{server_host}:{http_port}/{app}/{stream_id}.live.flv{http_secret_param}",  # ZLM 直播流需要 .live.flv 格式 + secret鉴权
@@ -241,6 +252,18 @@ def get_stream_play_urls(server_host: str, http_port: int, rtmp_port: int, rtsp_
         'rtc': f"http://{server_host}:{http_port}/index/api/webrtc?app={app}&stream={stream_id}&type=play{rtc_secret_param}",  # WebRTC播放地址，使用HTTP API端口
         'rtcs': f"https://{server_host}:{http_port}/index/api/webrtc?app={app}&stream={stream_id}&type=play{rtc_secret_param}",  # WebRTC HTTPS播放地址，使用HTTP API端口
     }
+
+    # 播放地址供浏览器直连 ZLM 使用：按当前请求的主机名改写 host（保留端口），
+    # 跨设备访问时地址自动跟随访问者，流媒体 host 保持 127.0.0.1 即可（取流仍走本机）
+    try:
+        from flask import request as _flask_request
+        hostname = _flask_request.host.split(':')[0]
+        if hostname:
+            urls = {k: _rewrite_url_host(v, hostname) for k, v in urls.items()}
+    except RuntimeError:
+        pass  # 非 Flask 请求上下文（后台线程/子进程拉流）保持原地址
+
+    return urls
 
 
 # ========================================

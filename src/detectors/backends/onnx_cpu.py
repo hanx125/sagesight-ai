@@ -107,7 +107,9 @@ class ONNXCPUDetector(BaseDetector):
             # 创建会话选项（CPU优化）
             # ========================================
             session_options = ort.SessionOptions()
-            
+            # 只显示 ERROR 级：避免 C++ 层警告直写 stderr 造成多进程日志交错乱码
+            session_options.log_severity_level = 3
+
             # 启用图优化
             session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             

@@ -413,6 +413,32 @@ def create_tensor_input_hw(yuv_frame, region, model_size=(640, 640), use_rga=Fal
     return create_tensor_input(yuv_frame, region, model_size)
 
 
+def map_box_to_region(box, region, model_size):
+    """
+    将模型坐标系的检测框映射回原图绝对坐标
+
+    预处理时 region 裁剪块被缩放到 model_size 后送入模型，各后端返回的
+    检测框因此处于模型输入尺寸坐标系。region 尺寸与模型尺寸不一致时
+    （大目标 region 被放大、非默认尺寸模型），需按 region/模型 比例缩放
+    回 region 像素坐标，再叠加 region 偏移得到原图绝对坐标。
+
+    Args:
+        box: (x1, y1, x2, y2) 模型输入尺寸坐标系下的检测框
+        region: (x1, y1, x2, y2) 原图坐标
+        model_size: (height, width) 模型输入尺寸
+    Returns:
+        (x1, y1, x2, y2) 原图绝对坐标（int）
+    """
+    x_scale = (region[2] - region[0]) / model_size[1]
+    y_scale = (region[3] - region[1]) / model_size[0]
+    return (
+        int(box[0] * x_scale) + region[0],
+        int(box[1] * y_scale) + region[1],
+        int(box[2] * x_scale) + region[0],
+        int(box[3] * y_scale) + region[1],
+    )
+
+
 # ========================================
 # Region 聚类生成
 # ========================================

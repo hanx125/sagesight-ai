@@ -7,7 +7,6 @@
 import os
 import logging
 from flask import Blueprint, request, jsonify
-from flask_socketio import SocketIO
 from typing import Dict
 
 logger = logging.getLogger(__name__)

@@ -298,6 +298,14 @@ class BaseDetector:
         expected_feature_dim = len(class_names) + 4
 
         if output.ndim == 3:
+            # PlateDetect（车牌检测）格式：(1, N, 14)：
+            #   14 列 = x1,y1,x2,y2（模型输入空间）+ conf + plate_type + 4 关键点(x,y)
+            #   与标准 YOLO 的区别：无类别分数列，坐标已是 xyxy
+            if output.shape[2] == 14 and expected_feature_dim != 14:
+                return self._postprocess_plate_detect(
+                    output[0], img_height, img_width, conf_threshold,
+                    iou_threshold, class_names, min_box_area
+                )
             if output.shape[1] == expected_feature_dim:
                 # 格式 (1, C+4, N) → 转置为 (N, C+4)
                 output = np.transpose(output[0], (1, 0))
@@ -386,9 +394,85 @@ class BaseDetector:
                 class_name=class_name
             )
             detections.append(detection)
-        
+
         return detections
-    
+
+    def _postprocess_plate_detect(
+        self,
+        rows: np.ndarray,
+        img_height: int,
+        img_width: int,
+        conf_threshold: float,
+        iou_threshold: float,
+        class_names: Tuple[str, ...],
+        min_box_area: float = 10.0
+    ) -> List[Detection]:
+        """
+        PlateDetect（车牌检测）专用后处理
+
+        模型输出 (N, 14)：x1,y1,x2,y2 + conf + plate_type + 4 关键点(x,y)。
+        与标准 YOLO 的区别：无类别分数列、坐标已是 xyxy（非中心点+宽高）。
+        预处理为直接缩放（无 letterbox），坐标已处于模型输入空间，
+        由调用方统一还原到原图；关键点与车牌类型本平台不使用，直接丢弃。
+
+        Args:
+            rows: (N, 14) 模型输出
+            img_height, img_width: 模型输入尺寸（坐标空间）
+            conf_threshold: 置信度阈值
+            iou_threshold: NMS IoU 阈值
+            class_names: 类别名称列表（单类 plate）
+            min_box_area: 最小检测框面积
+
+        Returns:
+            检测结果列表（坐标为模型输入尺寸空间）
+        """
+        if rows.ndim != 2 or rows.shape[1] < 5:
+            return []
+
+        scores = rows[:, 4].astype(np.float32)
+        valid_mask = scores > conf_threshold
+        if not np.any(valid_mask):
+            return []
+
+        rows = rows[valid_mask]
+        scores = scores[valid_mask]
+
+        x1 = np.clip(rows[:, 0], 0, img_width)
+        y1 = np.clip(rows[:, 1], 0, img_height)
+        x2 = np.clip(rows[:, 2], 0, img_width)
+        y2 = np.clip(rows[:, 3], 0, img_height)
+
+        # 面积过滤
+        areas = (x2 - x1) * (y2 - y1)
+        valid_area_mask = areas >= min_box_area
+        if not np.any(valid_area_mask):
+            return []
+
+        x1 = x1[valid_area_mask]
+        y1 = y1[valid_area_mask]
+        x2 = x2[valid_area_mask]
+        y2 = y2[valid_area_mask]
+        scores = scores[valid_area_mask]
+        class_ids = np.zeros(len(scores), dtype=np.int64)  # 单类 plate
+
+        indices = self._nms_yolo(x1, y1, x2, y2, scores, class_ids, iou_threshold)
+
+        detections = []
+        for idx in indices:
+            class_id = int(class_ids[idx])
+            if class_id < len(class_names):
+                class_name = class_names[class_id]
+            else:
+                class_name = f"class_{class_id}"
+
+            detections.append(Detection(
+                bbox=(float(x1[idx]), float(y1[idx]), float(x2[idx]), float(y2[idx])),
+                confidence=float(scores[idx]),
+                class_id=class_id,
+                class_name=class_name
+            ))
+        return detections
+
     def _nms_yolo(
         self,
         x1: np.ndarray,

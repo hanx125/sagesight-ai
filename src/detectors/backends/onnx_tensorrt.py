@@ -177,6 +177,8 @@ class ONNXTensorRTDetector(BaseDetector):
             # ========================================
             session_options = ort.SessionOptions()
             session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            # 只显示 ERROR 级：避免 C++ 层警告直写 stderr 造成多进程日志交错乱码
+            session_options.log_severity_level = 3
             
             # 启用 TensorRT 详细日志（便于调试）
             os.environ['ORT_TENSORRT_LOGGER_LEVEL'] = '1'  # 0=OFF, 1=INFO, 2=VERBOSE

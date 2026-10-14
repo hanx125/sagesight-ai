@@ -104,6 +104,34 @@ def get_webhook_base_url() -> str:
     return f'http://127.0.0.1:{port}'
 
 
+def _detect_local_ip(default: str = '127.0.0.1') -> str:
+    """自动探测本机局域网 IP：按默认路由出口网卡（UDP connect，不实际发包）。"""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(('8.8.8.8', 80))
+            ip = s.getsockname()[0]
+            return ip if ip else default
+        finally:
+            s.close()
+    except Exception:
+        return default
+
+
+def get_event_image_host(default: str = '127.0.0.1') -> str:
+    """获取事件图片/GIF 绝对 URL 使用的主机地址。
+
+    web_server.host 填了有效局域网 IP 则优先使用（多网卡特殊场景手动指定）；
+    未配置或为 0.0.0.0/localhost/127.0.0.1 时自动探测本机局域网 IP，
+    换设备部署无需手动改地址。
+    """
+    host = (get_web_server_host('') or '').strip()
+    if host and host not in ('0.0.0.0', 'localhost', '127.0.0.1'):
+        return host
+    return _detect_local_ip(default)
+
+
 def get_storage_config() -> Dict[str, Any]:
     """获取存储配置（MinIO/FTP 全局配置）"""
     config = load_system_config()
@@ -200,6 +228,27 @@ def get_event_dedup_config() -> Dict[str, Any]:
         'enabled': dedup_cfg.get('enabled', True),
         'window_seconds': dedup_cfg.get('window_seconds', 300),
         'iou_threshold': dedup_cfg.get('iou_threshold', 0.3),
+    }
+
+
+def get_edge_library_config() -> Dict[str, Any]:
+    """获取边缘库比对连接配置（system_config.yaml 的 edge_library 段）
+
+    仅包含连接参数（地址/令牌/超时）与类别名映射；人脸库 / 车牌库的库 ID
+    为任务级配置，不在此处。
+
+    Returns:
+        边缘库比对配置字典，包含 edge_api_url/agent_token/timeout/crop_margin/face_classes/plate_classes
+    """
+    config = load_system_config()
+    raw = config.get('edge_library', {}) or {}
+    return {
+        'edge_api_url': str(raw.get('edge_api_url', '') or ''),
+        'agent_token': str(raw.get('agent_token', '') or ''),
+        'timeout': float(raw.get('timeout', 5) or 5),
+        'crop_margin': float(raw['crop_margin']) if raw.get('crop_margin') is not None else 0.2,
+        'face_classes': [str(c).lower() for c in (raw.get('face_classes') or ['face'])],
+        'plate_classes': [str(c).lower() for c in (raw.get('plate_classes') or ['license_plate', 'licence_plate', 'plate'])],
     }
 
 

@@ -26,6 +26,7 @@ from src.detectors.region_utils import (
     create_tensor_input_hw,
     get_cluster_candidates,
     get_cluster_region,
+    map_box_to_region,
     merge_yuv_planes,
     reduce_detections,
 )
@@ -261,7 +262,7 @@ def run_gated_pipeline(
                     for label, score, box in detections:
                         if target_classes and label not in target_classes:
                             continue
-                        abs_box = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+                        abs_box = map_box_to_region(box, full_frame_region, model_size)
                         all_detections.append(
                             (label, score, abs_box, area(abs_box),
                              (abs_box[2] - abs_box[0]) / max(1, abs_box[3] - abs_box[1]),
@@ -279,12 +280,7 @@ def run_gated_pipeline(
                         detections = remote_detector.detect(tensor, detect_threshold)
 
                         for label, score, box in detections:
-                            abs_box = (
-                                int(box[0] + region[0]),
-                                int(box[1] + region[1]),
-                                int(box[2] + region[0]),
-                                int(box[3] + region[1]),
-                            )
+                            abs_box = map_box_to_region(box, region, model_size)
                             if target_classes and label not in target_classes:
                                 continue
                             all_detections.append(

@@ -325,6 +325,12 @@ function renderServersList() {
                         <span class="detail-value">${escapeHtml(server.media_server_id)}</span>
                     </div>
                     ` : ''}
+                    ${server.iot_product_key || server.iot_device_name ? `
+                    <div class="server-detail-row">
+                        <span class="detail-label">云平台绑定:</span>
+                        <span class="detail-value">${escapeHtml(server.iot_product_key || '')} / ${escapeHtml(server.iot_device_name || '')}</span>
+                    </div>
+                    ` : ''}
                     ${server.description ? `
                     <div class="server-detail-row">
                         <span class="detail-label">描述:</span>
@@ -404,6 +410,8 @@ function openEditServerModal(serverId) {
     document.getElementById('serverRtcPort').value = server.rtc_port || 8000;
     document.getElementById('serverSecret').value = server.secret || '';
     document.getElementById('serverMediaServerId').value = server.media_server_id || '';
+    document.getElementById('serverIotProductKey').value = server.iot_product_key || '';
+    document.getElementById('serverIotDeviceName').value = server.iot_device_name || '';
     document.getElementById('serverDescription').value = server.description || '';
     document.getElementById('serverEnabled').checked = server.enabled;
     document.getElementById('serverDefault').checked = server.is_default;
@@ -437,6 +445,8 @@ async function saveServer() {
         rtc_port: parseInt(document.getElementById('serverRtcPort').value) || 8000,
         secret: document.getElementById('serverSecret').value || '',
         media_server_id: document.getElementById('serverMediaServerId').value || '',
+        iot_product_key: document.getElementById('serverIotProductKey').value.trim(),
+        iot_device_name: document.getElementById('serverIotDeviceName').value.trim(),
         description: document.getElementById('serverDescription').value,
         enabled: document.getElementById('serverEnabled').checked,
         is_default: document.getElementById('serverDefault').checked
@@ -1285,6 +1295,10 @@ switchTab = function(tabId) {
     if (tabId === 'llm') {
         loadLLMConfigs();
     }
+    // 切换到云平台配置页时加载单点登录配置
+    if (tabId === 'cloud') {
+        loadSSOConfig();
+    }
 };
 
 // ========================================
@@ -1324,6 +1338,13 @@ async function loadSystemConfig() {
             document.getElementById('mqttQos').value = String(mqttConfig.qos ?? 1);
             document.getElementById('mqttRetain').value = String(mqttConfig.retain || false);
 
+            // 边缘库比对连接配置（人脸库 / 车牌库，任务级库名称在任务「参数配置」中设置）
+            const el = data.edge_library || {};
+            document.getElementById('elEdgeApiUrl').value = el.edge_api_url || '';
+            document.getElementById('elAgentToken').value = el.agent_token || '';
+            document.getElementById('elTimeout').value = el.timeout || 5;
+            document.getElementById('elCropMargin').value = (el.crop_margin !== undefined && el.crop_margin !== null) ? el.crop_margin : 0.2;
+
             // 实时通信配置已迁移至「Web服务配置」标签页，此处不再加载
         }
     } catch (error) {
@@ -1360,6 +1381,13 @@ async function saveSystemConfig() {
                 qos: parseInt(document.getElementById('mqttQos').value),
                 retain: document.getElementById('mqttRetain').value === 'true'
             }
+        },
+        // 边缘库比对连接配置（人脸库 / 车牌库接口）
+        edge_library: {
+            edge_api_url: document.getElementById('elEdgeApiUrl').value.trim(),
+            agent_token: document.getElementById('elAgentToken').value.trim(),
+            timeout: parseInt(document.getElementById('elTimeout').value) || 5,
+            crop_margin: parseFloat(document.getElementById('elCropMargin').value)
         }
         // 实时通信配置已迁移至「Web服务配置」标签页，此处不再保存
     };
@@ -1450,7 +1478,8 @@ async function saveNodeManagementConfig() {
         const result = await response.json();
 
         if (response.ok) {
-            showNotification(result.message || '节点管理配置保存成功', 'success');
+            // 节点管理服务随主进程启动，配置变更需重启生效
+            promptRestart((result.message || '节点管理配置已保存') + '，需重启服务后生效');
         } else {
             showNotification(result.error || '保存失败', 'error');
         }
@@ -1481,7 +1510,7 @@ async function loadWebServerConfig() {
         const webServer = data.web_server || {};
 
         // 基础服务配置
-        document.getElementById('wsHost').value = webServer.host || '0.0.0.0';
+        document.getElementById('wsHost').value = webServer.host || '';
         document.getElementById('wsPort').value = webServer.port || 5556;
         document.getElementById('wsCorsEnabled').value = String(webServer.cors_enabled !== false);
         document.getElementById('wsDebug').value = String(webServer.debug === true);
@@ -1526,7 +1555,7 @@ async function saveWebServerConfig() {
 
     const configData = {
         web_server: {
-            host: document.getElementById('wsHost').value.trim() || '0.0.0.0',
+            host: document.getElementById('wsHost').value.trim(),
             port: port,
             cors_enabled: document.getElementById('wsCorsEnabled').value === 'true',
             debug: document.getElementById('wsDebug').value === 'true',
@@ -1554,15 +1583,14 @@ async function saveWebServerConfig() {
         const result = await response.json();
 
         if (response.ok) {
+            // 端口/静态/模板目录/Socket.IO/原生 WebSocket 均随服务启动初始化，需重启生效
             const msg = result.message || '配置已保存';
-            // 端口或目录变更时提醒重启
             const oldPort = window.location.port;
             const newPort = String(port);
-            if (oldPort && oldPort !== newPort) {
-                showNotification(`${msg}。端口已变更（${oldPort} → ${newPort}），需重启服务后通过新端口访问`, 'success');
-            } else {
-                showNotification(msg + '，部分配置需重启服务后生效', 'success');
-            }
+            const portTip = (oldPort && oldPort !== newPort)
+                ? `端口已变更（${oldPort} → ${newPort}），重启后需通过新端口访问。`
+                : '';
+            promptRestart(`${msg}。修改端口、静态/模板目录、Socket.IO、原生 WebSocket 配置需重启服务后生效。${portTip}`);
         } else {
             showNotification(result.error || '保存失败', 'error');
         }
@@ -1659,7 +1687,7 @@ async function saveDatabasePath() {
         const data = await response.json();
 
         if (response.ok) {
-            showNotification(data.message || '路径已保存，重启后生效', 'success');
+            promptRestart(data.message || '路径已保存，需重启服务后生效');
         } else {
             showNotification(data.error || '保存失败', 'error');
         }
@@ -1689,7 +1717,7 @@ async function restoreDatabase(input) {
         const data = await response.json();
 
         if (response.ok) {
-            showNotification(data.message || '恢复成功，重启后生效', 'success');
+            promptRestart(data.message || '恢复成功，需重启服务后生效');
         } else {
             showNotification(data.error || '恢复失败', 'error');
         }
@@ -1765,6 +1793,86 @@ async function toggleLLMEnabled(enabled) {
         console.error('更新大模型总开关失败:', error);
         showNotification('更新大模型总开关失败', 'error');
         // 回滚开关状态
+        if (sw) sw.checked = !enabled;
+    }
+}
+
+// ========================================
+// 云平台单点登录（SSO）配置管理
+// ========================================
+
+async function loadSSOConfig() {
+    try {
+        const response = await fetch('/api/auth/sso/config');
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.error || '加载失败');
+        }
+        const cfg = await response.json();
+
+        document.getElementById('ssoCloudBaseUrl').value = cfg.cloud_base_url || '';
+        document.getElementById('ssoAuthorizeBaseUrl').value = cfg.authorize_base_url || '';
+        document.getElementById('ssoClientId').value = cfg.client_id || '';
+        document.getElementById('ssoClientSecret').value = cfg.client_secret || '';
+        document.getElementById('ssoRedirectUri').value = cfg.redirect_uri || '';
+        document.getElementById('ssoScope').value = cfg.scope || '';
+        document.getElementById('ssoUsePkce').checked = !!cfg.use_pkce;
+        document.getElementById('ssoEnabledSwitch').checked = !!cfg.enabled;
+    } catch (error) {
+        console.error('加载云平台配置失败:', error);
+        showNotification('加载云平台配置失败: ' + error.message, 'error');
+    }
+}
+
+async function saveSSOConfig() {
+    const payload = {
+        cloud_base_url: document.getElementById('ssoCloudBaseUrl').value.trim(),
+        authorize_base_url: document.getElementById('ssoAuthorizeBaseUrl').value.trim(),
+        client_id: document.getElementById('ssoClientId').value.trim(),
+        client_secret: document.getElementById('ssoClientSecret').value,
+        redirect_uri: document.getElementById('ssoRedirectUri').value.trim(),
+        scope: document.getElementById('ssoScope').value.trim(),
+        use_pkce: document.getElementById('ssoUsePkce').checked
+    };
+
+    if (!payload.cloud_base_url || !payload.client_id || !payload.redirect_uri) {
+        showNotification('云平台 API 地址、客户端 ID、回调地址为必填项', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/auth/sso/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || '保存失败');
+        }
+        showNotification(data.message, 'success');
+    } catch (error) {
+        console.error('保存云平台配置失败:', error);
+        showNotification('保存云平台配置失败: ' + error.message, 'error');
+    }
+}
+
+async function toggleSSOEnabled(enabled) {
+    const sw = document.getElementById('ssoEnabledSwitch');
+    try {
+        const response = await fetch('/api/auth/sso/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: enabled })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || '更新失败');
+        }
+        showNotification(enabled ? '单点登录已开启，登录页将显示入口' : '单点登录已关闭，登录页不再显示入口', 'success');
+    } catch (error) {
+        console.error('更新单点登录开关失败:', error);
+        showNotification('更新单点登录开关失败', 'error');
         if (sw) sw.checked = !enabled;
     }
 }
@@ -2102,6 +2210,65 @@ async function testLLMConfig(configId) {
 }
 
 // ========================================
+// 系统重启（手动重启 + 需重启配置保存后的统一提示）
+// ========================================
+
+/**
+ * 整系统重启：清理任务进程后主进程退出，由 systemd 自动拉起。
+ * 重启期间显示全屏遮罩，轮询 /api/health 待服务恢复后自动刷新页面。
+ */
+async function restartSystem(skipConfirm) {
+    if (!skipConfirm && !confirm('确定要重启系统吗？\n\n重启期间所有检测任务将暂停，系统会安全清理任务进程后自动重启，页面将在服务恢复后自动刷新。')) {
+        return;
+    }
+
+    const overlay = document.getElementById('restartOverlay');
+    if (overlay) overlay.style.display = 'flex';
+
+    try {
+        const resp = await fetch('/api/system/restart', { method: 'POST' });
+        if (!resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            throw new Error(data.error || ('HTTP ' + resp.status));
+        }
+    } catch (e) {
+        if (overlay) overlay.style.display = 'none';
+        showNotification('重启请求失败: ' + e.message, 'error');
+        return;
+    }
+
+    // 服务退出后请求会暂时失败，恢复后 /api/health 可访问即刷新页面
+    const POLL_INTERVAL = 2000;
+    const POLL_MAX = 120;
+    let polled = 0;
+    const timer = setInterval(async () => {
+        polled++;
+        try {
+            const resp = await fetch('/api/health?t=' + Date.now(), { cache: 'no-store' });
+            if (resp.ok) {
+                clearInterval(timer);
+                window.location.reload();
+                return;
+            }
+        } catch (e) { /* 服务重启中，继续轮询 */ }
+        if (polled >= POLL_MAX) {
+            clearInterval(timer);
+            if (overlay) overlay.style.display = 'none';
+            showNotification('等待重启超时，请手动刷新页面确认服务状态', 'error');
+        }
+    }, POLL_INTERVAL);
+}
+
+/**
+ * 需重启生效的配置保存后的统一提示，支持立即重启
+ */
+function promptRestart(message) {
+    if (confirm(message + '\n\n是否立即重启系统？')) {
+        restartSystem(true);
+    }
+}
+
+// ========================================
 // 暴露命名空间：供 HTML onclick/onchange 调用
 // ========================================
 return {
@@ -2143,11 +2310,16 @@ return {
     setDefaultLLMConfig: setDefaultLLMConfig,
     testLLMConfig: testLLMConfig,
     toggleLLMEnabled: toggleLLMEnabled,
+    loadSSOConfig: loadSSOConfig,
+    saveSSOConfig: saveSSOConfig,
+    toggleSSOEnabled: toggleSSOEnabled,
     saveVoiceConfig: saveVoiceConfig,
     testVoice: testVoice,
     playVoiceFile: playVoiceFile,
     uploadVoiceFile: uploadVoiceFile,
-    deleteVoiceFile: deleteVoiceFile
+    deleteVoiceFile: deleteVoiceFile,
+    restartSystem: restartSystem,
+    promptRestart: promptRestart
 };
 
 })();

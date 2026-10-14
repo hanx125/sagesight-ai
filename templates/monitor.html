@@ -640,6 +640,10 @@
                             <label>去重原因</label>
                             <span id="monitorEventDedupReason" style="color:#c62828; word-break:break-all;"></span>
                         </div>
+                        <div class="event-detail-item" id="monitorEventLibWrap" style="display:none;">
+                            <label>库比对</label>
+                            <span id="monitorEventLibInfo"></span>
+                        </div>
                         <div class="event-detail-item">
                             <label>目标类别</label>
                             <span id="monitorEventClass"></span>
@@ -721,7 +725,7 @@
 <script src="{{ url_for('static', filename='js/ZLMRTCClient.js') }}"></script>
 <script src="{{ url_for('static', filename='js/jessibuca/jessibuca.js') }}"></script>
 <script src="{{ url_for('static', filename='js/chart.umd.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20260930llm1"></script>
+<script src="{{ url_for('static', filename='js/monitor.js') }}?v=20261010lib2"></script>
 <script src="{{ url_for('static', filename='js/ptz_joystick.js') }}?v=20260923ptz"></script>
 <script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}?v=20260923ptz"></script>
 
@@ -883,6 +887,25 @@
     font-size: 10px;
     padding: 2px 6px;
     border-radius: 3px;
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* ✅ 库比对信息标签（叠加在卡片图片左下角：人脸人名/车牌号） */
+.event-lib-badge {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    max-width: calc(100% - 8px);
+    background: linear-gradient(135deg, rgba(103, 58, 183, 0.92), rgba(81, 45, 168, 0.92));
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-top-right-radius: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     pointer-events: none;
     z-index: 2;
 }

@@ -396,6 +396,8 @@ TASK_FIELD_COLUMNS = (
     'voice_volume',
     'algorithm', 'model_path', 'model_type', 'labels_file', 'target_classes',
     'conf_threshold', 'motion_detection_enabled', 'tracking_enabled',
+    # 边缘库比对（任务级）：是否启用 + 人脸库/车牌库名称（边缘集成平台）
+    'library_match_enabled', 'face_library_name', 'plate_library_name',
 )
 TASK_SELECT_COLUMNS = ('id',) + TASK_FIELD_COLUMNS + TASK_SWITCH_COLUMNS + ('created_at', 'updated_at')
 
@@ -501,7 +503,7 @@ class DetectionTask:
     enabled: bool = True
     status: str = "stopped"
     detection_type: str = "realtime"  # realtime（实时检测）, polling（轮询检测）, motion_gated（运动门控检测）, file（离线文件检测）, scheduled（定时批量检测）
-    event_type: str = "tracking"  # 语义检测类型（事件类型）：tracking（目标跟踪）, zone（区域入侵）, loitering（徘徊检测）, people_counting（人员统计）
+    event_type: str = "tracking"  # 语义检测类型（事件类型）：tracking（目标跟踪）, zone（区域入侵）, loitering（徘徊检测）, people_counting（人员统计）, face（人脸检测）, plate（车牌检测）
     # 轮询检测（polling）：每 N 帧推理一次，其余帧跳过推理仅保留跟踪状态
     polling_interval_frames: int = 5
     # 运动门控检测（motion_gated）：无运动时跳过推理，每 N 帧补抽一次以防漏检静止目标
@@ -542,6 +544,12 @@ class DetectionTask:
     # 功能开关（独立字段，便于任务管理）
     motion_detection_enabled: bool = True  # 是否启用运动检测（默认启用）
     tracking_enabled: bool = True  # 是否启用跟踪功能（默认启用）
+
+    # 边缘库比对（任务级）：检测到人脸/车牌后调用边缘集成平台库接口比对，
+    # 结果随事件上报云平台。连接参数（地址/令牌/超时）由 system_config 全局提供。
+    library_match_enabled: bool = False  # 是否启用边缘库比对
+    face_library_name: str = ''  # 人脸库名称（空表示不比对，运行时按名称解析库 ID）
+    plate_library_name: str = ''  # 车牌库名称（空表示不比对，运行时按名称解析库 ID）
 
     # 事件输出开关（任务级独立列）
     # 其余事件参数由 config/event_output.yaml 全局提供（所有任务一致），运行期合并
@@ -587,7 +595,22 @@ class DetectionTask:
         config = get_default_event_config()
         for column, path, _ in EVENT_SWITCH_PATHS:
             _config_path_set(config, path, bool(getattr(self, column)))
-        return normalize_event_config_storage(config)
+        config = normalize_event_config_storage(config)
+        # 边缘库比对：连接参数来自 system_config 全局段，库名称为任务级列
+        from src.system.system_config_loader import get_edge_library_config
+        edge_cfg = get_edge_library_config()
+        config['library_match'] = {
+            'enabled': bool(self.library_match_enabled),
+            'edge_api_url': edge_cfg['edge_api_url'],
+            'agent_token': edge_cfg['agent_token'],
+            'timeout': edge_cfg['timeout'],
+            'crop_margin': edge_cfg['crop_margin'],
+            'face_classes': edge_cfg['face_classes'],
+            'plate_classes': edge_cfg['plate_classes'],
+            'face_library_name': self.face_library_name or '',
+            'plate_library_name': self.plate_library_name or '',
+        }
+        return config
 
     def build_display_config(self) -> Dict:
         """组装任务生效的显示配置
@@ -639,6 +662,10 @@ class DetectionTask:
             'conf_threshold': self.conf_threshold,
             'motion_detection_enabled': self.motion_detection_enabled,
             'tracking_enabled': self.tracking_enabled,
+            # 边缘库比对（任务级）
+            'library_match_enabled': self.library_match_enabled,
+            'face_library_name': self.face_library_name,
+            'plate_library_name': self.plate_library_name,
             'event_config': self.build_event_config(),
             'display_config': self.build_display_config(),
             # 任务级开关（独立列，供前端「参数配置」对话框按列名读写）
@@ -679,6 +706,10 @@ class DetectionTask:
             conf_threshold=float(data.get('conf_threshold') if data.get('conf_threshold') is not None else 0.25),
             motion_detection_enabled=data.get('motion_detection_enabled', True),  # 默认启用
             tracking_enabled=data.get('tracking_enabled', True),
+            # 边缘库比对（任务级）
+            library_match_enabled=bool(data.get('library_match_enabled', False)),
+            face_library_name=(data.get('face_library_name') or '').strip(),
+            plate_library_name=(data.get('plate_library_name') or '').strip(),
             **{
                 column: _coerce_bool(data.get(column), _SWITCH_DEFAULTS[column])
                 for column in TASK_SWITCH_COLUMNS
@@ -1150,6 +1181,11 @@ class TaskManager:
                     motion_detection_enabled BOOLEAN DEFAULT 1,  -- 默认启用运动检测
                     tracking_enabled BOOLEAN DEFAULT 1,  -- 默认启用跟踪功能,
 
+                    -- 边缘库比对（任务级；连接参数由 system_config.edge_library 全局提供）
+                    library_match_enabled BOOLEAN DEFAULT 0,  -- 是否启用边缘库比对
+                    face_library_name TEXT DEFAULT '',  -- 人脸库名称（空表示不比对）
+                    plate_library_name TEXT DEFAULT '',  -- 车牌库名称（空表示不比对）
+
                     -- 事件输出 / 显示 开关（任务级；其余参数由 config/*.yaml 全局提供）
 {_switch_columns_ddl()}
 
@@ -1585,6 +1621,18 @@ class TaskManager:
                 cursor.execute("ALTER TABLE detection_tasks ADD COLUMN event_type VARCHAR(20) DEFAULT 'tracking'")
                 logger.info("数据库迁移: 添加 event_type 字段到 detection_tasks 表")
 
+            # 添加边缘库比对字段（任务级）
+            if 'library_match_enabled' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN library_match_enabled BOOLEAN DEFAULT 0")
+                logger.info("数据库迁移: 添加 library_match_enabled 字段到 detection_tasks 表")
+            # 旧版 face_library_id/plate_library_id 数值列保留不再读写，改用库名称列
+            if 'face_library_name' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN face_library_name TEXT DEFAULT ''")
+                logger.info("数据库迁移: 添加 face_library_name 字段到 detection_tasks 表")
+            if 'plate_library_name' not in columns:
+                cursor.execute("ALTER TABLE detection_tasks ADD COLUMN plate_library_name TEXT DEFAULT ''")
+                logger.info("数据库迁移: 添加 plate_library_name 字段到 detection_tasks 表")
+
             # 配置结构迁移总入口：
             # 1) 解码/检测/跟踪/运动配置改由 config/*.yaml 统一提供，删除四个全局配置列并新增任务级 conf_threshold
             # 2) 事件输出/显示配置的布尔开关提升为任务级独立列，删除 event_config/display_config JSON 列
@@ -1645,6 +1693,9 @@ class TaskManager:
                 task.conf_threshold,
                 task.motion_detection_enabled,
                 task.tracking_enabled,
+                bool(task.library_match_enabled),
+                task.face_library_name or '',
+                task.plate_library_name or '',
             ] + [bool(getattr(task, column)) for column in TASK_SWITCH_COLUMNS] + [now, now]
 
             placeholders = ', '.join(['?'] * len(insert_columns))
@@ -1821,6 +1872,9 @@ class TaskManager:
             conf_threshold=float(cell('conf_threshold', 0.25)),
             motion_detection_enabled=bool(cell('motion_detection_enabled', True)),
             tracking_enabled=bool(cell('tracking_enabled', True)),
+            library_match_enabled=bool(cell('library_match_enabled', False)),
+            face_library_name=cell('face_library_name', '') or '',
+            plate_library_name=cell('plate_library_name', '') or '',
             created_at=parse_datetime(cell('created_at')),
             updated_at=parse_datetime(cell('updated_at')),
         )
@@ -1873,6 +1927,15 @@ class TaskManager:
             ))
             
             conn.commit()
+
+            # 检测事件推送（后台线程，仅报警类事件）
+            if event.status in ('initial', 'tracking_start'):
+                try:
+                    from src.push.push_service import get_push_service
+                    get_push_service().push_event(event.to_dict())
+                except Exception as e:
+                    logger.error(f"事件推送调度失败: {e}")
+
             return cursor.lastrowid
 
     def update_event(self, event_id: str, event_type: str = None,
@@ -2298,7 +2361,7 @@ class TaskManager:
             'display_name': algo.name,
             'description': algo.description or '',
             'default_model': algo.model_path,
-            'supported_classes': algo.target_classes,
+            'supported_classes': getattr(algo, 'target_classes', []),
             'model_format': algo.model_format,
             'input_size': algo.input_size,
             'labels_file': algo.labels_file

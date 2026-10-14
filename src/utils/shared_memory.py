@@ -167,12 +167,25 @@ class SharedMemoryBlock:
                 self.shm = shared_memory.SharedMemory(name=name, create=False)
 
                 if self.shm.size != size:
-                    # 大小不匹配，无法复用
+                    # 大小不匹配（多为上次异常退出残留的旧任务块），关闭并删除旧块后重建
                     self.shm.close()
-                    raise RuntimeError(
-                        f"共享内存 '{name}' 大小不匹配（期望 {size}，实际 {self.shm.size}）。\n"
-                        f"请手动清理共享内存：重启系统或运行清理脚本。"
-                    )
+                    try:
+                        stale = shared_memory.SharedMemory(name=name, create=False)
+                        stale.unlink()
+                        stale.close()
+                    except Exception:
+                        pass
+                    try:
+                        self.shm = shared_memory.SharedMemory(name=name, create=True, size=size)
+                        logger.warning(
+                            f"[SharedMemoryBlock-{block_id}] 检测到残留共享内存(大小不匹配)，已重建: {name}"
+                        )
+                    except FileExistsError:
+                        # Windows 上旧块仍被存活进程持有时无法重建
+                        raise RuntimeError(
+                            f"共享内存 '{name}' 大小不匹配且旧块仍被其他进程持有。\n"
+                            f"请先停止残留的任务进程，再重启任务。"
+                        )
 
                 logger.debug(f"[SharedMemoryBlock-{block_id}] 复用现有共享内存: {name}, size={size}")
 
