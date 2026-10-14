@@ -332,6 +332,17 @@
                     <input type="text" id="cameraModel" name="model" placeholder="例如：DS-2CD2143G2-I">
                 </div>
                 
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="cameraIotProductKey">云平台产品Key</label>
+                        <input type="text" id="cameraIotProductKey" name="iot_product_key" placeholder="非必填，云平台对接时填写">
+                    </div>
+                    <div class="form-group">
+                        <label for="cameraIotDeviceName">云平台设备名称</label>
+                        <input type="text" id="cameraIotDeviceName" name="iot_device_name" placeholder="非必填，云平台对接时填写">
+                    </div>
+                </div>
+
                 <div class="form-group">
                     <label for="cameraDescription">描述</label>
                     <textarea id="cameraDescription" name="description" rows="2" placeholder="摄像机描述信息"></textarea>
@@ -552,6 +563,6 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{{ url_for('static', filename='js/cameras.js') }}?v=20260802"></script>
+<script src="{{ url_for('static', filename='js/cameras.js') }}?v=20261014iot1"></script>
 <script src="{{ url_for('static', filename='js/video_file_upload.js') }}"></script>
 {% endblock %}

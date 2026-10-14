@@ -83,8 +83,6 @@ def create_streaming_server():
         rtc_port=data.get('rtc_port', 8000),
         secret=data.get('secret', ''),
         media_server_id=data.get('media_server_id', ''),
-        iot_product_key=data.get('iot_product_key', ''),
-        iot_device_name=data.get('iot_device_name', ''),
         enabled=data.get('enabled', True),
         is_default=data.get('is_default', False),
         description=data.get('description', '')
@@ -162,8 +160,6 @@ def update_streaming_server(server_id: int):
         rtc_port=data.get('rtc_port', existing.rtc_port),
         secret=data.get('secret', existing.secret),
         media_server_id=data.get('media_server_id', existing.media_server_id),
-        iot_product_key=data.get('iot_product_key', existing.iot_product_key),
-        iot_device_name=data.get('iot_device_name', existing.iot_device_name),
         enabled=data.get('enabled', existing.enabled),
         is_default=data.get('is_default', existing.is_default),
         description=data.get('description', existing.description),

@@ -39,8 +39,6 @@ class EventOutput:
         self._camera_name_cache: Optional[str] = None
         # 摄像机物联网坐标缓存（iot_product_key / iot_device_name）
         self._camera_iot_cache: Optional[Tuple[str, str]] = None
-        # 流媒体设备云平台绑定缓存（设备级身份优先于摄像机字段）
-        self._device_iot_cache: Optional[Tuple[str, str]] = None
 
         # 任务关联（可选）
         self.task_id = config.get('task_id')
@@ -533,37 +531,12 @@ class EventOutput:
     def _get_camera_iot(self) -> Tuple[str, str]:
         """获取摄像机物联网坐标（iot_product_key / iot_device_name）。
 
-        供物联网平台按 productKey+deviceName 解析 AI 事件；结果随名称一并缓存。
+        供物联网平台按 productKey+deviceName 解析 AI 事件（每路摄像机对应
+        云平台上的产品/设备，在摄像机管理中按台配置）；结果随名称一并缓存。
         """
         if self._camera_name_cache is None:
             self._load_camera_cache()
         return self._camera_iot_cache
-
-    def _get_iot_identity(self) -> Tuple[str, str]:
-        """获取事件上报的物联网身份（productKey / deviceName）。
-
-        优先取默认流媒体设备上绑定的云平台产品Key/设备名称（设备级身份）；
-        未绑定时回落为摄像机上配置的物联网坐标，兼容旧配置与独立使用场景。
-        """
-        if self._device_iot_cache is None:
-            try:
-                from src.system.system_manager import SystemManager
-                server = SystemManager().get_default_streaming_server()
-                if server:
-                    self._device_iot_cache = (
-                        (server.iot_product_key or '').strip(),
-                        (server.iot_device_name or '').strip(),
-                    )
-                else:
-                    self._device_iot_cache = ('', '')
-            except Exception as e:
-                logger.debug(f"[EventOutput] 获取流媒体设备云平台绑定失败: {e}")
-                self._device_iot_cache = ('', '')
-        device_pk, device_dn = self._device_iot_cache
-        # 设备级两个字段齐全时才采用，避免与摄像机字段拼出混合身份
-        if device_pk and device_dn:
-            return device_pk, device_dn
-        return self._get_camera_iot()
 
     def _load_camera_cache(self):
         """一次性加载摄像机名称与物联网坐标并缓存（查询失败或相机已删除时空值）"""
@@ -671,8 +644,8 @@ class EventOutput:
             'type': event_type,
             'camera_id': self.camera_id,
             'camera_name': self._get_camera_name(),  # 摄像机真实名称（供第三方映射设备）
-            'iot_product_key': self._get_iot_identity()[0],  # 物联网产品标识（设备级优先，供物联网解析）
-            'iot_device_name': self._get_iot_identity()[1],  # 物联网设备名称（设备级优先，供物联网解析）
+            'iot_product_key': self._get_camera_iot()[0],  # 物联网产品标识（按摄像机配置，供物联网解析）
+            'iot_device_name': self._get_camera_iot()[1],  # 物联网设备名称（按摄像机配置，供物联网解析）
             'task_id': actual_task_id,
             'algorithm': actual_algorithm,
             'frame_id': frame_id,
@@ -1190,8 +1163,8 @@ class EventOutput:
                 'dedup_reason': d['dedup_reason'] or '',
                 'camera_id': d['camera_id'],
                 'camera_name': self._get_camera_name(),  # 摄像机真实名称（供第三方映射设备）
-                'iot_product_key': self._get_iot_identity()[0],  # 物联网产品标识（设备级优先，供物联网解析）
-                'iot_device_name': self._get_iot_identity()[1],  # 物联网设备名称（设备级优先，供物联网解析）
+                'iot_product_key': self._get_camera_iot()[0],  # 物联网产品标识（按摄像机配置，供物联网解析）
+                'iot_device_name': self._get_camera_iot()[1],  # 物联网设备名称（按摄像机配置，供物联网解析）
                 'task_id': d['task_id'],
                 'algorithm': d['algorithm'],
                 'class_name': d['class_name'],

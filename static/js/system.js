@@ -325,12 +325,6 @@ function renderServersList() {
                         <span class="detail-value">${escapeHtml(server.media_server_id)}</span>
                     </div>
                     ` : ''}
-                    ${server.iot_product_key || server.iot_device_name ? `
-                    <div class="server-detail-row">
-                        <span class="detail-label">云平台绑定:</span>
-                        <span class="detail-value">${escapeHtml(server.iot_product_key || '')} / ${escapeHtml(server.iot_device_name || '')}</span>
-                    </div>
-                    ` : ''}
                     ${server.description ? `
                     <div class="server-detail-row">
                         <span class="detail-label">描述:</span>
@@ -410,8 +404,6 @@ function openEditServerModal(serverId) {
     document.getElementById('serverRtcPort').value = server.rtc_port || 8000;
     document.getElementById('serverSecret').value = server.secret || '';
     document.getElementById('serverMediaServerId').value = server.media_server_id || '';
-    document.getElementById('serverIotProductKey').value = server.iot_product_key || '';
-    document.getElementById('serverIotDeviceName').value = server.iot_device_name || '';
     document.getElementById('serverDescription').value = server.description || '';
     document.getElementById('serverEnabled').checked = server.enabled;
     document.getElementById('serverDefault').checked = server.is_default;
@@ -445,8 +437,6 @@ async function saveServer() {
         rtc_port: parseInt(document.getElementById('serverRtcPort').value) || 8000,
         secret: document.getElementById('serverSecret').value || '',
         media_server_id: document.getElementById('serverMediaServerId').value || '',
-        iot_product_key: document.getElementById('serverIotProductKey').value.trim(),
-        iot_device_name: document.getElementById('serverIotDeviceName').value.trim(),
         description: document.getElementById('serverDescription').value,
         enabled: document.getElementById('serverEnabled').checked,
         is_default: document.getElementById('serverDefault').checked

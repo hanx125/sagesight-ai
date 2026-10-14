@@ -680,6 +680,8 @@ async function openEditModal(cameraId, event) {
         document.getElementById('cameraPassword').value = camera.password || '';
         document.getElementById('cameraManufacturer').value = camera.manufacturer || '';
         document.getElementById('cameraModel').value = camera.model || '';
+        document.getElementById('cameraIotProductKey').value = camera.iot_product_key || '';
+        document.getElementById('cameraIotDeviceName').value = camera.iot_device_name || '';
         document.getElementById('cameraDescription').value = camera.description || '';
         document.getElementById('cameraEnabled').value = camera.enabled ? 'true' : 'false';
         
@@ -713,6 +715,8 @@ async function saveCamera() {
         password: document.getElementById('cameraPassword').value,
         manufacturer: document.getElementById('cameraManufacturer').value,
         model: document.getElementById('cameraModel').value,
+        iot_product_key: document.getElementById('cameraIotProductKey').value.trim(),
+        iot_device_name: document.getElementById('cameraIotDeviceName').value.trim(),
         description: document.getElementById('cameraDescription').value,
         enabled: document.getElementById('cameraEnabled').value === 'true',
         directory_id: directoryId ? parseInt(directoryId) : null

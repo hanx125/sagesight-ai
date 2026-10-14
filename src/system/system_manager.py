@@ -38,10 +38,6 @@ class StreamingServer:
     secret: str = ''  # API密钥
     media_server_id: str = ''  # ZLM服务器ID
 
-    # 云平台绑定（非必填，独立使用时留空）
-    iot_product_key: str = ''  # 云平台产品Key
-    iot_device_name: str = ''  # 云平台设备名称
-
     # 状态配置
     enabled: bool = True  # 是否启用
     is_default: bool = False  # 是否默认服务器
@@ -76,8 +72,6 @@ class StreamingServer:
             'rtc_port': self.rtc_port,
             'secret': self.secret,
             'media_server_id': self.media_server_id,
-            'iot_product_key': self.iot_product_key,
-            'iot_device_name': self.iot_device_name,
             'enabled': self.enabled,
             'is_default': self.is_default,
             'description': self.description,
@@ -217,10 +211,6 @@ class SystemManager:
                 secret TEXT DEFAULT '',
                 media_server_id TEXT DEFAULT '',
 
-                -- 云平台绑定（非必填）
-                iot_product_key TEXT DEFAULT '',
-                iot_device_name TEXT DEFAULT '',
-
                 -- 状态配置
                 enabled INTEGER DEFAULT 1,
                 is_default INTEGER DEFAULT 0,
@@ -234,13 +224,6 @@ class SystemManager:
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-
-        # 旧库迁移：补充云平台绑定字段（幂等）
-        existing_cols = {row[1] for row in cursor.execute('PRAGMA table_info(streaming_servers)').fetchall()}
-        for col in ('iot_product_key', 'iot_device_name'):
-            if col not in existing_cols:
-                logger.info(f"[SystemManager] 迁移：streaming_servers 添加 {col} 字段")
-                cursor.execute(f"ALTER TABLE streaming_servers ADD COLUMN {col} TEXT DEFAULT ''")
 
         # 检查是否有默认数据
         cursor.execute('SELECT COUNT(*) FROM streaming_servers')
@@ -329,7 +312,7 @@ class SystemManager:
     # ========================================
 
     # 流媒体服务器查询列（显式列名，兼容旧库残留的 hook_url_prefix/protocol 列）
-    _SERVER_COLUMNS = 'id, name, server_type, host, rtmp_port, rtsp_port, http_port, rtc_port, secret, media_server_id, iot_product_key, iot_device_name, enabled, is_default, description, status, config, created_at, updated_at'
+    _SERVER_COLUMNS = 'id, name, server_type, host, rtmp_port, rtsp_port, http_port, rtc_port, secret, media_server_id, enabled, is_default, description, status, config, created_at, updated_at'
 
     def get_all_streaming_servers(self) -> List[StreamingServer]:
         """获取所有流媒体服务器配置"""
@@ -382,9 +365,8 @@ class SystemManager:
                 name, server_type, host,
                 rtmp_port, rtsp_port, http_port, rtc_port,
                 secret, media_server_id,
-                iot_product_key, iot_device_name,
                 enabled, is_default, description, status, config
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             server.name,
             server.server_type,
@@ -395,8 +377,6 @@ class SystemManager:
             server.rtc_port,
             server.secret,
             server.media_server_id,
-            server.iot_product_key,
-            server.iot_device_name,
             server.enabled,
             server.is_default,
             server.description,
@@ -425,7 +405,6 @@ class SystemManager:
                 name = ?, server_type = ?, host = ?,
                 rtmp_port = ?, rtsp_port = ?, http_port = ?, rtc_port = ?,
                 secret = ?, media_server_id = ?,
-                iot_product_key = ?, iot_device_name = ?,
                 enabled = ?, is_default = ?, description = ?,
                 status = ?, config = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
@@ -439,8 +418,6 @@ class SystemManager:
             server.rtc_port,
             server.secret,
             server.media_server_id,
-            server.iot_product_key,
-            server.iot_device_name,
             server.enabled,
             server.is_default,
             server.description,
@@ -503,15 +480,13 @@ class SystemManager:
             rtc_port=row[7] or 8000,
             secret=row[8] or '',
             media_server_id=row[9] or '',
-            iot_product_key=row[10] or '',
-            iot_device_name=row[11] or '',
-            enabled=row[12],
-            is_default=row[13],
-            description=row[14] or '',
-            status=row[15] or 'unknown',
-            config=safe_json_loads(row[16], {}),
-            created_at=row[17],
-            updated_at=row[18]
+            enabled=row[10],
+            is_default=row[11],
+            description=row[12] or '',
+            status=row[13] or 'unknown',
+            config=safe_json_loads(row[14], {}),
+            created_at=row[15],
+            updated_at=row[16]
         )
 
     # ========================================
