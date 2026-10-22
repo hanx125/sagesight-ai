@@ -195,7 +195,13 @@ class LLMClient:
                     raise RuntimeError(f"OpenAI API 返回 {resp.status_code}: {err}")
 
                 data = resp.json()
-                text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                msg = (data.get("choices") or [{}])[0].get("message") or {}
+                # content 可能为 null（键存在但值为空，常见于思考模型，
+                # 如 MiniMax M3.1 经 OpenRouter 返回 content=null），
+                # 用 `or ""` 兜底；正文为空时回退 reasoning 字段
+                text = msg.get("content") or ""
+                if not text.strip():
+                    text = msg.get("reasoning") or ""
                 logger.debug(f"[LLMClient] OpenAI 响应 (尝试 {attempt+1}/2, {elapsed:.1f}s): {text[:100]}")
                 return text
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
