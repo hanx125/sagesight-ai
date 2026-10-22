@@ -113,7 +113,10 @@ class LLMClient:
         """构造 OpenAI API URL"""
         base = self.config.base_url.rstrip('/')
         if not base:
-            base = 'https://api.openai.com/v1'
+            # openrouter 走 OpenAI 兼容网关，其余走 OpenAI 官方地址
+            base = ('https://openrouter.ai/api/v1'
+                    if self.provider == 'openrouter'
+                    else 'https://api.openai.com/v1')
         return f"{base}/chat/completions"
 
     def _chat_openai_text(self, prompt: str, system_prompt: str) -> str:
@@ -167,6 +170,10 @@ class LLMClient:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.config.api_key}"
         }
+        if self.provider == 'openrouter':
+            # OpenRouter 建议的应用标识头（可选，仅用于来源统计）
+            headers["HTTP-Referer"] = "https://openrouter.ai/sagesight-ai"
+            headers["X-Title"] = "SageSight AI"
         body = {
             "model": self.config.model,
             "messages": messages,

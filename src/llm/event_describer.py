@@ -59,11 +59,18 @@ def _format_time(value) -> str:
 
 
 class EventDescriber:
-    """事件描述服务：用多模态大模型生成事件自然语言描述"""
+    """事件描述服务：用多模态大模型生成事件自然语言描述
 
-    def __init__(self, config: LLMConfig):
+    config 为 None 时走故障转移路由（多模型自动切换），否则固定单一模型。
+    """
+
+    def __init__(self, config: Optional[LLMConfig] = None):
         self.config = config
-        self.client = LLMClient(config)
+        if config is not None:
+            self.client = LLMClient(config)
+        else:
+            from src.llm.llm_router import get_llm_router
+            self.client = get_llm_router()
 
     def describe(self, image_bytes: bytes, event_info: dict) -> Optional[str]:
         """生成事件描述
@@ -92,11 +99,18 @@ class EventDescriber:
         prompt = self._build_prompt(event_info)
 
         try:
-            description = self.client.chat_with_image(
-                image_bytes=image_bytes,
-                prompt=prompt,
-                system_prompt=_SYSTEM_PROMPT
-            )
+            if self.config is not None:
+                description = self.client.chat_with_image(
+                    image_bytes=image_bytes,
+                    prompt=prompt,
+                    system_prompt=_SYSTEM_PROMPT
+                )
+            else:
+                # 路由模式：失败自动切换下一个模型并重新执行任务
+                description = self.client.chat_with_image(
+                    image_bytes, prompt, _SYSTEM_PROMPT,
+                    feature='enable_description'
+                )
             description = description.strip()
             # 清理模型可能包裹的 markdown 代码块
             if description.startswith('```'):

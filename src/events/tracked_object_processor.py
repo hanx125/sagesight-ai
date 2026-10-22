@@ -467,12 +467,12 @@ class TrackedObjectProcessor(mp.Process):
             proc_logger.warning(f"事件规则去重初始化失败: {e}")
 
     def _init_llm(self, proc_logger):
-        """初始化大模型事件描述+语义去重服务
+        """初始化大模型事件描述+语义去重服务（故障转移路由模式）
 
         先检查全局总开关（llm_enabled）：关闭时不初始化任何大模型服务，
-        避免产生不必要的 token 费用。再加载默认 LLM 配置，若未配置或
-        未启用则跳过（不影响事件处理）。规则去重由事件管理独立执行，
-        与本模块无关。
+        避免产生不必要的 token 费用。使用故障转移路由：所有已启用配置按
+        「默认优先 → 添加顺序」组成候选链，某模型失败自动切换下一个并
+        重新执行任务，页面增删改配置实时生效。规则去重由事件管理独立执行。
         """
         try:
             from src.system.system_manager import get_system_manager
@@ -483,14 +483,21 @@ class TrackedObjectProcessor(mp.Process):
                 proc_logger.info("大模型功能总开关已关闭，事件描述+语义去重未启用")
                 return
 
-            config = manager.get_default_llm_config()
+            from src.llm.llm_router import get_llm_router
+            router = get_llm_router()
 
-            if config is None or not config.enabled:
-                proc_logger.info("未配置默认大模型，事件描述+语义去重未启用")
+            if not router.has_candidates():
+                proc_logger.info(
+                    "没有可用的大模型配置（未配置/未启用/缺少 API 密钥），"
+                    "事件描述+语义去重未启用"
+                )
                 return
 
+            has_desc = router.has_candidates(feature='enable_description')
+            has_dedup = router.has_candidates(feature='enable_dedup')
+
             # 检查是否至少启用了一项功能
-            if not config.enable_description and not config.enable_dedup:
+            if not has_desc and not has_dedup:
                 proc_logger.info("大模型描述和语义去重均未启用，跳过初始化")
                 return
 
@@ -501,16 +508,19 @@ class TrackedObjectProcessor(mp.Process):
                 max_workers=2, thread_name_prefix="LLM"
             )
 
-            if config.enable_description:
-                self.llm_describer = EventDescriber(config)
-            if config.enable_dedup:
-                self.llm_deduplicator = EventDeduplicator(config)
+            if has_desc:
+                self.llm_describer = EventDescriber()
+            if has_dedup:
+                self.llm_deduplicator = EventDeduplicator()
 
+            order = " -> ".join(
+                f"{c['name']}({c['model']}){'[默认]' if c['is_default'] else ''}"
+                for c in router.get_failover_order()
+            )
             proc_logger.info(
-                f"大模型事件处理已启用: model={config.model}, "
-                f"provider={config.provider}, "
-                f"description={'on' if self.llm_describer else 'off'}, "
-                f"semantic_dedup={'on' if self.llm_deduplicator else 'off'}"
+                f"大模型故障转移已启用（候选 {len(router.get_failover_order())} 个）: "
+                f"{order}; description={'on' if has_desc else 'off'}, "
+                f"semantic_dedup={'on' if has_dedup else 'off'}"
             )
         except Exception as e:
             proc_logger.warning(f"大模型初始化失败，事件描述+语义去重未启用: {e}")

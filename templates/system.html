@@ -706,6 +706,41 @@
                     </div>
                 </div>
 
+                <!-- OpenRouter 免费视觉模型 -->
+                <div class="config-section">
+                    <h4 class="config-section-title">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
+                        免费视觉模型（OpenRouter）
+                        <span style="flex:1"></span>
+                        <span class="or-free-meta" id="openrouterFreeMeta"></span>
+                        <button class="btn btn-secondary btn-sm" onclick="System.refreshOpenRouterModels()">刷新列表</button>
+                    </h4>
+                    <p class="config-section-desc">
+                        以下为 OpenRouter 平台当前<strong>免费且支持图片输入</strong>的视觉模型，点击「一键添加」即可快速接入（自动填好 API 类型与地址）。密钥可在下方<strong>配置一次全局共用</strong>，也可在 <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a> 免费申请。
+                        注意：免费模型有限速（约 20 次/分钟），事件描述/语义去重调用频繁，建议添加 2 个以上模型组成故障转移。
+                    </p>
+                    <div class="or-key-row">
+                        <input type="password" id="openrouterApiKey" class="or-key-input" placeholder="sk-or-v1-...（OpenRouter 全局 API 密钥，仅免费模型使用）" autocomplete="off">
+                        <button class="btn btn-primary btn-sm" onclick="System.saveOpenRouterApiKey()">保存密钥</button>
+                        <span class="or-key-status" id="openrouterKeyStatus"></span>
+                    </div>
+                    <p class="form-hint" style="margin: 6px 0 12px 0;">全局密钥<strong>仅对 OpenRouter 免费模型</strong>（模型 ID 以 :free 结尾）生效，供所有免费模型共用；付费模型需在配置中单独填写密钥。在模型配置中单独填写密钥时优先使用单独的</p>
+                    <div class="or-free-grid" id="openrouterFreeList">
+                        <div class="loading-placeholder">加载中...</div>
+                    </div>
+                </div>
+
+                <!-- 故障转移说明 -->
+                <div class="config-section">
+                    <h4 class="config-section-title">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 2 4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
+                        故障转移（自动切换）
+                    </h4>
+                    <p class="config-section-desc">
+                        所有<strong>已启用</strong>的配置按「默认配置优先 → 其余按添加顺序」组成候选链。系统在每次调用时自动检测模型可用性：某个模型调用失败会立即熔断（5 分钟起，连续失败逐次延长至最长 30 分钟）并<strong>无感切换到下一个模型重新执行任务</strong>；配置保存后也会自动探测一次并提示结果，冷却到期后自动恢复探测。上方总开关关闭时不调用任何模型。
+                    </p>
+                </div>
+
                 <!-- 大模型配置列表 -->
                 <div class="servers-list" id="llmConfigsList">
                     <div class="loading-placeholder">加载中...</div>
@@ -750,7 +785,7 @@
                             <input type="text" id="ssoCloudBaseUrl" placeholder="http://192.168.5.3:48080">
                         </div>
                         <div class="form-group">
-                            <label>授权页入口地址（选填，缺省取 API 地址主机、80 端口）</label>
+                            <label>授权页入口地址</label>
                             <input type="text" id="ssoAuthorizeBaseUrl" placeholder="http://192.168.5.3">
                         </div>
                         <div class="form-group">
@@ -905,6 +940,7 @@
                         <label for="llmProvider">API 类型</label>
                         <select id="llmProvider">
                             <option value="openai">OpenAI 兼容格式</option>
+                            <option value="openrouter">OpenRouter（OpenAI 兼容）</option>
                             <option value="anthropic">Anthropic 格式</option>
                         </select>
                     </div>
@@ -922,8 +958,8 @@
 
                 <div class="form-group">
                     <label for="llmApiKey">API 密钥</label>
-                    <input type="password" id="llmApiKey" placeholder="sk-...">
-                    <p class="form-hint">编辑时留空则保留原密钥</p>
+                    <input type="password" id="llmApiKey" placeholder="sk-... / sk-or-v1-...（OpenRouter）">
+                    <p class="form-hint">编辑时留空则保留原密钥；OpenRouter 免费模型（:free 结尾）可留空，自动使用全局密钥；付费模型需单独填写</p>
                 </div>
 
                 <div class="form-row">

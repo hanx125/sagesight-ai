@@ -28,11 +28,18 @@ _DEDUP_SYSTEM_PROMPT = (
 
 
 class EventDeduplicator:
-    """事件语义去重服务（大模型多图对比，属于大模型模块）"""
+    """事件语义去重服务（大模型多图对比，属于大模型模块）
 
-    def __init__(self, config: LLMConfig):
+    config 为 None 时走故障转移路由（多模型自动切换），否则固定单一模型。
+    """
+
+    def __init__(self, config: Optional[LLMConfig] = None):
         self.config = config
-        self.client = LLMClient(config)
+        if config is not None:
+            self.client = LLMClient(config)
+        else:
+            from src.llm.llm_router import get_llm_router
+            self.client = get_llm_router()
         self.task_manager = TaskManager()
 
     def semantic_check(
@@ -63,12 +70,22 @@ class EventDeduplicator:
             logger.debug("[EventDedup] 大模型功能总开关已关闭，跳过语义去重")
             return "normal", ""
 
-        if not self.config.enable_dedup or image_bytes is None:
-            return "normal", ""
+        if self.config is not None:
+            if not self.config.enable_dedup:
+                return "normal", ""
 
-        # 模型不支持图片输入时无法进行图像对比，直接放行
-        if not self.config.support_images:
-            logger.debug("[EventDedup] 模型不支持图片输入(support_images=false)，跳过语义去重")
+            # 模型不支持图片输入时无法进行图像对比，直接放行
+            if not self.config.support_images:
+                logger.debug("[EventDedup] 模型不支持图片输入(support_images=false)，跳过语义去重")
+                return "normal", ""
+        else:
+            # 路由模式：检查是否存在启用语义去重的可用候选模型
+            from src.llm.llm_router import get_llm_router
+            if not get_llm_router().has_candidates(feature='enable_dedup'):
+                logger.debug("[EventDedup] 无启用语义去重的可用大模型，跳过语义去重")
+                return "normal", ""
+
+        if image_bytes is None:
             return "normal", ""
 
         # 查询近期事件（窗口复用事件规则去重配置）
@@ -126,11 +143,18 @@ class EventDeduplicator:
         )
 
         try:
-            reply = self.client.chat_with_images(
-                images=images,
-                prompt=prompt,
-                system_prompt=_DEDUP_SYSTEM_PROMPT,
-            )
+            if self.config is not None:
+                reply = self.client.chat_with_images(
+                    images=images,
+                    prompt=prompt,
+                    system_prompt=_DEDUP_SYSTEM_PROMPT,
+                )
+            else:
+                # 路由模式：失败自动切换下一个模型并重新执行任务
+                reply = self.client.chat_with_images(
+                    images, prompt, _DEDUP_SYSTEM_PROMPT,
+                    feature='enable_dedup'
+                )
             return self._parse_dedup_reply(reply, compared_events)
         except Exception as e:
             logger.warning(f"[EventDedup] 语义去重大模型调用失败，放行: {e}")

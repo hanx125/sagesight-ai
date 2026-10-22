@@ -15,6 +15,10 @@ var deleteUserUserId = null;
 var llmConfigs = [];
 var currentLLMId = null;
 var deleteLLMId = null;
+// OpenRouter 免费视觉模型列表（内置预设或在线获取）
+var openRouterModels = [];
+// OpenRouter 全局密钥是否已配置
+var openRouterKeyConfigured = false;
 
 // 资源监控图表（CPU/内存/磁盘/加速器4条波浪线）
 var resourceChart = null;
@@ -72,6 +76,15 @@ function initWebSocket() {
         
         socket.on('llm_config_deleted', function(data) {
             loadLLMConfigs();
+        });
+
+        // 配置保存后的自动检测结果（失败已自动熔断切换备用模型）
+        socket.on('llm_config_health', function(data) {
+            if (data.ok) {
+                showLLMToast('模型「' + (data.name || data.config_id) + '」自动检测通过', 'success');
+            } else {
+                showLLMToast('模型「' + (data.name || data.config_id) + '」检测失败，已自动切换备用模型: ' + (data.message || ''), 'error');
+            }
         });
     }
 }
@@ -1747,9 +1760,11 @@ async function loadLLMConfigs() {
     try {
         const response = await fetch('/api/system/llm-configs');
         llmConfigs = await response.json();
-        
+
         renderLLMConfigsList();
-        
+        loadOpenRouterFreeModels();
+        loadOpenRouterApiKey();
+
         // 加载大模型功能总开关状态
         try {
             const swResp = await fetch('/api/system/llm-enabled');
@@ -1759,11 +1774,162 @@ async function loadLLMConfigs() {
         } catch (e) {
             console.error('加载大模型总开关状态失败:', e);
         }
-        
+
     } catch (error) {
         console.error('加载大模型配置失败:', error);
         showNotification('加载大模型配置失败', 'error');
     }
+}
+
+// ========================================
+// OpenRouter 全局密钥（一处配置，所有免费模型共用）
+// ========================================
+
+async function loadOpenRouterApiKey() {
+    try {
+        const response = await fetch('/api/system/openrouter/api-key');
+        const data = await response.json();
+        openRouterKeyConfigured = !!data.configured;
+        const input = document.getElementById('openrouterApiKey');
+        const status = document.getElementById('openrouterKeyStatus');
+        if (input) input.placeholder = data.configured
+            ? '已配置全局密钥（' + (data.api_key || '') + '），输入可更换'
+            : 'sk-or-v1-...（OpenRouter 全局 API 密钥）';
+        if (status) {
+            status.textContent = data.configured ? '✓ 已配置' : '未配置';
+            status.className = 'or-key-status ' + (data.configured ? 'ok' : 'missing');
+        }
+        renderLLMConfigsList();
+    } catch (e) {
+        console.error('加载 OpenRouter 全局密钥状态失败:', e);
+    }
+}
+
+async function saveOpenRouterApiKey() {
+    const input = document.getElementById('openrouterApiKey');
+    if (!input) return;
+    const apiKey = input.value.trim();
+    try {
+        const response = await fetch('/api/system/openrouter/api-key', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: apiKey })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '保存失败');
+        showNotification(data.message, 'success');
+        input.value = '';
+        loadOpenRouterApiKey();
+    } catch (e) {
+        console.error('保存 OpenRouter 全局密钥失败:', e);
+        showNotification('保存 OpenRouter 全局密钥失败: ' + e.message, 'error');
+    }
+}
+
+// ========================================
+// OpenRouter 免费视觉模型（一键添加）
+// ========================================
+
+async function loadOpenRouterFreeModels() {
+    const container = document.getElementById('openrouterFreeList');
+    if (!container) return;
+    try {
+        const response = await fetch('/api/system/openrouter/free-vision-models');
+        const data = await response.json();
+        openRouterModels = data.models || [];
+        renderOpenRouterModels(data);
+    } catch (e) {
+        console.error('加载 OpenRouter 免费视觉模型失败:', e);
+        container.innerHTML = '<div class="or-free-empty">免费视觉模型列表加载失败，请点击「刷新列表」重试</div>';
+    }
+}
+
+async function refreshOpenRouterModels() {
+    const container = document.getElementById('openrouterFreeList');
+    if (container) container.innerHTML = '<div class="loading-placeholder">正在从 OpenRouter 获取最新免费视觉模型...</div>';
+    try {
+        const response = await fetch('/api/system/openrouter/free-vision-models?refresh=1');
+        const data = await response.json();
+        openRouterModels = data.models || [];
+        renderOpenRouterModels(data);
+        if (data.source === 'live') {
+            showNotification('已更新为 OpenRouter 最新免费视觉模型列表', 'success');
+        } else {
+            showNotification(data.error || '在线获取失败，已显示内置预设列表', 'error');
+        }
+    } catch (e) {
+        console.error('刷新 OpenRouter 免费视觉模型失败:', e);
+        showNotification('刷新免费视觉模型列表失败', 'error');
+        loadOpenRouterFreeModels();
+    }
+}
+
+function formatModelContext(ctx) {
+    if (!ctx) return '';
+    if (ctx >= 1000000) return (ctx / 1000000).toFixed(ctx % 1000000 ? 1 : 0) + 'M 上下文';
+    if (ctx >= 1000) return Math.round(ctx / 1000) + 'K 上下文';
+    return ctx + ' 上下文';
+}
+
+function renderOpenRouterModels(data) {
+    const container = document.getElementById('openrouterFreeList');
+    if (!container) return;
+
+    // 数据来源标识（实时 / 内置预设）
+    const meta = document.getElementById('openrouterFreeMeta');
+    if (meta) {
+        let text = data.source === 'live' ? '实时列表' : '内置预设';
+        if (data.updated_at) text += ' · 更新于 ' + data.updated_at;
+        meta.textContent = text;
+        meta.title = data.source === 'live' ? '数据来自 OpenRouter 官方接口' : '内置精选列表，点击「刷新列表」可获取最新';
+    }
+
+    if (!openRouterModels.length) {
+        container.innerHTML = '<div class="or-free-empty">OpenRouter 当前没有可用的免费视觉模型</div>';
+        return;
+    }
+
+    container.innerHTML = openRouterModels.map(m => {
+        const added = llmConfigs.some(c => c.model === m.id);
+        const ctx = formatModelContext(m.context_length);
+        return `
+            <div class="or-free-card">
+                <div class="or-free-head">
+                    <span class="or-free-name" title="${escapeHtml(m.name)}">${escapeHtml(m.name)}</span>
+                    ${ctx ? `<span class="or-free-ctx">${ctx}</span>` : ''}
+                </div>
+                <div class="or-free-id">${escapeHtml(m.id)}</div>
+                ${m.description ? `<div class="or-free-desc" title="${escapeHtml(m.description)}">${escapeHtml(m.description)}</div>` : ''}
+                <div class="or-free-foot">
+                    ${added
+                        ? '<button class="btn btn-secondary btn-sm" disabled>已添加</button>'
+                        : `<button class="btn btn-primary btn-sm" onclick="System.openAddOpenRouterModel('${escapeHtml(m.id)}')">一键添加</button>`}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function openAddOpenRouterModel(modelId) {
+    const preset = openRouterModels.find(m => m.id === modelId);
+    if (!preset) return;
+
+    openCreateLLMModal();
+
+    // 名称去掉官方名的 "(free)" 后缀
+    const baseName = (preset.name || preset.id).replace(/\s*\(free\)\s*$/i, '');
+    document.getElementById('llmName').value = baseName + '（免费）';
+    document.getElementById('llmProvider').value = 'openrouter';
+    document.getElementById('llmModel').value = preset.id;
+    document.getElementById('llmBaseUrl').value = 'https://openrouter.ai/api/v1';
+    document.getElementById('llmTemperature').value = '0.3';
+    document.getElementById('llmMaxTokens').value = '500';
+    document.getElementById('llmDescription').value = 'OpenRouter 免费视觉模型（一键添加）';
+
+    // 视觉模型固定开启图片输入
+    const si = document.getElementById('llmSupportImages');
+    si.checked = true;
+    si.disabled = true;
 }
 
 async function toggleLLMEnabled(enabled) {
@@ -1870,9 +2036,25 @@ async function toggleSSOEnabled(enabled) {
 function getProviderLabel(provider) {
     const labels = {
         'openai': 'OpenAI 兼容',
+        'openrouter': 'OpenRouter',
         'anthropic': 'Anthropic'
     };
     return labels[provider] || provider;
+}
+
+// 判断是否 OpenRouter 免费模型（全局密钥仅对此类模型生效）
+function isOpenRouterFreeModel(model) {
+    const m = (model || '').trim().toLowerCase();
+    return m.endsWith(':free') || m === 'openrouter/free';
+}
+
+function getProviderDefaultBaseUrl(provider) {
+    const defaults = {
+        'openai': 'https://api.openai.com/v1',
+        'openrouter': 'https://openrouter.ai/api/v1',
+        'anthropic': 'https://api.anthropic.com'
+    };
+    return defaults[provider] || 'https://api.openai.com/v1';
 }
 
 function renderLLMConfigsList() {
@@ -1896,6 +2078,16 @@ function renderLLMConfigsList() {
         const enabledBadges = [];
         if (config.enable_description) enabledBadges.push('<span class="server-type">事件描述</span>');
         if (config.enable_dedup) enabledBadges.push('<span class="server-type">语义去重</span>');
+        // 故障转移切换顺序：默认配置优先，其余按添加顺序
+        if (config.enabled) {
+            const ordered = llmConfigs.filter(c => c.enabled)
+                .slice()
+                .sort((a, b) => ((a.is_default ? 0 : 1) - (b.is_default ? 0 : 1)) || (a.id - b.id));
+            const idx = ordered.findIndex(c => c.id === config.id);
+            if (idx >= 0) {
+                enabledBadges.push(`<span class="server-type">${config.is_default ? '切换首选' : '备选 #' + (idx + 1)}</span>`);
+            }
+        }
         
         return `
             <div class="server-card ${config.is_default ? 'default' : ''} ${!config.enabled ? 'disabled' : ''}">
@@ -1918,11 +2110,11 @@ function renderLLMConfigsList() {
                 <div class="server-card-body">
                     <div class="server-detail-row">
                         <span class="detail-label">API 地址:</span>
-                        <span class="detail-value">${escapeHtml(config.base_url || (config.provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'))}</span>
+                        <span class="detail-value">${escapeHtml(config.base_url || getProviderDefaultBaseUrl(config.provider))}</span>
                     </div>
                     <div class="server-detail-row">
                         <span class="detail-label">API 密钥:</span>
-                        <span class="detail-value">${escapeHtml(config.api_key || '未设置')}</span>
+                        <span class="detail-value">${escapeHtml(config.api_key || (isOpenRouterFreeModel(config.model) && openRouterKeyConfigured ? '全局 OpenRouter 密钥' : '未设置'))}</span>
                     </div>
                     <div class="server-detail-row">
                         <span class="detail-label">温度:</span>
@@ -1988,6 +2180,7 @@ function openCreateLLMModal() {
     document.getElementById('llmEnableDedup').checked = true;
     document.getElementById('llmEnabled').checked = true;
     document.getElementById('llmDefault').checked = false;
+    document.getElementById('llmSupportImages').disabled = false;
     document.getElementById('llmModal').classList.add('show');
 }
 
@@ -2008,6 +2201,7 @@ function openEditLLMModal(configId) {
     document.getElementById('llmEnableDescription').checked = config.enable_description;
     document.getElementById('llmEnableDedup').checked = config.enable_dedup;
     document.getElementById('llmSupportImages').checked = config.support_images !== false;
+    document.getElementById('llmSupportImages').disabled = false;
     document.getElementById('llmDescription').value = config.description || '';
     document.getElementById('llmEnabled').checked = config.enabled;
     document.getElementById('llmDefault').checked = config.is_default;
@@ -2300,6 +2494,11 @@ return {
     setDefaultLLMConfig: setDefaultLLMConfig,
     testLLMConfig: testLLMConfig,
     toggleLLMEnabled: toggleLLMEnabled,
+    loadOpenRouterFreeModels: loadOpenRouterFreeModels,
+    refreshOpenRouterModels: refreshOpenRouterModels,
+    openAddOpenRouterModel: openAddOpenRouterModel,
+    loadOpenRouterApiKey: loadOpenRouterApiKey,
+    saveOpenRouterApiKey: saveOpenRouterApiKey,
     loadSSOConfig: loadSSOConfig,
     saveSSOConfig: saveSSOConfig,
     toggleSSOEnabled: toggleSSOEnabled,

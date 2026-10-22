@@ -304,6 +304,9 @@ def create_llm_config():
     if config_id:
         if _socketio:
             _socketio.emit('llm_config_created', {'config_id': config_id})
+        # 自动检测：后台探测连通性并推送结果，失败自动熔断切换
+        if config.enabled:
+            _bg_probe_llm_config(config_id)
         return jsonify({
             'message': '大模型配置创建成功',
             'config_id': config_id,
@@ -349,6 +352,9 @@ def update_llm_config(config_id: int):
     if success:
         if _socketio:
             _socketio.emit('llm_config_updated', {'config_id': config_id})
+        # 自动检测：后台探测连通性并推送结果，失败自动熔断切换
+        if config.enabled:
+            _bg_probe_llm_config(config_id)
         return jsonify({
             'message': '大模型配置更新成功',
             'config': manager.get_llm_config(config_id).to_dict()
@@ -393,18 +399,101 @@ def set_default_llm_config(config_id: int):
 
 @system_bp.route('/llm-configs/<int:config_id>/test', methods=['POST'])
 def test_llm_config(config_id: int):
-    """测试大模型连通性（发送简单文本请求验证 API 可用）"""
+    """测试大模型连通性（发送极小文本请求验证 API 可用）
+
+    走故障转移路由探测，结果同步写入熔断状态：
+    探测失败会立即熔断该模型，真实调用自动切换下一个候选。
+    """
     manager = get_system_manager()
     config = manager.get_llm_config(config_id)
     if not config:
         return jsonify({'error': '大模型配置不存在'}), 404
     try:
-        from src.llm.llm_client import LLMClient
-        client = LLMClient(config)
-        reply = client.chat_text("请回复'连接成功'四个字。")
-        return jsonify({'message': '连接成功', 'reply': reply})
+        from src.llm.llm_router import get_llm_router
+        ok, msg = get_llm_router().probe(config)
+        if ok:
+            return jsonify({'message': '连接成功', 'reply': msg})
+        return jsonify({'error': f'连接失败: {msg}'}), 500
     except Exception as e:
         return jsonify({'error': f'连接失败: {e}'}), 500
+
+
+def _bg_probe_llm_config(config_id: int):
+    """后台探测大模型配置可用性并推送结果（保存配置后自动检测）
+
+    探测失败会写入路由熔断状态，真实调用自动跳过该模型切换下一个。
+    """
+    import time as _time
+
+    def _run():
+        try:
+            _time.sleep(0.5)  # 等待配置落库
+            manager = get_system_manager()
+            config = manager.get_llm_config(config_id)
+            if not config or not config.enabled:
+                return
+            from src.llm.llm_router import get_llm_router
+            ok, msg = get_llm_router().probe(config)
+            if _socketio:
+                _socketio.emit('llm_config_health', {
+                    'config_id': config_id,
+                    'name': config.name,
+                    'ok': ok,
+                    'message': msg
+                })
+            logger.info(
+                f"[LLM] 配置「{config.name}」自动检测{'通过' if ok else '失败'}: {msg}"
+            )
+        except Exception as e:
+            logger.warning(f"[LLM] 配置 #{config_id} 自动检测异常: {e}")
+
+    import threading
+    threading.Thread(target=_run, daemon=True).start()
+
+
+@system_bp.route('/openrouter/api-key', methods=['GET'])
+def get_openrouter_api_key():
+    """获取 OpenRouter 全局密钥状态（脱敏）
+
+    全局密钥仅对 OpenRouter 免费模型（模型 ID 以 :free 结尾）生效：
+    免费模型配置未单独设置密钥时自动回退；付费模型必须单独配置密钥。
+    """
+    manager = get_system_manager()
+    key = manager.get_setting('openrouter_api_key', '')
+    return jsonify({
+        'configured': bool(key),
+        'api_key': (key[:10] + '***') if key else ''
+    })
+
+
+@system_bp.route('/openrouter/api-key', methods=['PUT'])
+def set_openrouter_api_key():
+    """设置/清除 OpenRouter 全局密钥（一处配置，所有免费模型共用）"""
+    data = request.get_json() or {}
+    key = (data.get('api_key') or '').strip()
+    manager = get_system_manager()
+    if not manager.set_setting('openrouter_api_key', key):
+        return jsonify({'error': '保存失败'}), 500
+    return jsonify({
+        'message': 'OpenRouter 全局密钥已保存，所有未单独配置密钥的 OpenRouter 免费模型将自动使用'
+                   if key else 'OpenRouter 全局密钥已清除',
+        'configured': bool(key)
+    })
+
+
+@system_bp.route('/openrouter/free-vision-models', methods=['GET'])
+def get_openrouter_free_vision_models():
+    """获取 OpenRouter 免费视觉模型列表（仅支持图片输入的模型）
+
+    默认返回内置精选列表（不联网，秒开）；?refresh=1 时从 OpenRouter
+    官方接口实时拉取最新列表，失败时降级返回内置列表。
+    """
+    refresh = request.args.get('refresh') == '1'
+    try:
+        from src.llm.openrouter_presets import get_free_vision_models
+        return jsonify(get_free_vision_models(force=refresh))
+    except Exception as e:
+        return jsonify({'error': f'获取免费视觉模型列表失败: {e}'}), 500
 
 
 @system_bp.route('/llm-enabled', methods=['GET'])
