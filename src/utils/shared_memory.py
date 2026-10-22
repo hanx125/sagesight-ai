@@ -622,3 +622,61 @@ def read_frame_from_shared_memory(
     if return_aligned:
         return rgb_frame, aligned
     return rgb_frame
+
+
+def read_latest_frame_from_shared_memory(
+    shm_name: str,
+    frame_shape: Tuple[int, int],
+    block_count: int = 16,
+):
+    """读取环形缓冲中帧序号最大的最新帧（AI 流等低延迟场景用）
+
+    背景：事件处理积压时，消息对应 shm 块的内容可能是旧帧，且积压量
+    波动会导致按消息块读取的画面在时间轴上来回倒退（帧倒退现象）。
+    改为扫描所有块的头部、取帧序号最大的块完整读取，保证返回的
+    是解码器最新写入的帧，显示内容严格向前。
+
+    Args:
+        shm_name: 共享内存名称前缀（如 "sagesight_{camera_id}_block"）
+        frame_shape: 帧形状 (height, width)
+        block_count: 扫描的块数量（覆盖环形缓冲全部块，缺的块自动跳过）
+
+    Returns:
+        (rgb_frame, frame_seq)：无可用帧时返回 (None, None)
+    """
+    best_block_id = None
+    best_seq = -1
+
+    for block_id in range(block_count):
+        block_name = f"{shm_name}_{block_id}"
+        try:
+            shm = _get_or_connect_shm(block_name)
+        except Exception:
+            # 块不存在（环形缓冲实际块数少于 block_count），跳过
+            continue
+        try:
+            with _ShmLock(block_name, timeout_ms=50):
+                header_data = struct.unpack(
+                    HEADER_FORMAT, bytes(shm.buf[:HEADER_SIZE])
+                )
+            if header_data[0] != MAGIC_NUMBER:
+                continue
+            seq = header_data[1]
+            if seq > best_seq:
+                best_seq = seq
+                best_block_id = block_id
+        except Exception:
+            # 锁超时（写方持锁中）或读取异常，跳过该块
+            continue
+
+    if best_block_id is None:
+        return None, None
+
+    rgb_frame, _aligned = read_frame_from_shared_memory(
+        shm_name=shm_name,
+        shm_block_id=best_block_id,
+        frame_shape=frame_shape,
+        expected_frame_seq=best_seq,
+        return_aligned=True,
+    )
+    return rgb_frame, (best_seq if rgb_frame is not None else None)

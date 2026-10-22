@@ -2482,7 +2482,22 @@ class TrackedObjectProcessor(mp.Process):
         if frame_seq % interval != 0:
             return
 
-        # 复用主循环已读帧，None 时兜底读 shm
+        # AI 流画面严格向前：优先读环形缓冲中帧序号最大的最新帧。
+        # 处理积压时消息对应 shm 块可能是旧内容，且积压量波动会导致
+        # 画面在时间轴上来回倒退（表现为目标前进又"倒车重放"）；
+        # 读最新帧保证显示不受积压影响（检测框允许轻微滞后于画面）。
+        try:
+            from src.utils.shared_memory import read_latest_frame_from_shared_memory
+            shm_name = (self._current_shm_info or {}).get("shm_name")
+            if shm_name:
+                cam_cfg = self.camera_configs.get(camera_id, {})
+                frame, _ = read_latest_frame_from_shared_memory(
+                    shm_name, cam_cfg.get("frame_shape", (640, 640))
+                )
+        except Exception as e:
+            logger.debug(f"[{camera_id}] AI流：读取最新帧失败，回退消息帧: {e}")
+
+        # 最新帧读取失败时，回退复用主循环已读帧 / 消息对应 shm 块
         frame_aligned = True
         if frame is None:
             # 兜底读 shm，返回 (frame, aligned)
