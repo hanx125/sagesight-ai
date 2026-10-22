@@ -329,6 +329,9 @@ class TrackedObjectProcessor(mp.Process):
         last_gc_time = time.time()
         # gc.collect() 执行间隔（秒）：每 5 分钟强制回收一次
         _GC_INTERVAL = 300
+        # 高水位跳帧阈值：队列积压超过该条数时抽干队列、每相机只保留最新一条，
+        # 将处理延迟限制在 阈值×帧间隔 内（缓解检测框滞后于画面）
+        _SKIP_STALE_THRESHOLD = 4
         # 诊断计数器：统计跟踪对象与事件生命周期
         # tracked_sum：累计接收到的 tracked_objects 数量（跨所有帧所有相机）
         # start_triggered / end_triggered：start/end 回调触发次数
@@ -344,6 +347,7 @@ class TrackedObjectProcessor(mp.Process):
         self._frame_cache_push_total = 0   # frame_cache.push 调用次数
         self._frame_cache_push_success = 0  # 实际写入缓存次数（采样通过+编码成功）
         self._max_queue_size = 0       # 队列最大积压深度
+        self._skipped_frames_total = 0  # 高水位跳帧丢弃的旧帧总数
 
         while not self.stop_event.is_set():
             try:
@@ -357,7 +361,35 @@ class TrackedObjectProcessor(mp.Process):
                 # 队列为空或出错
                 continue
 
-            try:
+            # 高水位跳帧：积压超过阈值时抽干队列，每个相机只保留最新一条。
+            # 目标出现时事件处理变重、队列积压可达数十帧（数秒），检测框
+            # 会明显滞后于画面（"框跟着目标跑"）。跳帧把处理延迟限制在
+            # 阈值×帧间隔内；被跳过的中间帧只降低事件状态更新频率，
+            # 不影响事件判定正确性（跟踪由检测端完成）。
+            pending = [data]
+            if qsize > _SKIP_STALE_THRESHOLD:
+                newest_by_cam = {}
+                for d in pending:
+                    if not isinstance(d, dict):
+                        newest_by_cam[d[0]] = d
+                pending = []
+                while True:
+                    try:
+                        d = self.detected_objects_queue.get_nowait()
+                    except Exception:
+                        break
+                    if isinstance(d, dict):
+                        # 占道/堆积检测消息与帧无关，照常处理
+                        pending.append(d)
+                        continue
+                    if d[0] in newest_by_cam:
+                        # 该相机已有更新的消息，本条被丢弃
+                        self._skipped_frames_total += 1
+                    newest_by_cam[d[0]] = d
+                pending.extend(newest_by_cam.values())
+
+            for data in pending:
+              try:
                 # 记录本帧跟踪对象数量（_process_detection_data 内会更新 self._last_tracked_count）
                 self._last_tracked_count = 0
                 self._process_detection_data(data)
@@ -394,6 +426,7 @@ class TrackedObjectProcessor(mp.Process):
                         f"帧未对齐率: {misalign_rate:.1f}% ({self._shm_read_misaligned}/{self._shm_read_success}), "
                         f"缓存写入成功率: {cache_rate:.1f}% ({self._frame_cache_push_success}/{self._frame_cache_push_total}), "
                         f"队列最大积压: {self._max_queue_size}, "
+                        f"高水位跳帧: {self._skipped_frames_total}, "
                         f"内存RSS: {_current_rss_mb:.1f}MB"
                     )
                     last_stats_time = now
@@ -415,7 +448,7 @@ class TrackedObjectProcessor(mp.Process):
                     )
                     last_gc_time = now
 
-            except Exception as e:
+              except Exception as e:
                 proc_logger.error(f"处理检测数据失败: {e}", exc_info=True)
 
         # 清理
