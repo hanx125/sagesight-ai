@@ -274,8 +274,10 @@ class TaskProcessManager:
                             _cam_id = str(_raw_id)
                         _cam_info = _cam_mgr.get_camera(_cam_id)
                         _protocol = _cam_info.protocol if _cam_info else 'rtsp'
-                        if _protocol != 'rtsp':
-                            continue  # 视频文件等非实时流不共享
+                        # 与 CameraWorker 的 is_video_file 判断对齐：仅视频文件不共享，
+                        # rtsp/onvif 等协议都是实时流，可共享解码
+                        if _protocol == 'file':
+                            continue
                         _rtsp_url = _ch.rtsp_url or ''
                         if getattr(_ch, 'channel_source', '') == 'local_platform':
                             try:
