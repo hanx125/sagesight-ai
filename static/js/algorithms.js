@@ -12,6 +12,8 @@ var currentView = 'card';
 var deleteAlgorithmId = null;
 var selectedModelFile = null;  // 选择的模型文件
 var selectedLabelsFile = null; // 选择的标签文件
+var currentPage = 1;           // 当前页码（前端分页）
+var PAGE_SIZE = 12;            // 每页数量
 
 // ========================================
 // 页面初始化
@@ -361,10 +363,13 @@ async function loadAlgorithms() {
             }
             return true;
         });
-        
+
+        // 数据/筛选变化后重置到第一页
+        currentPage = 1;
+
         // 更新统计
         updateStats();
-        
+
         // 渲染算法列表
         renderAlgorithms();
         
@@ -413,6 +418,7 @@ async function updateStats() {
 function renderAlgorithms() {
     const algorithmsList = document.getElementById('algorithmsList');
     const emptyState = document.getElementById('emptyState');
+    const paginationEl = document.getElementById('algoPagination');
 
     // pjax 导航后 DOM 可能已被替换
     if (!algorithmsList || !emptyState) return;
@@ -420,16 +426,22 @@ function renderAlgorithms() {
     if (algorithms.length === 0) {
         algorithmsList.style.display = 'none';
         emptyState.style.display = 'block';
+        if (paginationEl) paginationEl.style.display = 'none';
         return;
     }
 
     emptyState.style.display = 'none';
-    
+
+    // 分页切片（页码越界时回退到最后一页）
+    const totalPages = Math.max(1, Math.ceil(algorithms.length / PAGE_SIZE));
+    if (currentPage > totalPages) currentPage = totalPages;
+    const pageItems = algorithms.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
     // 根据视图类型渲染
     if (currentView === 'card') {
         algorithmsList.style.display = 'grid';
         algorithmsList.classList.remove('list-view');
-        algorithmsList.innerHTML = algorithms.map(algorithm => renderAlgorithmCard(algorithm)).join('');
+        algorithmsList.innerHTML = pageItems.map(algorithm => renderAlgorithmCard(algorithm)).join('');
     } else {
         algorithmsList.style.display = 'block';
         algorithmsList.classList.add('list-view');
@@ -444,9 +456,62 @@ function renderAlgorithms() {
                 <span>描述</span>
                 <span>操作</span>
             </div>
-            ${algorithms.map(algorithm => renderAlgorithmListItem(algorithm)).join('')}
+            ${pageItems.map(algorithm => renderAlgorithmListItem(algorithm)).join('')}
         `;
     }
+
+    renderPagination(totalPages);
+}
+
+// ========================================
+// 渲染分页条
+// ========================================
+
+function renderPagination(totalPages) {
+    const paginationEl = document.getElementById('algoPagination');
+    if (!paginationEl) return;
+
+    if (totalPages <= 1) {
+        paginationEl.style.display = 'none';
+        paginationEl.innerHTML = '';
+        return;
+    }
+
+    paginationEl.style.display = 'flex';
+
+    // 页码按钮：最多显示 5 个数字页（当前页居中）
+    let start = Math.max(1, currentPage - 2);
+    let end = Math.min(totalPages, start + 4);
+    start = Math.max(1, end - 4);
+
+    let pages = '';
+    for (let p = start; p <= end; p++) {
+        pages += `<button class="algo-page-btn ${p === currentPage ? 'active' : ''}"
+                    onclick="Algorithms.gotoPage(${p})">${p}</button>`;
+    }
+
+    paginationEl.innerHTML = `
+        <button class="algo-page-btn" ${currentPage <= 1 ? 'disabled' : ''}
+                onclick="Algorithms.gotoPage(${currentPage - 1})" title="上一页">&lsaquo;</button>
+        ${start > 1 ? `<button class="algo-page-btn" onclick="Algorithms.gotoPage(1)">1</button>
+        <span class="algo-page-ellipsis">…</span>` : ''}
+        ${pages}
+        ${end < totalPages ? `<span class="algo-page-ellipsis">…</span>
+        <button class="algo-page-btn" onclick="Algorithms.gotoPage(${totalPages})">${totalPages}</button>` : ''}
+        <button class="algo-page-btn" ${currentPage >= totalPages ? 'disabled' : ''}
+                onclick="Algorithms.gotoPage(${currentPage + 1})" title="下一页">&rsaquo;</button>
+        <span class="algo-page-info">共 ${algorithms.length} 个 · ${totalPages} 页</span>
+    `;
+}
+
+function gotoPage(page) {
+    const totalPages = Math.max(1, Math.ceil(algorithms.length / PAGE_SIZE));
+    if (page < 1 || page > totalPages) return;
+    currentPage = page;
+    renderAlgorithms();
+    // 滚回列表顶部
+    const list = document.getElementById('algorithmsList');
+    if (list) list.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ========================================
@@ -612,7 +677,10 @@ function openCreateModal() {
 }
 
 async function openEditModal(algorithmId, event) {
-    event.stopPropagation();
+    // event 可选：卡片/列表按钮会传入用于阻止冒泡，详情对话框调用时无 event
+    if (event && event.stopPropagation) {
+        event.stopPropagation();
+    }
     
     try {
         const response = await fetch(`/api/algorithms/${algorithmId}`);
@@ -805,7 +873,10 @@ async function saveAlgorithm() {
 // ========================================
 
 function openDeleteModal(algorithmId, algorithmName, event) {
-    event.stopPropagation();
+    // event 可选：卡片/列表按钮会传入用于阻止冒泡，详情对话框调用时无 event
+    if (event && event.stopPropagation) {
+        event.stopPropagation();
+    }
     
     deleteAlgorithmId = algorithmId;
     document.getElementById('deleteAlgorithmName').textContent = algorithmName;
@@ -1107,6 +1178,7 @@ return {
     confirmDelete: confirmDelete,
     setView: setView,
     resetFilters: resetFilters,
+    gotoPage: gotoPage,
     toggleSection: toggleSection,
     selectModelFile: selectModelFile,
     handleModelFileSelect: handleModelFileSelect,

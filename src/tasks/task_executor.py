@@ -263,6 +263,29 @@ class CameraWorker:
             # ========================================
             # 初始化解码器（区分 RTSP 流和视频文件）
             # ========================================
+            # 共享解码模式：camera_config 带 _shared_decoder 信息（主进程
+            # SharedDecoderRegistry 注入）时，不创建任务私有解码器，
+            # 改用 SharedFrameReader 直读相机级共享帧缓冲——同相机多个
+            # 算法任务只解码一次。视频文件/批处理任务不走共享。
+            shared_info = self.camera_config.get('_shared_decoder')
+            if shared_info and not is_video_file:
+                from src.decoders.shared_decoder import SharedFrameReader
+                self.decoder = SharedFrameReader(
+                    camera_id=self.camera_id,
+                    width=shared_info.get('width', 640),
+                    height=shared_info.get('height', 640),
+                    block_count=shared_info.get('block_count', 40),
+                    fps=shared_info.get('fps', 25),
+                )
+                # 对齐 decoder_cfg，保证 run() 中 frame_shape 与实际帧一致
+                self.decoder_cfg['width'] = shared_info.get('width', 640)
+                self.decoder_cfg['height'] = shared_info.get('height', 640)
+                self.decoder_cfg['fps'] = shared_info.get('fps', 25)
+                logger.info(f"[CameraWorker-{self.camera_id}] 使用共享解码服务 "
+                            f"(shm: {self.decoder.shm_name}_*, "
+                            f"{shared_info.get('width')}x{shared_info.get('height')})")
+                return True
+
             from src.decoders.video_decoder import VideoDecoder
 
             camera_protocol = self.camera_config.get('protocol', 'rtsp')

@@ -454,6 +454,54 @@ class SharedMemoryRingBuffer:
         else:
             return f"sagesight_{self.camera_id}_block_{block_id}"
 
+    def read_block_header(self, block_id: int) -> Optional[FrameHeader]:
+        """只读指定块的帧头（不解码帧数据，轻量，用于跨进程消费者扫描新帧）
+
+        Returns:
+            FrameHeader，魔数不匹配（块从未写入）返回 None
+        """
+        if block_id not in self.blocks:
+            return None
+        block = self.blocks[block_id]
+        try:
+            # 头部 48 字节很小，且写入方是"头+帧"一次性原子写，
+            # 短读最多发生在写入瞬间，靠魔数+宽高校验兜底即可（不加锁避免与写方竞争）
+            header_data = struct.unpack(HEADER_FORMAT, bytes(block.shm.buf[:HEADER_SIZE]))
+            if header_data[0] != MAGIC_NUMBER:
+                return None
+            width = header_data[3]
+            height = header_data[4]
+            if width != self.width or height != self.height:
+                return None
+            return FrameHeader(
+                sequence_num=header_data[1],
+                timestamp_ns=header_data[2],
+                width=width,
+                height=height,
+                camera_id=header_data[7].rstrip(b'\x00').decode('utf-8'),
+                task_id=header_data[8].rstrip(b'\x00').decode('utf-8'),
+            )
+        except Exception:
+            return None
+
+    def scan_sequences(self) -> Dict[int, int]:
+        """扫描全部块头，返回 {block_id: sequence_num}（仅含已写入的块）
+
+        跨进程消费者（SharedFrameReader）用它发现新帧：
+        无锁轻量读，每次扫描 block_count 个 48 字节头，开销可忽略。
+        """
+        result = {}
+        for block_id in self.blocks:
+            header = self.read_block_header(block_id)
+            if header is not None:
+                result[block_id] = header.sequence_num
+        return result
+
+    def max_sequence(self) -> int:
+        """当前环形缓冲中的最大帧序号（无帧返回 0）"""
+        seqs = self.scan_sequences()
+        return max(seqs.values()) if seqs else 0
+
     def close(self):
         """关闭所有共享内存块"""
         for block in self.blocks.values():

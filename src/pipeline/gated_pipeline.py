@@ -113,7 +113,9 @@ def run_gated_pipeline(
     min_region = max(model_size)
 
     # 构建 shm_name 前缀（用于事件进程回读帧）
-    shm_name_prefix = f"sagesight_{task_id}_{camera_id}_block"
+    # shm 前缀由解码器对象提供：共享解码模式下为 sagesight___shared___{camera}_block，
+    # 任务私有解码时与原 f-string 结果一致（事件进程按消息里的前缀回读帧）
+    shm_name_prefix = decoder.shm_name
 
     # 性能统计
     frame_count = 0

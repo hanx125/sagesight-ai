@@ -185,6 +185,11 @@ def _run_executor_process(task_config: Dict, ai_stream_enabled_state=None):
             'protocol': protocol,  # 添加protocol字段（视频文件需要）
             'zones_config': task_manager.get_channel_zones(channel.id),  # 通道级 Zone 配置（device_channel_pool.zones_config）
         }
+        # 共享解码连接信息（主进程 TaskProcessManager 注入 task_config）：
+        # 存在时 CameraWorker 不再自建解码器，直读相机级共享帧缓冲
+        shared_decoders = task_config.get('_shared_decoders') or {}
+        if effective_camera_id in shared_decoders:
+            camera_config['_shared_decoder'] = shared_decoders[effective_camera_id]
         cameras.append(camera_config)
     
     # 创建任务执行器并运行（run()方法包含主循环）
@@ -233,8 +238,8 @@ class TaskProcessManager:
                     _raw_id = getattr(_ch, 'camera_id', None)
                     # 空列表/空字典/空字符串/None 均视为无效，降级为通道ID
                     if (_raw_id is None or
-                        (isinstance(_raw_id, str) and not _raw_id.strip()) or
-                        (isinstance(_raw_id, (list, dict)) and not _raw_id)):
+                            (isinstance(_raw_id, str) and not _raw_id.strip()) or
+                            (isinstance(_raw_id, (list, dict)) and not _raw_id)):
                         _camera_ids.append(str(_ch.id))
                     else:
                         _camera_ids.append(str(_raw_id))
@@ -242,6 +247,59 @@ class TaskProcessManager:
             except Exception as e:
                 logger.warning(f"[TaskProcessManager] 获取任务 {task_id} 摄像机列表失败: {e}")
                 self.task_cameras[task_id] = []
+
+            # ========================================
+            # 共享解码订阅：同相机多算法任务只解码一次
+            # 对实时 RTSP 通道，向 SharedDecoderRegistry 订阅相机级共享解码器，
+            # 连接信息注入 task_config['_shared_decoders'] 传给任务进程。
+            # 订阅失败（返回 None）的相机由任务进程回退到任务私有解码器。
+            # ========================================
+            task_config.pop('_shared_decoders', None)
+            try:
+                from src.decoders.shared_decoder import shared_decoder_registry
+                shared_decoder_registry.set_alive_checker(
+                    lambda tid: tid in self.task_processes)
+                shared_info_map = {}
+                decoder_cfg = task_config.get('decoder_config', {})
+                if task_config.get('detection_type', 'realtime') == 'realtime':
+                    from src.cameras.camera_manager import get_camera_manager
+                    _cam_mgr = get_camera_manager()
+                    for _ch in _channel_pool_mgr.get_task_device_channels(task_id):
+                        _raw_id = getattr(_ch, 'camera_id', None)
+                        if (_raw_id is None or
+                                (isinstance(_raw_id, str) and not _raw_id.strip()) or
+                                (isinstance(_raw_id, (list, dict)) and not _raw_id)):
+                            _cam_id = str(_ch.id)
+                        else:
+                            _cam_id = str(_raw_id)
+                        _cam_info = _cam_mgr.get_camera(_cam_id)
+                        _protocol = _cam_info.protocol if _cam_info else 'rtsp'
+                        if _protocol != 'rtsp':
+                            continue  # 视频文件等非实时流不共享
+                        _rtsp_url = _ch.rtsp_url or ''
+                        if getattr(_ch, 'channel_source', '') == 'local_platform':
+                            try:
+                                from src.cameras.stream_service import StreamService
+                                _live = StreamService(db_path='data/tasks.db') \
+                                    .get_stream_urls(_cam_id).get('rtsp')
+                                if _live:
+                                    _rtsp_url = _live
+                            except Exception as _e:
+                                logger.warning(f"[TaskProcessManager] 本地平台通道 {_cam_id} 实时地址生成失败: {_e}")
+                        if not _rtsp_url:
+                            continue
+                        _info = shared_decoder_registry.acquire(
+                            camera_id=_cam_id, task_id=task_id,
+                            task_name=task_name,
+                            rtsp_url=_rtsp_url, decoder_cfg=decoder_cfg)
+                        if _info:
+                            shared_info_map[_cam_id] = _info
+                if shared_info_map:
+                    task_config['_shared_decoders'] = shared_info_map
+                    logger.info(f"[TaskProcessManager] 任务 {task_name} 已订阅共享解码: "
+                                f"{list(shared_info_map.keys())}")
+            except Exception as e:
+                logger.warning(f"[TaskProcessManager] 共享解码订阅失败（回退私有解码）: {e}")
 
             # 使用 Process 类启动 task_executor（自动配置日志队列）
             # 注意：设置为非守护进程（daemon=False），因为任务可能需要创建子进程
@@ -335,6 +393,13 @@ class TaskProcessManager:
                     logger.error(f"[TaskProcessManager] 任务 {task_id} 无法被杀死（僵尸进程）")
 
             del self.task_processes[task_id]
+
+            # 释放共享解码订阅：该任务停后无其他订阅者的相机停止解码服务
+            try:
+                from src.decoders.shared_decoder import shared_decoder_registry
+                shared_decoder_registry.release_task(task_id)
+            except Exception as e:
+                logger.warning(f"[TaskProcessManager] 释放共享解码订阅失败: {e}")
 
             # 清理 AI 流推送标记文件（防止任务重启后旧标记残留导致推流异常）
             camera_ids = self.task_cameras.pop(task_id, [])
@@ -1645,6 +1710,13 @@ if __name__ == '__main__':
             pm.stop_all_tasks()
         except Exception as e:
             logger.error(f"[Cleanup] 停止任务进程失败: {e}")
+
+        # 停止全部共享解码服务（相机级解码进程）
+        try:
+            from src.decoders.shared_decoder import shared_decoder_registry
+            shared_decoder_registry.shutdown_all()
+        except Exception as e:
+            logger.error(f"[Cleanup] 停止共享解码服务失败: {e}")
 
         # 更新数据库状态
         try:
