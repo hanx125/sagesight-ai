@@ -260,7 +260,16 @@ class TaskProcessManager:
                 shared_decoder_registry.set_alive_checker(
                     lambda tid: tid in self.task_processes)
                 shared_info_map = {}
-                decoder_cfg = task_config.get('decoder_config', {})
+                # 任务进程内的 decoder_cfg 是「全局 decoder_config.yaml 默认值 + 任务级
+                # 覆盖」的合并结果；主进程此处拿到的 task_config 是原始任务配置，
+                # 必须先合并全局默认（否则 hwaccel_preset 等回退到 Windows 默认 dxva2，
+                # 在 RK3588 上 FFmpeg 解码会立即失败）
+                try:
+                    from src.tasks.task_manager import get_default_decoder_config
+                    decoder_cfg = {**get_default_decoder_config(),
+                                   **(task_config.get('decoder_config') or {})}
+                except Exception:
+                    decoder_cfg = task_config.get('decoder_config', {})
                 if task_config.get('detection_type', 'realtime') == 'realtime':
                     from src.cameras.camera_manager import get_camera_manager
                     _cam_mgr = get_camera_manager()
