@@ -64,6 +64,14 @@ def _decoder_service_main(config: dict, stop_event) -> None:
 
     独立于任何任务进程树；FFmpeg 崩溃由 VideoDecoder 内部重连逻辑处理。
     """
+    # spawn 模式子进程不继承主进程 logging 配置，显式配置输出到 stderr
+    # （systemd 服务会将 stderr 收进 journald）
+    import sys
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stderr,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    )
     from src.decoders.video_decoder import VideoDecoder
 
     camera_id = config.get('camera_id', '?')
