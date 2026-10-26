@@ -45,6 +45,7 @@ class LLMRouter:
         self._lock = threading.RLock()
         self._fail_count = {}       # config_id -> 连续失败次数
         self._cooldown_until = {}   # config_id -> 冷却截止时间戳
+        self._last_error = {}       # config_id -> 最近一次失败原因（用于提示）
         # 各线程最近一次成功调用的模型信息（线程隔离：事件描述与语义去重
         # 在各自线程并发执行，不能互相覆盖，否则写库会记错模型）
         self._local = threading.local()
@@ -189,6 +190,7 @@ class LLMRouter:
         with self._lock:
             n = self._fail_count.get(config_id, 0) + 1
             self._fail_count[config_id] = n
+            self._last_error[config_id] = (reason or '')[:120]
             cooldown = min(_BASE_COOLDOWN * (2 ** (n - 1)), _MAX_COOLDOWN)
             self._cooldown_until[config_id] = time.time() + cooldown
         logger.warning(
@@ -202,12 +204,44 @@ class LLMRouter:
             had_failure = config_id in self._fail_count
             self._fail_count.pop(config_id, None)
             self._cooldown_until.pop(config_id, None)
+            self._last_error.pop(config_id, None)
         if had_failure:
             logger.info(f"[LLMRouter] 模型 #{config_id} 恢复可用")
 
     # ========================================
     # 统一执行入口（失败自动切换，任务重新执行）
     # ========================================
+
+    def _describe_no_candidate(self, feature: Optional[str]) -> str:
+        """候选为空时给出可诊断的原因（避免笼统的「没有可用配置」）
+
+        三种情况分别提示：未启用 / 全部处于熔断冷却 / 缺少密钥。
+        """
+        try:
+            configs = get_system_manager().get_all_llm_configs()
+        except Exception:
+            return '没有可用的大模型配置（读取配置失败）'
+
+        enabled = [c for c in configs
+                   if c.enabled and (not feature or getattr(c, feature, True))]
+        if not enabled:
+            return '没有可用的大模型配置（未配置或未启用，请到 系统配置 → 大模型 添加）'
+
+        now = time.time()
+        with self._lock:
+            cooling = [(c, self._cooldown_until.get(c.id, 0) - now) for c in enabled
+                       if now < self._cooldown_until.get(c.id, 0)]
+            if len(cooling) == len(enabled):
+                soonest_name, soonest = min(cooling, key=lambda x: x[1])
+                reason = self._last_error.get(soonest_name.id, '')
+                return (f'所有大模型都在熔断冷却中，最近失败：{soonest_name.name} '
+                        f'（{max(int(soonest), 0)} 秒后自动重试）'
+                        + (f'，原因：{reason}' if reason else ''))
+        no_key = [c.name for c in enabled if self._resolve_config(c) is None]
+        if len(no_key) == len(enabled):
+            return ('没有可用的大模型配置（' + '、'.join(no_key[:3]) +
+                    ' 缺少 API 密钥；OpenRouter 免费模型可配置全局密钥）')
+        return '没有可用的大模型配置'
 
     def _execute(self, method_name: str, feature: Optional[str],
                  require_images: bool, *args, **kwargs) -> str:
@@ -222,9 +256,7 @@ class LLMRouter:
             candidates = self.get_candidates(feature=feature)
 
         if not candidates:
-            raise RuntimeError(
-                '没有可用的大模型配置（未配置/未启用/缺少 API 密钥）'
-            )
+            raise RuntimeError(self._describe_no_candidate(feature))
 
         errors = []
         for c in candidates:
