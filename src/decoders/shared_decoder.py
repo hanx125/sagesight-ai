@@ -106,18 +106,16 @@ class SharedFrameReader:
 
     def __init__(self, camera_id: str, width: int, height: int,
                  block_count: int = 40, fps: int = 25):
-        from src.utils.shared_memory import SharedMemoryRingBuffer
         from src.utils.frame_index_queue import FrameIndex
 
         self.camera_id = camera_id
+        self.width = width
+        self.height = height
+        self.block_count = block_count
+        self.fps = fps
         self.shm_name = shared_shm_prefix(camera_id)
-        self.ring_buffer = SharedMemoryRingBuffer(
-            camera_id=camera_id,
-            block_count=block_count,
-            width=width,
-            height=height,
-            task_id=SHARED_TASK_ID,
-        )
+        self._attach()
+
         self.frame_shape = (height, width)
         # 与 VideoDecoder.config 对齐的最小字段集（pipeline 可能读取）
         self.config = {
@@ -126,19 +124,58 @@ class SharedFrameReader:
             'camera_id': camera_id, 'task_id': SHARED_TASK_ID,
         }
 
-        # 游标初始化为当前最大序号：从 attach 之后的下一帧开始消费，
-        # 不回放环形缓冲中已存在的旧帧
-        self._last_seq = self.ring_buffer.max_sequence()
         self._frame_index_cls = FrameIndex
         # 轮询间隔：帧间隔的 1/6，兼顾延迟与 CPU（6fps→约 28ms）
         self._poll_interval = max(0.005, 1.0 / max(fps, 1) / 6.0)
+        # 挂载有效性校验间隔（秒）：解码服务重启会重建同名块，
+        # 旧映射会变成孤儿 inode（帧不再更新），必须重新挂载
+        self._verify_interval = 2.0
+        self._last_verify = time.monotonic()
         logger.info(f"[SharedFrameReader-{camera_id}] 已连接共享帧缓冲: {self.shm_name}_* "
                     f"({block_count}块 {width}x{height}), 从 seq>{self._last_seq} 开始消费")
+
+    def _attach(self) -> None:
+        """（重新）挂载共享帧缓冲，游标从当前最大序号开始"""
+        from src.utils.shared_memory import SharedMemoryRingBuffer
+
+        self.ring_buffer = SharedMemoryRingBuffer(
+            camera_id=self.camera_id,
+            block_count=self.block_count,
+            width=self.width,
+            height=self.height,
+            task_id=SHARED_TASK_ID,
+        )
+        # 游标初始化为当前最大序号：从 attach 之后的下一帧开始消费，
+        # 不回放环形缓冲中已存在的旧帧
+        self._last_seq = self.ring_buffer.max_sequence()
+
+    def _ensure_attachment(self) -> None:
+        """校验挂载有效性，块被重建/删除时自动重新挂载（自愈）"""
+        now = time.monotonic()
+        if now - self._last_verify < self._verify_interval:
+            return
+        self._last_verify = now
+        try:
+            if self.ring_buffer.attachment_valid():
+                return
+            logger.warning(
+                f"[SharedFrameReader-{self.camera_id}] 共享帧缓冲已被重建，重新挂载: "
+                f"{self.shm_name}_*")
+            try:
+                self.ring_buffer.close()
+            except Exception:
+                pass
+            self._attach()
+            logger.info(
+                f"[SharedFrameReader-{self.camera_id}] 重新挂载完成，从 seq>{self._last_seq} 继续消费")
+        except Exception as e:
+            logger.warning(f"[SharedFrameReader-{self.camera_id}] 挂载校验失败: {e}")
 
     def get_frame_index(self):
         """按序获取下一帧索引（内部最多轮询约 0.5 秒，超时返回 None 由外层空转）"""
         deadline = time.monotonic() + 0.5
         while time.monotonic() < deadline:
+            self._ensure_attachment()
             best_seq, best_block, best_ts = None, None, None
             for block_id, seq in self.ring_buffer.scan_sequences().items():
                 if seq > self._last_seq and (best_seq is None or seq < best_seq):

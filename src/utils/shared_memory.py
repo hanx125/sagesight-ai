@@ -262,10 +262,46 @@ class SharedMemoryBlock:
             self.shm.close()
         except:
             pass
-    
-    def unlink(self):
-        """销毁共享内存"""
+
+    def inode(self) -> Optional[int]:
+        """本进程实际映射的 shm inode（Linux 用于识别块是否已被重建）"""
         try:
+            fd = getattr(self.shm, '_fd', None)
+            if fd is None:
+                return None
+            return os.fstat(fd).st_ino
+        except Exception:
+            return None
+
+    def is_same_as_on_disk(self) -> bool:
+        """当前名字指向的文件是否仍是本进程映射的那一个
+
+        进程重启重叠时（旧解码进程正在退出、新实例已创建同名块），
+        旧进程若直接 unlink 会**删掉新实例的块**，导致所有消费者读到
+        已删除的孤儿 inode（帧仍在写、但谁也 attach 不上，表现为
+        shm 回读 0% / AI 流卡死）。这里按 inode 比对，名字已被新实例
+        重建时返回 False，调用方应跳过 unlink。
+        """
+        try:
+            if os.name == 'nt':
+                return True  # Windows 命名内核对象无 /dev/shm 路径，保持原行为
+            path = f"/dev/shm/{self.name}"
+            if not os.path.exists(path):
+                return False
+            mine = self.inode()
+            if mine is None:
+                return True  # 拿不到 inode（非 Linux）时保持原有行为
+            return os.stat(path).st_ino == mine
+        except Exception:
+            return True
+
+    def unlink(self):
+        """销毁共享内存（仅当名字仍指向本进程映射的块时才删除）"""
+        try:
+            if not self.is_same_as_on_disk():
+                logger.warning(
+                    f"[SharedMemoryBlock] 跳过 unlink（名字已被新实例重建）: {self.name}")
+                return
             self.shm.unlink()
         except:
             pass
@@ -507,6 +543,13 @@ class SharedMemoryRingBuffer:
         for block in self.blocks.values():
             block.close()
 
+    def attachment_valid(self) -> bool:
+        """本进程映射的所有块是否仍与磁盘上的名字对应（未被重建/删除）"""
+        for block in self.blocks.values():
+            if not block.is_same_as_on_disk():
+                return False
+        return True
+
     def unlink(self):
         """销毁所有共享内存块"""
         for block in self.blocks.values():
@@ -539,14 +582,33 @@ def _get_or_connect_shm(block_name: str) -> "shared_memory.SharedMemory":
         try:
             # 验证连接是否仍然有效（buf 可访问）
             _ = shm.buf[0]
+            # Linux：名字被新实例重建后，缓存的旧连接指向已删除的孤儿 inode，
+            # 会一直读到过期帧（画面冻结）。按 inode 比对，不一致则重连。
+            if os.name != 'nt':
+                path = f"/dev/shm/{block_name}"
+                fd = getattr(shm, '_fd', None)
+                if fd is not None:
+                    try:
+                        same = os.stat(path).st_ino == os.fstat(fd).st_ino
+                    except FileNotFoundError:
+                        same = False
+                    if not same:
+                        raise OSError('shm 已被重建')
             return shm
-        except Exception:
-            # 连接失效，移除缓存
+        except FileNotFoundError:
+            # 名字不存在：块已被删除，清缓存后继续走新建（会抛同样异常给调用方）
             try:
                 shm.close()
             except Exception:
                 pass
-            del _shm_connection_cache[block_name]
+            _shm_connection_cache.pop(block_name, None)
+        except Exception:
+            # 连接失效/已重建，移除缓存
+            try:
+                shm.close()
+            except Exception:
+                pass
+            _shm_connection_cache.pop(block_name, None)
 
     # 缓存容量超限：清空所有缓存（简单而有效，避免细粒度 LRU 管理）
     if len(_shm_connection_cache) >= _SHM_CACHE_LIMIT:
