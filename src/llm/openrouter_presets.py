@@ -59,11 +59,11 @@ BUILTIN_FREE_VISION_MODELS: List[Dict[str, Any]] = [
         'description': 'Gemma 4 MoE 版本（25.2B 总参/3.8B 激活），推理速度快、资源占用低，适合高频调用场景',
     },
     {
-        'id': 'minimax/minimax-m3.1-flash:free',
-        'name': 'MiniMax: MiniMax M3.1 Flash (free)',
-        'context_length': 1000000,
+        'id': 'thinkingmachines/inkling:free',
+        'name': 'Thinking Machines: Inkling (free)',
+        'context_length': 1048576,
         'modality': 'text+image+video->text',
-        'description': 'MiniMax 多模态 Flash 模型，100 万 token 超长上下文，多模态理解与指令遵循均衡',
+        'description': 'Thinking Machines 多模态模型，100 万 token 上下文，支持图片输入',
     },
     {
         'id': 'dots-studio/dots-3-note-preview:free',

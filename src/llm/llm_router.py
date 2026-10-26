@@ -83,13 +83,44 @@ class LLMRouter:
         m = (model or '').strip().lower()
         return m.endswith(':free') or m == 'openrouter/free'
 
+    @staticmethod
+    def is_local_endpoint(base_url: str) -> bool:
+        """判断是否本机/内网推理服务（这类服务通常不校验 API 密钥）
+
+        覆盖 localhost、127.0.0.1、192.168.x、10.x、172.16-31.x 以及
+        .local/.lan 主机名。仅用于「未填密钥时允许直接调用」，
+        不会把密钥发给任何公网服务。
+        """
+        raw = (base_url or '').strip()
+        if not raw:
+            return False
+        try:
+            from urllib.parse import urlparse
+            import ipaddress
+            host = (urlparse(raw).hostname or '').lower()
+            if not host:
+                return False
+            if host in ('localhost', 'ip6-localhost') or host.endswith('.local'):
+                return True
+            try:
+                ip = ipaddress.ip_address(host)
+            except ValueError:
+                return False
+            return ip.is_loopback or ip.is_private
+        except Exception:
+            return False
+
     def _resolve_config(self, config: LLMConfig) -> Optional[LLMConfig]:
         """解析有效密钥，缺少密钥返回 None
 
-        仅 OpenRouter 免费模型可回退全局密钥，付费模型需自身配置密钥。
+        - 本机/内网推理服务（如盒子本地 Qwen、局域网 vLLM）不校验密钥，
+          未填写时用占位密钥直接调用
+        - 仅 OpenRouter 免费模型可回退全局密钥，付费模型需自身配置密钥
         """
         api_key = config.api_key
-        if (not api_key
+        if not api_key and self.is_local_endpoint(config.base_url):
+            api_key = 'local'
+        elif (not api_key
                 and config.provider.lower() == 'openrouter'
                 and self.is_openrouter_free_model(config.model)):
             api_key = get_system_manager().get_setting('openrouter_api_key', '')
