@@ -45,6 +45,29 @@ class LLMRouter:
         self._lock = threading.RLock()
         self._fail_count = {}       # config_id -> 连续失败次数
         self._cooldown_until = {}   # config_id -> 冷却截止时间戳
+        # 各线程最近一次成功调用的模型信息（线程隔离：事件描述与语义去重
+        # 在各自线程并发执行，不能互相覆盖，否则写库会记错模型）
+        self._local = threading.local()
+
+    # ========================================
+    # 最近成功模型记录（供上层标注描述由哪个模型生成）
+    # ========================================
+
+    def _record_used(self, config: LLMConfig) -> None:
+        self._local.last_used = {
+            'id': config.id,
+            'name': config.name,
+            'model': config.model,
+        }
+
+    def get_last_used(self) -> Optional[dict]:
+        """获取当前线程最近一次成功调用使用的模型信息（无则 None）"""
+        return getattr(self._local, 'last_used', None)
+
+    def get_last_used_model(self, fallback: str = '自动切换') -> str:
+        """获取当前线程最近一次成功调用使用的模型 ID（无则返回 fallback）"""
+        info = self.get_last_used()
+        return info['model'] if info and info.get('model') else fallback
 
     # ========================================
     # 候选模型与密钥解析
@@ -177,6 +200,7 @@ class LLMRouter:
             try:
                 result = getattr(LLMClient(c), method_name)(*args, **kwargs)
                 self.mark_success(c.id)
+                self._record_used(c)
                 return result
             except Exception as e:
                 errors.append(f"{c.name}(#{c.id}): {e}")

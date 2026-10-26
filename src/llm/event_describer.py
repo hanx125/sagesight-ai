@@ -72,6 +72,20 @@ class EventDescriber:
             from src.llm.llm_router import get_llm_router
             self.client = get_llm_router()
 
+    @property
+    def model_label(self) -> str:
+        """用于写库标注的模型标识
+
+        固定单模型模式下为配置的模型 ID；路由模式下 config 为 None，
+        取本线程最近一次成功调用的实际模型（自动故障转移时可能已切换）。
+        """
+        if self.config is not None:
+            return self.config.model or ''
+        try:
+            return self.client.get_last_used_model(fallback='自动切换')
+        except Exception:
+            return '自动切换'
+
     def describe(self, image_bytes: bytes, event_info: dict) -> Optional[str]:
         """生成事件描述
 

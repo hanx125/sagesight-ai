@@ -2348,7 +2348,7 @@ class TrackedObjectProcessor(mp.Process):
                     TaskManager().update_event(
                         event_id,
                         ai_description=description,
-                        ai_description_model=self.llm_describer.config.model,
+                        ai_description_model=self.llm_describer.model_label,
                         ai_description_time=datetime.now(),
                     )
                     logger.info(
@@ -2437,7 +2437,7 @@ class TrackedObjectProcessor(mp.Process):
                     TaskManager().update_event(
                         event_id,
                         ai_description=description,
-                        ai_description_model=self.llm_describer.config.model,
+                        ai_description_model=self.llm_describer.model_label,
                         ai_description_time=datetime.now(),
                     )
                     logger.info(
