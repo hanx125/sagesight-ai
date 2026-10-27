@@ -99,6 +99,22 @@ window.Tracks = (function() {
             setText('statPending', data.pending_events || 0);
             var tip = document.getElementById('tracksDisabledTip');
             if (tip) tip.style.display = data.enabled ? 'none' : 'flex';
+
+            // 有单点片段但没有串联轨迹时，解释清楚为什么不显示
+            var stTip = document.getElementById('tracksSingletonTip');
+            var stText = document.getElementById('tracksSingletonTipText');
+            var singles = data.singleton_count || 0;
+            var shown = document.getElementById('trackIncludeSingleton');
+            var includeSingleton = !!(shown && shown.checked);
+            if (stTip && stText) {
+                if ((data.identity_count || 0) === 0 && singles > 0 && !includeSingleton) {
+                    stText.textContent = '当前有 ' + singles + ' 个单点片段（只在一台相机出现，' +
+                        '还没等到与其它相机的同一目标对上）。勾选「包含单点片段」可查看。';
+                    stTip.style.display = 'flex';
+                } else {
+                    stTip.style.display = 'none';
+                }
+            }
         } catch (e) {
             console.error('[Tracks] 加载概览失败:', e);
         }
@@ -354,6 +370,12 @@ window.Tracks = (function() {
         loadIdentities();
     }
 
+    // 单点片段开关：提示条要跟着一起更新
+    function toggleSingleton() {
+        loadStats();
+        applyFilters();
+    }
+
     function resetFilters() {
         state.range = '86400';
         state.page = 1;
@@ -367,6 +389,9 @@ window.Tracks = (function() {
         });
         var multi = document.getElementById('trackMultiOnly');
         if (multi) multi.checked = false;
+        var singleton = document.getElementById('trackIncludeSingleton');
+        if (singleton) singleton.checked = false;
+        loadStats();
         loadIdentities();
     }
 
@@ -669,6 +694,7 @@ window.Tracks = (function() {
         goToTrack: goToTrack,
         refresh: refresh,
         applyFilters: applyFilters,
+        toggleSingleton: toggleSingleton,
         resetFilters: resetFilters,
         onRangeChange: onRangeChange,
         openDetail: openDetail,

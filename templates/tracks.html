@@ -4,13 +4,19 @@
 
 {% block content %}
 <div class="page-container tracks-page">
-    <!-- 关闭提示 -->
+    <!-- 关闭 / 空数据提示 -->
     <div id="tracksDisabledTip" class="tracks-disabled-tip" style="display:none;">
         <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
         </svg>
         <span>跨相机跟踪当前已关闭，历史轨迹仍可查询；开启后新事件才会自动关联。</span>
         <a href="/system" class="btn btn-sm btn-primary">去开启</a>
+    </div>
+    <div id="tracksSingletonTip" class="tracks-disabled-tip tracks-info-tip" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+        </svg>
+        <span id="tracksSingletonTipText"></span>
     </div>
 
     <!-- 概览统计 -->
@@ -101,7 +107,7 @@
             </div>
             <div class="filter-group">
                 <label class="checkbox-label">
-                    <input type="checkbox" id="trackIncludeSingleton" onchange="Tracks.applyFilters()">
+                    <input type="checkbox" id="trackIncludeSingleton" onchange="Tracks.toggleSingleton()">
                     <span>包含单点片段</span>
                 </label>
             </div>
@@ -206,6 +212,8 @@
 }
 .tracks-page .tracks-disabled-tip svg { width: 18px; height: 18px; flex-shrink: 0; color: var(--warning-color); }
 .tracks-page .tracks-disabled-tip span { flex: 1; }
+.tracks-page .tracks-info-tip { background: rgba(10, 95, 217, 0.08); border-color: rgba(10, 95, 217, 0.35); }
+.tracks-page .tracks-info-tip svg { color: var(--primary-color); }
 
 /* 概览统计 */
 .tracks-page .tracks-stats {
@@ -444,5 +452,5 @@ body.theme-light .tracks-page .track-seg-item { background: rgba(16, 35, 62, .9)
 body.theme-light .tracks-page .track-strong,
 body.theme-light .tracks-page .track-seg-score { background: rgba(76, 159, 240, .18); color: var(--primary-light); }
 </style>
-<script src="{{ url_for('static', filename='js/tracks.js') }}?v=20261028a"></script>
+<script src="{{ url_for('static', filename='js/tracks.js') }}?v=20261028b"></script>
 {% endblock %}
