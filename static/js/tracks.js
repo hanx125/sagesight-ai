@@ -80,7 +80,9 @@ window.Tracks = (function() {
     }
 
     function statusText(status) {
-        return status === 'closed' ? '已结束' : '进行中';
+        if (status === 'closed') return '已结束';
+        if (status === 'singleton') return '单点';
+        return '进行中';
     }
 
     // ========================================
@@ -165,6 +167,10 @@ window.Tracks = (function() {
 
         var multi = document.getElementById('trackMultiOnly');
         if (multi && multi.checked) params.append('multi_camera', '1');
+
+        // 默认只看已串联（≥2 段）的轨迹，勾选后连单点片段一起看
+        var includeSingleton = document.getElementById('trackIncludeSingleton');
+        if (includeSingleton && includeSingleton.checked) params.append('min_events', '1');
 
         if (state.range === 'custom') {
             var startInput = document.getElementById('trackStartTime');
@@ -256,7 +262,7 @@ window.Tracks = (function() {
                 '<div class="track-card-media">' + media +
                     '<span class="track-cam-count' + (cameraCount > 1 ? ' multi' : '') + '">' +
                         cameraCount + ' 台相机</span>' +
-                    '<span class="track-status-tag' + (item.status === 'closed' ? ' closed' : '') + '">' +
+                    '<span class="track-status-tag ' + (item.status || 'active') + '">' +
                         statusText(item.status) + '</span>' +
                 '</div>' +
                 '<div class="track-card-body">' +

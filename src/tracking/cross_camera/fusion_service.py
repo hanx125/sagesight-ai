@@ -249,7 +249,9 @@ class CrossCameraFusionService:
 
         # 候选身份：同类别、最近活跃窗口内（窗口放宽到时间窗的 2 倍 + 1 分钟）
         since = tracklet.start_time - max_gap * 2 - 60
-        identities = store.fetch_candidate_identities(tracklet.class_name, since, limit=60)
+        exclude_camera = '' if self._matcher.link_same_camera else str(tracklet.camera_id)
+        identities = store.fetch_candidate_identities(
+            tracklet.class_name, since, limit=60, exclude_camera=exclude_camera)
 
         scored: List[Tuple[Dict[str, Any], MatchResult]] = []
         for identity in identities:

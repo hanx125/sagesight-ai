@@ -4,8 +4,8 @@
 输入都是"已结束的轨迹片段"（一条事件），所以这里不需要考虑实时性，
 只要把"同一个人"判对。判定顺序刻意做成硬门控优先：
 
-    同类别（必须） → 强 ID（人脸/车牌）→ 同区域组（必须）→ 通行时间窗（必须）
-    → 外观 + 形状 + 时间 加权打分 → 最高分且领先第二名足够多
+    同类别（必须） → 强 ID（人脸/车牌）→ 相机拓扑（同组 / 同相机开关）
+    → 通行时间窗（必须）→ 外观 + 形状 + 时间 加权打分 → 最高分且领先第二名足够多
 
 硬门控不放宽的原因：错关联比不关联更糟——一条轨迹里混进别人，
 后面所有基于轨迹的判断都会错。
@@ -124,6 +124,9 @@ class CrossCameraMatcher:
         self._default_gap = float(self.cfg.get('max_gap_seconds') or 120.0)
         self._max_overlap = float(self.cfg.get('max_overlap_seconds') or 60.0)
         self._use_strong_id = bool(self.cfg.get('use_strong_id', True))
+        # 同一相机上的两段轨迹默认不关联：那大概率是两个不同目标，
+        # 一旦串起来会让身份越滚越大（实测同相机 37s 内的两辆车外观相似度 0.94）。
+        self._link_same_camera = bool(self.cfg.get('link_same_camera', False))
         # camera_id -> 组名 / 组时间窗
         self._camera_group: Dict[str, str] = {}
         self._group_gap: Dict[str, float] = {}
@@ -181,6 +184,11 @@ class CrossCameraMatcher:
         group_gap = self._group_gap.get(group_name, self._default_gap) if group_name else self._default_gap
         return min(family_gap, group_gap)
 
+    @property
+    def link_same_camera(self) -> bool:
+        """是否允许同相机互相关联（默认关闭）"""
+        return self._link_same_camera
+
     def threshold_of(self, family: str) -> Dict[str, Any]:
         return self._thresholds.get(family) or self._thresholds.get('other') or {
             'min_score': 0.74, 'min_margin': 0.10,
@@ -213,9 +221,15 @@ class CrossCameraMatcher:
                                    {'strong_id': 1.0})
             return None
 
-        # 3) 同一区域组（硬门控）
+        # 3) 相机拓扑（硬门控）
         same_camera = str(anchor.camera_id) == str(candidate.camera_id)
-        if not same_camera and not self.same_group(anchor.camera_id, candidate.camera_id):
+        if same_camera:
+            # 强 ID 一致的情况已在第 2 步直接放行，这里只剩下"靠外观/时间猜"的路径。
+            # 跨相机跟踪的语义是"同一个目标换了相机"，同相机重入交给单相机跟踪处理，
+            # 默认关闭，避免把同机位的不同目标串成一条大轨迹。
+            if not self._link_same_camera:
+                return None
+        elif not self.same_group(anchor.camera_id, candidate.camera_id):
             return None
 
         # 4) 通行时间窗（硬门控）

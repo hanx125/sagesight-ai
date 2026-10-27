@@ -23,7 +23,7 @@
             </div>
             <div class="tracks-stat-body">
                 <div class="tracks-stat-value" id="statIdentities">-</div>
-                <div class="tracks-stat-label">轨迹总数</div>
+                <div class="tracks-stat-label">已串联轨迹</div>
             </div>
         </div>
         <div class="tracks-stat-card">
@@ -96,7 +96,13 @@
             <div class="filter-group">
                 <label class="checkbox-label">
                     <input type="checkbox" id="trackMultiOnly" onchange="Tracks.applyFilters()">
-                    <span>仅看跨机轨迹</span>
+                    <span>仅看多机轨迹</span>
+                </label>
+            </div>
+            <div class="filter-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="trackIncludeSingleton" onchange="Tracks.applyFilters()">
+                    <span>包含单点片段</span>
                 </label>
             </div>
             <div class="filter-actions">
@@ -295,6 +301,7 @@
     background: rgba(82, 196, 26, 0.9);
 }
 .tracks-page .track-status-tag.closed { background: rgba(120, 152, 180, 0.9); }
+.tracks-page .track-status-tag.singleton { background: rgba(250, 173, 20, 0.9); }
 
 .tracks-page .track-card-body { padding: 10px 12px 12px; }
 .tracks-page .track-card-head {

@@ -103,7 +103,8 @@ def register_cross_camera_blueprint(app):
         class_name = (request.args.get('class_name') or '').strip()
         camera_id = (request.args.get('camera_id') or '').strip()
         status = (request.args.get('status') or '').strip()
-        min_events = request.args.get('min_events', 1, type=int)
+        # 默认只看"真的串起来了"的轨迹（≥2 段）；min_events=1 时包含单点身份
+        min_events = request.args.get('min_events', 2, type=int)
         multi_only = request.args.get('multi_camera') == '1'
 
         start_time = request.args.get('start_time', type=float)

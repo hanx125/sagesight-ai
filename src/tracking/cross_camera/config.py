@@ -51,6 +51,7 @@ DEFAULTS: Dict[str, Any] = {
     },
     'weights': {'appearance': 0.55, 'shape': 0.15, 'temporal': 0.30},
     'use_strong_id': True,
+    'link_same_camera': False,
 }
 
 _cache: Dict[str, Any] = {}
@@ -77,6 +78,8 @@ _FILE_HEADER = """# ========================================
 #                             max_gap_seconds（family = person | vehicle | other）
 #   weights                   appearance / shape / temporal 权重（保存时自动归一化）
 #   use_strong_id             是否用 人脸姓名 / 车牌号 做硬关联
+#   link_same_camera          是否允许同一相机上的两段轨迹互相关联（默认 false；
+#                             只在同相机重入场景才有意义，开启容易把不同目标串成一条）
 """
 
 
@@ -116,6 +119,7 @@ def _normalize(raw: Dict[str, Any]) -> Dict[str, Any]:
     cfg['batch_size'] = int(_to_float(cfg.get('batch_size'), 100, 1, 1000))
     cfg['identity_ttl_minutes'] = _to_float(cfg.get('identity_ttl_minutes'), 30.0, 1.0, 1440.0)
     cfg['use_strong_id'] = bool(cfg.get('use_strong_id', True))
+    cfg['link_same_camera'] = bool(cfg.get('link_same_camera', False))
 
     # 分组：过滤掉非法项，统一成 {name, cameras[], max_gap_seconds}
     groups: List[Dict[str, Any]] = []

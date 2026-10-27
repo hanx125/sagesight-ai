@@ -121,12 +121,26 @@ def test_group_gating():
     assert m.evaluate(a, other_group) is None, "跨分组必须拒绝"
 
 
-def test_same_camera_overlap_rejected():
+def test_same_camera_rejected_by_default():
+    """同相机默认不关联：现场实测同机位两辆车的车窗外形相似度能到 0.94，
+    一旦允许就会把不同目标串成一条越滚越大的身份"""
     m = make_matcher()
     a = trk('cam1', '人', 1000, 1020)
     overlap = trk('cam1', '人', 1010, 1030)   # 同一相机同时出现，必是两个人
-    later = trk('cam1', '人', 1030, 1040)     # 离开后再进入（重入）
+    later = trk('cam1', '人', 1030, 1040)     # 离开后再进入
     assert m.evaluate(a, overlap) is None
+    assert m.evaluate(a, later) is None, "默认不应允许同相机关联"
+    # 换成另一台相机则正常
+    assert m.evaluate(a, trk('cam2', '人', 1030, 1040)) is not None
+
+
+def test_same_camera_enabled():
+    """显式打开 link_same_camera 后按"重入"规则关联（时间不重叠才允许）"""
+    m = make_matcher(link_same_camera=True)
+    a = trk('cam1', '人', 1000, 1020)
+    overlap = trk('cam1', '人', 1010, 1030)
+    later = trk('cam1', '人', 1030, 1040)
+    assert m.evaluate(a, overlap) is None, "时间重叠必是两个人"
     assert m.evaluate(a, later) is not None
 
 
@@ -293,6 +307,59 @@ def test_pending_scan_self_heals():
         store._SCHEMA_READY = False
 
 
+def test_singleton_purged_after_ttl():
+    """只挂了一段、始终没等到跨机同伴的身份到期应被回收，
+    否则轨迹页会被"单点身份"刷满噪声"""
+    tmpdir = tempfile.mkdtemp(prefix='cc_test3_')
+    db_path = os.path.join(tmpdir, 'tasks.db')
+    original = store._DB_PATH
+    store._DB_PATH = db_path
+    store._SCHEMA_READY = False
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.executescript(_SCHEMA)
+        conn.commit()
+        conn.close()
+        store.ensure_schema()
+
+        now = time.time()
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            'INSERT INTO events (event_id, camera_id, class_name, start_time, '
+            'end_time, status, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            ('lonely', 'cam1', '人', _fmt(now - 30), _fmt(now - 20), 'final', '{}'),
+        )
+        conn.commit()
+        conn.close()
+
+        from src.tracking.cross_camera.fusion_service import CrossCameraFusionService
+        service = CrossCameraFusionService()
+        service._matcher.update_config(CFG)
+        service._process_batch(10)
+
+        conn = sqlite3.connect(db_path)
+        status = conn.execute(
+            'SELECT status FROM cross_camera_identities'
+        ).fetchone()
+        conn.close()
+        assert status and status[0] == 'singleton', f"单段身份应为 singleton，实际 {status}"
+
+        store.close_stale_identities(ttl_minutes=0.01)   # 立刻过期
+        conn = sqlite3.connect(db_path)
+        left = conn.execute('SELECT COUNT(*) FROM cross_camera_identities').fetchone()[0]
+        links = conn.execute('SELECT COUNT(*) FROM cross_camera_links').fetchone()[0]
+        mark = conn.execute(
+            "SELECT cross_identity_id FROM events WHERE event_id='lonely'"
+        ).fetchone()[0]
+        conn.close()
+        assert left == 0 and links == 0, "过期单点身份应被删除"
+        assert mark == store.EXCLUDED_ID, f"事件应标记为不参与，实际 {mark}"
+        print(f"  单点身份已回收，事件标记={mark}")
+    finally:
+        store._DB_PATH = original
+        store._SCHEMA_READY = False
+
+
 # ========================================
 # 运行
 # ========================================
@@ -304,11 +371,13 @@ def main():
         ('跨类别拒绝', test_class_mismatch_rejected),
         ('通行时间窗', test_time_window),
         ('区域分组门控', test_group_gating),
-        ('同相机重叠拒绝', test_same_camera_overlap_rejected),
+        ('同相机默认不关联', test_same_camera_rejected_by_default),
+        ('同相机关联开关', test_same_camera_enabled),
         ('强 ID 关联', test_strong_id),
         ('候选接近时放弃', test_margin_requires_unique_best),
         ('端到端融合', test_fusion_end_to_end),
         ('迟到事件自愈', test_pending_scan_self_heals),
+        ('单点身份过期回收', test_singleton_purged_after_ttl),
     ]
     failed = 0
     for name, fn in tests:

@@ -2141,6 +2141,7 @@ function applyCrossCameraConfig(cfg) {
     ccSetInput('ccMaxCameras', cfg.max_cameras_per_identity);
     ccSetInput('ccPollInterval', cfg.poll_interval);
     ccSetChecked('ccUseStrongId', cfg.use_strong_id);
+    ccSetChecked('ccLinkSameCamera', cfg.link_same_camera);
 
     const th = cfg.thresholds || {};
     const person = th.person || {};
@@ -2270,6 +2271,7 @@ async function saveCrossCameraConfig() {
         max_cameras_per_identity: ccNum('ccMaxCameras', 32),
         poll_interval: ccNum('ccPollInterval', 1),
         use_strong_id: document.getElementById('ccUseStrongId').checked,
+        link_same_camera: document.getElementById('ccLinkSameCamera').checked,
         groups: collectCrossCameraGroups(),
         thresholds: {
             person: {

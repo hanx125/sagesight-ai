@@ -235,20 +235,30 @@ def set_event_identity(event_ids: List[str], identity_id: str) -> None:
 # ========================================
 
 def fetch_candidate_identities(class_name: str, since: float,
-                               limit: int = 60) -> List[Dict[str, Any]]:
-    """取同类别、最近活跃的候选身份（按最近出现时间倒序）"""
+                               limit: int = 60,
+                               exclude_camera: str = '') -> List[Dict[str, Any]]:
+    """取同类别、最近活跃的候选身份（按最近出现时间倒序）
+
+    包含 singleton（只挂了一段轨迹、还没等到跨机同伴的身份）——这正是
+    跨相机串联的起点，不能因为"只有一段"就被排除。
+
+    exclude_camera 用于关掉同相机关联时排除"锚点正好落在本相机"的身份：
+    既省得分，也避免繁忙相机把候选窗口（limit）占满，让真正该匹配的
+    另一台相机候选被挤出去。
+    """
     ensure_schema()
+    sql = ("SELECT * FROM cross_camera_identities "
+           "WHERE class_name = ? AND last_seen >= ? "
+           "AND status IN ('active', 'singleton')")
+    params: List[Any] = [class_name, float(since)]
+    if exclude_camera:
+        sql += ' AND anchor_camera_id != ?'
+        params.append(str(exclude_camera))
+    sql += ' ORDER BY last_seen DESC LIMIT ?'
+    params.append(int(limit))
     try:
         with _connect() as conn:
-            rows = conn.execute(
-                '''
-                SELECT * FROM cross_camera_identities
-                WHERE class_name = ? AND last_seen >= ? AND status = 'active'
-                ORDER BY last_seen DESC
-                LIMIT ?
-                ''',
-                (class_name, float(since), int(limit)),
-            ).fetchall()
+            rows = conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
     except Exception as e:
         logger.warning(f"[CrossCamera] 查询候选身份失败: {e}")
@@ -283,7 +293,7 @@ def create_identity(tracklet, family: str, image_url: str = '') -> str:
                  event_count, camera_count, cameras, best_image_url, status,
                  anchor_event_id, anchor_camera_id, anchor_start, anchor_end,
                  anchor_feature, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, ?, 'singleton', ?, ?, ?, ?, ?, ?, ?)
                 ''',
                 (identity_id, tracklet.class_name, family, tracklet.strong_id or '',
                  tracklet.start_time, tracklet.end_time,
@@ -364,6 +374,7 @@ def attach_to_identity(identity_id: str, tracklet, score: float,
                         strong_id = CASE WHEN COALESCE(strong_id, '') = '' THEN ? ELSE strong_id END,
                         anchor_event_id = ?, anchor_camera_id = ?,
                         anchor_start = ?, anchor_end = ?, anchor_feature = ?,
+                        status = 'active',
                         updated_at = ?
                     WHERE identity_id = ?
                     ''',
@@ -383,6 +394,7 @@ def attach_to_identity(identity_id: str, tracklet, score: float,
                         cameras = ?,
                         best_image_url = ?,
                         strong_id = CASE WHEN COALESCE(strong_id, '') = '' THEN ? ELSE strong_id END,
+                        status = 'active',
                         updated_at = ?
                     WHERE identity_id = ?
                     ''',
@@ -398,7 +410,12 @@ def attach_to_identity(identity_id: str, tracklet, score: float,
 
 
 def close_stale_identities(ttl_minutes: float) -> int:
-    """把长时间未出现的身份标记为 closed（仍在库里，可查询）"""
+    """到期身份处理
+
+    - active   → 'closed'（仍在库里，可查询、可被后续片段复活）
+    - singleton→ 直接删除：只挂了一段、始终没等到跨机同伴，留着只会把轨迹页刷满噪声；
+                 对应事件标为 '-' 不再重新排队
+    """
     ensure_schema()
     deadline = time.time() - float(ttl_minutes) * 60.0
     try:
@@ -409,7 +426,33 @@ def close_stale_identities(ttl_minutes: float) -> int:
                 (deadline,),
             )
             count = cur.rowcount
+
+            stale_singletons = [
+                row[0] for row in conn.execute(
+                    "SELECT identity_id FROM cross_camera_identities "
+                    "WHERE status = 'singleton' AND last_seen < ?",
+                    (deadline,),
+                ).fetchall()
+            ]
+            if stale_singletons:
+                marks = ','.join('?' * len(stale_singletons))
+                conn.execute(
+                    f'UPDATE events SET cross_identity_id = ? WHERE event_id IN '
+                    f'(SELECT event_id FROM cross_camera_links '
+                    f'WHERE identity_id IN ({marks}))',
+                    [EXCLUDED_ID] + stale_singletons,
+                )
+                conn.execute(
+                    f'DELETE FROM cross_camera_links WHERE identity_id IN ({marks})',
+                    stale_singletons,
+                )
+                conn.execute(
+                    f'DELETE FROM cross_camera_identities WHERE identity_id IN ({marks})',
+                    stale_singletons,
+                )
             conn.commit()
+        if stale_singletons:
+            logger.debug(f"[CrossCamera] 清理单点身份 {len(stale_singletons)} 个")
         return count
     except Exception as e:
         logger.debug(f"[CrossCamera] 关闭过期身份失败: {e}")
@@ -494,12 +537,19 @@ def list_links(identity_id: str, limit: int = 200) -> List[Dict[str, Any]]:
 
 
 def stats_summary() -> Dict[str, Any]:
-    """概览数字（轨迹页顶部）"""
+    """概览数字（轨迹页顶部）
+
+    identity_count 只统计"真的串起来了"的轨迹（≥2 段），
+    单点身份只是等待跨机同伴的中间态，计入会让数字虚高。
+    """
     ensure_schema()
     try:
         with _connect() as conn:
             identity_count = conn.execute(
-                'SELECT COUNT(*) FROM cross_camera_identities'
+                'SELECT COUNT(*) FROM cross_camera_identities WHERE event_count >= 2'
+            ).fetchone()[0]
+            singleton_count = conn.execute(
+                "SELECT COUNT(*) FROM cross_camera_identities WHERE event_count < 2"
             ).fetchone()[0]
             multi_camera = conn.execute(
                 'SELECT COUNT(*) FROM cross_camera_identities WHERE camera_count > 1'
@@ -510,10 +560,11 @@ def stats_summary() -> Dict[str, Any]:
             ).fetchone()[0]
         return {
             'identity_count': identity_count,
+            'singleton_count': singleton_count,
             'multi_camera_count': multi_camera,
             'link_count': link_count,
             'pending_events': pending,
         }
     except Exception:
-        return {'identity_count': 0, 'multi_camera_count': 0,
+        return {'identity_count': 0, 'singleton_count': 0, 'multi_camera_count': 0,
                 'link_count': 0, 'pending_events': 0}
