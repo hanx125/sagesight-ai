@@ -207,7 +207,12 @@ def register_cross_camera_blueprint(app):
 
     @bp.route('/api/cross-camera/rebuild', methods=['POST'])
     def cross_camera_rebuild():
-        """重建最近一段时间的事件关联（默认 6 小时，最多 72 小时）"""
+        """重建最近一段时间的事件关联（默认 6 小时，最多 72 小时）
+
+        可选 recalc_features=true：先把这批事件的外观特征清空，让融合线程
+        按当前后端（直方图 / ReID）重新提取。切换特征后端、或重新校准过
+        中心化均值之后必须这么做，否则新旧特征不可比，外观维度会直接失效。
+        """
         data = request.get_json() or {}
         try:
             hours = float(data.get('hours', 6))
@@ -215,6 +220,11 @@ def register_cross_camera_blueprint(app):
             hours = 6.0
         hours = max(0.5, min(72.0, hours))
         since = time.time() - hours * 3600
+        recalc_features = bool(data.get('recalc_features'))
+
+        cleared = 0
+        if recalc_features:
+            cleared = store.clear_features(since)
 
         try:
             with sqlite3.connect(str(_DB_PATH), timeout=20) as conn:
@@ -255,12 +265,13 @@ def register_cross_camera_blueprint(app):
 
         logger.info(
             f"[CrossCamera] 重建已提交：{len(event_ids)} 条事件重新排队，"
-            f'清理 {removed} 个空身份（最近 {hours:g} 小时）'
+            f'清理 {removed} 个空身份，重算外观特征 {cleared} 条（最近 {hours:g} 小时）'
         )
         return jsonify({
             'message': f'{len(event_ids)} 条事件已重新排队，融合服务会按时间顺序重新关联',
             'requeued': len(event_ids),
             'removed_identities': removed,
+            'features_cleared': cleared,
         })
 
     app.register_blueprint(bp)

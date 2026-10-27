@@ -253,20 +253,32 @@ class CrossCameraMatcher:
         desc_a, desc_b = anchor.feature, candidate.feature
         sim = {'appearance': 0.0, 'shape': 0.0}
         has_appearance = use_appearance and bool(desc_a) and bool(desc_b)
+        feat_version = 0
         if has_appearance:
             sim = feat_mod.compare(desc_a, desc_b)
+            feat_version = int(sim.get('version') or 0)
+            if not sim.get('compatible'):
+                # 两端特征版本不同（一边是旧直方图、一边是新 ReID），
+                # 特征空间不可比。宁可当成"没有外观特征"退化到时空判断，
+                # 也不能拿两套不可比的向量硬算相似度。
+                has_appearance = False
+                sim = {'appearance': 0.0, 'shape': 0.0}
 
         weights = dict(self._weights or {'appearance': 0.55, 'shape': 0.15, 'temporal': 0.30})
         if not has_appearance:
-            # 没有外观特征时（快照缺失/关掉外观），退化为纯时空关联：
+            # 没有外观特征时（快照缺失/模型未就绪/版本不一致），退化为纯时空关联：
             # 阈值也换成独立的 min_score_temporal_only，避免统一的 min_score
             # 把「时间很近但没有外观」的合理关联全部拒掉。
             weights.pop('appearance', None)
             weights.pop('shape', None)
             weights = {'temporal': 1.0}
         else:
-            # 同一相机重入：同款衣服常见，外观要求更高
-            if same_camera and sim['appearance'] < 0.72:
+            # 同一相机重入：同款衣服常见，外观要求更高。
+            # ReID 余弦普遍比直方图交集高，门槛相应抬高（0 = 用版本默认值）。
+            same_cam_cfg = float(threshold.get('same_camera_min_appearance') or 0.0)
+            same_cam_min = same_cam_cfg if same_cam_cfg > 0 else (
+                0.80 if feat_version >= feat_mod.REID_VERSION else 0.72)
+            if same_camera and sim['appearance'] < same_cam_min:
                 return None
 
         total_weight = sum(weights.values()) or 1.0
@@ -282,9 +294,17 @@ class CrossCameraMatcher:
             'temporal': round(temporal, 4),
             'gap_seconds': round(gap, 2),
         }
+        if has_appearance:
+            components['feature_version'] = feat_version
 
         if has_appearance:
-            required = float(threshold.get('min_score', 0.7))
+            # ReID 的余弦分布比直方图交集更尖（同人 0.5~0.85、不同人 0.1~0.4），
+            # 用同一套阈值会系统性偏严/偏松，所以留了独立的 min_score_reid。
+            if feat_version >= feat_mod.REID_VERSION:
+                required = float(threshold.get(
+                    'min_score_reid', threshold.get('min_score', 0.7)))
+            else:
+                required = float(threshold.get('min_score', 0.7))
         else:
             required = float(threshold.get(
                 'min_score_temporal_only',

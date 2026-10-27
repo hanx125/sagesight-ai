@@ -180,7 +180,8 @@ def fetch_pending_events(limit: int = 100) -> List[Dict[str, Any]]:
                 '''
                 SELECT id, event_id, task_id, camera_id, class_name, confidence,
                        start_time, end_time, local_image_url, metadata,
-                       cross_feature, entered_zones, zone_name
+                       cross_feature, entered_zones, zone_name, bbox,
+                       image_width, image_height
                 FROM events
                 WHERE status = 'final' AND cross_identity_id IS NULL
                 ORDER BY id ASC
@@ -198,7 +199,7 @@ def fetch_pending_events(limit: int = 100) -> List[Dict[str, Any]]:
                     '''
                     SELECT id, event_id, task_id, camera_id, class_name, confidence,
                            start_time, end_time, local_image_url, metadata,
-                           entered_zones, zone_name
+                           entered_zones, zone_name, bbox
                     FROM events
                     WHERE status = 'final' AND cross_identity_id IS NULL
                     ORDER BY id ASC
@@ -228,6 +229,56 @@ def set_event_identity(event_ids: List[str], identity_id: str) -> None:
             conn.commit()
     except Exception as e:
         logger.warning(f"[CrossCamera] 回填事件身份失败: {e}")
+
+
+def set_event_feature(event_id: str, feature: str) -> None:
+    """回写外观特征（融合线程补算后落库，下次重建不必重算）"""
+    if not event_id:
+        return
+    try:
+        with _connect() as conn:
+            conn.execute(
+                'UPDATE events SET cross_feature = ? WHERE event_id = ?',
+                (feature or '', event_id),
+            )
+            conn.commit()
+    except Exception as e:
+        logger.debug(f"[CrossCamera] 回写外观特征失败: {e}")
+
+
+def clear_features(since: float = None) -> int:
+    """清空外观特征，让融合线程按当前后端重算
+
+    切换特征后端（直方图 ↔ ReID）后必须走这一步，否则新旧特征版本混在
+    一起，跨版本比较会被判定为不可比，外观维度直接失效。
+
+    Args:
+        since: 只清该时间点之后结束的事件；None 表示全清
+
+    Returns:
+        清理条数
+    """
+    ensure_schema()
+    try:
+        with _connect() as conn:
+            if since:
+                cur = conn.execute(
+                    "UPDATE events SET cross_feature = '' "
+                    "WHERE end_time >= datetime(?, 'unixepoch') "
+                    "AND cross_feature IS NOT NULL AND cross_feature != ''",
+                    (float(since),),
+                )
+            else:
+                cur = conn.execute(
+                    "UPDATE events SET cross_feature = '' "
+                    "WHERE cross_feature IS NOT NULL AND cross_feature != ''"
+                )
+            count = cur.rowcount
+            conn.commit()
+        return count
+    except Exception as e:
+        logger.warning(f"[CrossCamera] 清空外观特征失败: {e}")
+        return 0
 
 
 # ========================================

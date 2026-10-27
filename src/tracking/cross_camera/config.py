@@ -39,19 +39,29 @@ DEFAULTS: Dict[str, Any] = {
                     'vehicle', 'motorbike', 'motorcycle', 'bicycle'],
     },
     'thresholds': {
-        'person': {'min_score': 0.62, 'min_margin': 0.08,
+        'person': {'min_score': 0.62, 'min_score_reid': 0.58, 'min_margin': 0.08,
                    'use_appearance': True, 'max_gap_seconds': 120,
                    'min_score_temporal_only': 0.35},
-        'vehicle': {'min_score': 0.66, 'min_margin': 0.08,
+        'vehicle': {'min_score': 0.66, 'min_score_reid': 0.62, 'min_margin': 0.08,
                     'use_appearance': True, 'max_gap_seconds': 180,
                     'min_score_temporal_only': 0.40},
-        'other': {'min_score': 0.74, 'min_margin': 0.10,
+        'other': {'min_score': 0.74, 'min_score_reid': 0.70, 'min_margin': 0.10,
                   'use_appearance': True, 'max_gap_seconds': 60,
                   'min_score_temporal_only': 0.50},
     },
     'weights': {'appearance': 0.55, 'shape': 0.15, 'temporal': 0.30},
     'use_strong_id': True,
     'link_same_camera': False,
+    'feature': {
+        'backend': 'reid',
+        'extract_in': 'fusion',
+        'model_path': 'models/reid/reid_resnet18.onnx',
+        'input_width': 128,
+        'input_height': 256,
+        'num_threads': 2,
+        'min_crop_px': 24,
+        'min_sharpness': 0.0,
+    },
 }
 
 _cache: Dict[str, Any] = {}
@@ -80,6 +90,16 @@ _FILE_HEADER = """# ========================================
 #   use_strong_id             是否用 人脸姓名 / 车牌号 做硬关联
 #   link_same_camera          是否允许同一相机上的两段轨迹互相关联（默认 false；
 #                             只在同相机重入场景才有意义，开启容易把不同目标串成一条）
+#   feature.backend           外观特征后端：reid（ONNX 模型，判别力强）/ histogram（颜色直方图，兜底）
+#   feature.extract_in        提取时机：fusion（融合线程，单份模型、支持历史重算，默认）
+#                             / worker（相机进程，内存按相机数翻倍，只在单机位场景考虑）
+#   feature.model_path        ONNX 模型路径（相对项目根目录）
+#   feature.input_width/height 模型输入尺寸，模型自带固定尺寸时以模型为准
+#   feature.num_threads       onnxruntime CPU 线程数（盒子要给解码/检测留余量）
+#   feature.min_crop_px       目标过小时跳过（像素），避免给小目标算噪声特征
+#   feature.min_sharpness     模糊度下限（拉普拉斯方差），0 = 不检查
+#   thresholds.<family>.min_score_reid  ReID 后端的综合分下限（与直方图的 min_score 分开调）
+#   thresholds.<family>.same_camera_min_appearance 同相机重入的外观门槛，0 = 按版本默认
 """
 
 
@@ -160,6 +180,12 @@ def _normalize(raw: Dict[str, Any]) -> Dict[str, Any]:
             'min_score_temporal_only': _to_float(
                 src.get('min_score_temporal_only'),
                 default.get('min_score_temporal_only', 0.35), 0.0, 1.0),
+            # ReID 后端的综合分下限：余弦分布与直方图交集不同，需要独立阈值
+            'min_score_reid': _to_float(
+                src.get('min_score_reid'), default.get('min_score_reid', 0.62), 0.0, 1.0),
+            # 同相机重入的外观门槛（ReID 下应更高），未配置时由匹配器按版本给默认
+            'same_camera_min_appearance': _to_float(
+                src.get('same_camera_min_appearance'), 0.0, 0.0, 1.0),
         }
     cfg['thresholds'] = thresholds
 
@@ -175,6 +201,26 @@ def _normalize(raw: Dict[str, Any]) -> Dict[str, Any]:
     elif abs(total - 1.0) > 1e-6:
         # 归一化，避免线上手改权重把分数算歪
         cfg['weights'] = {k: v / total for k, v in cfg['weights'].items()}
+
+    # 外观特征：后端与提取时机
+    feat = cfg.get('feature') or {}
+    feat_default = DEFAULTS['feature']
+    backend = str(feat.get('backend') or feat_default['backend']).strip().lower()
+    if backend not in ('reid', 'histogram'):
+        backend = feat_default['backend']
+    extract_in = str(feat.get('extract_in') or feat_default['extract_in']).strip().lower()
+    if extract_in not in ('fusion', 'worker'):
+        extract_in = feat_default['extract_in']
+    cfg['feature'] = {
+        'backend': backend,
+        'extract_in': extract_in,
+        'model_path': str(feat.get('model_path') or feat_default['model_path']).strip(),
+        'input_width': int(_to_float(feat.get('input_width'), 128, 32, 512)),
+        'input_height': int(_to_float(feat.get('input_height'), 256, 32, 1024)),
+        'num_threads': int(_to_float(feat.get('num_threads'), 2, 1, 16)),
+        'min_crop_px': int(_to_float(feat.get('min_crop_px'), 24, 0, 256)),
+        'min_sharpness': _to_float(feat.get('min_sharpness'), 0.0, 0.0, 500.0),
+    }
 
     return cfg
 

@@ -27,6 +27,8 @@ from src.tracking.cross_camera.matcher import (
     parse_event_time,
     strong_id_from_metadata,
 )
+from src.tracking.cross_camera import features as feat_mod
+from src.tracking.cross_camera import snapshot
 from src.tracking.cross_camera import store
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,25 @@ logger = logging.getLogger(__name__)
 _MAX_FAILURES = 3
 # 过期身份收敛周期（秒）
 _CLOSE_STALE_INTERVAL = 300
+
+
+def _parse_bbox(value) -> Optional[List[float]]:
+    """events.bbox 存的是 JSON 字符串 '[x1, y1, x2, y2]'，也可能已是列表"""
+    if not value:
+        return None
+    if isinstance(value, (list, tuple)):
+        data = list(value)
+    else:
+        try:
+            data = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if not isinstance(data, (list, tuple)) or len(data) < 4:
+        return None
+    try:
+        return [float(v) for v in data[:4]]
+    except (TypeError, ValueError):
+        return None
 
 
 def _json_list(value) -> List[str]:
@@ -62,6 +83,7 @@ class CrossCameraFusionService:
         self._last_stale_check = 0.0
         self._was_enabled = False
         self._processed_total = 0
+        self._extracted_total = 0
 
     # ========================================
     # 生命周期
@@ -196,6 +218,56 @@ class CrossCameraFusionService:
     # 单条事件融合
     # ========================================
 
+    def _ensure_feature(self, row: Dict[str, Any]) -> Optional[str]:
+        """确保事件有外观特征
+
+        优先用落库时已算好的；为空则现场读快照补算并回写。
+        这个"惰性补算"让从直方图切到 ReID 不需要停机迁移：
+        旧事件被处理到时自动升级成新特征，没被处理的保持原样，
+        跨版本比较会自动退化，不会算出错误的相似度。
+        """
+        feature = (row.get('cross_feature') or '').strip()
+        if feature:
+            return feature
+
+        cfg = self._matcher.cfg or {}
+        feat_cfg = cfg.get('feature') or {}
+        if str(feat_cfg.get('extract_in') or 'fusion') != 'fusion':
+            return None
+
+        event_id = row.get('event_id') or ''
+        if not event_id:
+            return None
+
+        bbox = _parse_bbox(row.get('bbox'))
+        if bbox is None:
+            return None
+
+        image = snapshot.load_snapshot(event_id, row.get('local_image_url') or '')
+        if image is None:
+            return None
+
+        bbox = _parse_bbox(row.get('bbox'))
+        if bbox is None:
+            return None
+
+        bbox, inset = self._bbox_for_snapshot(bbox, row, image)
+        if bbox is None:
+            return None
+        feature = feat_mod.extract_descriptor(image, bbox, inset=inset) or ''
+        if feature:
+            store.set_event_feature(event_id, feature)
+            self._extracted_total += 1
+            return feature
+        return None
+
+    @staticmethod
+    def _bbox_for_snapshot(bbox: List[float], row: Dict[str, Any],
+                           image):
+        """把 bbox 换算到落盘图坐标系（换算规则见 features.fit_bbox_to_image）"""
+        return feat_mod.fit_bbox_to_image(
+            bbox, image.shape, row.get('image_width'), row.get('image_height'))
+
     def _build_tracklet(self, row: Dict[str, Any]) -> Optional[Tracklet]:
         start_time = parse_event_time(row.get('start_time'))
         end_time = parse_event_time(row.get('end_time')) or start_time
@@ -220,7 +292,7 @@ class CrossCameraFusionService:
             class_name=(row.get('class_name') or '').strip(),
             start_time=start_time,
             end_time=end_time,
-            feature=row.get('cross_feature'),
+            feature=self._ensure_feature(row),
             strong_id=strong_id_from_metadata(metadata),
             image_url=row.get('local_image_url') or '',
             confidence=float(row.get('confidence') or 0.0),

@@ -918,17 +918,23 @@ class EventOutput:
                     logger.debug(f"[EventOutput] 创建事件图片处理失败: {e}")
                     compressed_image = None
 
-            # 跨相机：在此处提取一次外观描述子（约 1-3ms，仅开关打开时执行）
-            # 放在事件终态而不是逐帧，是为了不占检测/解码的算力
+            # 跨相机：外观描述子（仅开关打开时执行）
+            # 默认交给融合线程提取（extract_in=fusion）：
+            #   相机进程有 N 个，ReID 模型会跟着加载 N 份，盒子内存扛不住；
+            #   融合线程只有一个，且能对历史事件补算/重算特征。
+            # 只有显式配置 extract_in=worker 时才在这里算（单机位、低延迟场景）。
             cross_feature = ''
             if image is not None:
                 try:
-                    from src.tracking.cross_camera.config import is_cross_camera_enabled
+                    from src.tracking.cross_camera.config import (
+                        is_cross_camera_enabled, get_cross_camera_config)
                     if is_cross_camera_enabled():
-                        from src.tracking.cross_camera.features import extract_descriptor
-                        cross_feature = extract_descriptor(
-                            image, (data or {}).get('bbox')
-                        ) or ''
+                        feat_cfg = (get_cross_camera_config() or {}).get('feature') or {}
+                        if str(feat_cfg.get('extract_in') or 'fusion') == 'worker':
+                            from src.tracking.cross_camera.features import extract_descriptor
+                            cross_feature = extract_descriptor(
+                                image, (data or {}).get('bbox')
+                            ) or ''
                 except Exception as e:
                     logger.debug(f"[EventOutput] 跨相机特征提取失败: {e}")
 
@@ -936,6 +942,9 @@ class EventOutput:
             record = self._insert_tracking_record(
                 event_id, status, data, image_urls, event_type, dedup_status, dedup_reason,
                 cross_feature=cross_feature,
+                # 原图尺寸：bbox 用的是这个坐标系，落盘图被等比缩放过，
+                # 融合线程重算特征时要靠它把 bbox 换算回成品图坐标
+                image_size=(image.shape[1], image.shape[0]) if image is not None else None,
             )
 
             # 异步：远程上传 + WebSocket 推送
@@ -954,7 +963,7 @@ class EventOutput:
     def _insert_tracking_record(self, event_id: str, status: str, data: Dict,
                                 image_urls: Dict, event_type: str,
                                 dedup_status: str, dedup_reason: str,
-                                cross_feature: str = ''):
+                                cross_feature: str = '', image_size=None):
         """同步插入事件记录到数据库，返回 EventRecord"""
         from src.tasks.task_manager import TaskManager, EventRecord
 
@@ -986,6 +995,8 @@ class EventOutput:
             dedup_status=dedup_status or '',
             dedup_reason=dedup_reason or '',
             cross_feature=cross_feature or '',
+            image_width=int(image_size[0]) if image_size else 0,
+            image_height=int(image_size[1]) if image_size else 0,
         )
         TaskManager().add_event(record)
         if not record.created_at:

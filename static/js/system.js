@@ -2158,7 +2158,22 @@ function applyCrossCameraConfig(cfg) {
     ccSetInput('ccOtherGap', other.max_gap_seconds);
     ccSetInput('ccMinMargin', person.min_margin);
 
+    // 外观特征
+    const feat = cfg.feature || {};
+    ccSetSelect('ccFeatureBackend', feat.backend, 'reid');
+    ccSetSelect('ccFeatureExtractIn', feat.extract_in, 'fusion');
+    ccSetInput('ccFeatureModelPath', feat.model_path || '');
+    ccSetInput('ccFeatureThreads', feat.num_threads);
+    ccSetInput('ccFeatureMinCrop', feat.min_crop_px);
+    ccSetInput('ccFeatureSharpness', feat.min_sharpness);
+
     renderCrossCameraGroups(cfg.groups || []);
+}
+
+function ccSetSelect(id, value, fallback) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.value = value || fallback || '';
 }
 
 function crossCameraGroupRow(group, index) {
@@ -2292,6 +2307,14 @@ async function saveCrossCameraConfig() {
                 max_gap_seconds: ccNum('ccOtherGap', 60),
                 min_margin: margin
             }
+        },
+        feature: {
+            backend: (document.getElementById('ccFeatureBackend') || {}).value || 'reid',
+            extract_in: (document.getElementById('ccFeatureExtractIn') || {}).value || 'fusion',
+            model_path: ((document.getElementById('ccFeatureModelPath') || {}).value || '').trim(),
+            num_threads: ccNum('ccFeatureThreads', 2),
+            min_crop_px: ccNum('ccFeatureMinCrop', 32),
+            min_sharpness: ccNum('ccFeatureSharpness', 0)
         }
     };
 
@@ -2313,18 +2336,29 @@ async function saveCrossCameraConfig() {
 
 async function rebuildCrossCamera() {
     const hours = ccNum('ccRebuildHours', 6);
-    if (!confirm('确定要把最近 ' + hours + ' 小时的事件重新关联吗？\n原有轨迹会被拆开重建，重建期间轨迹页数据会短暂变化。')) {
+    const recalcEl = document.getElementById('ccRecalcFeatures');
+    const recalc = recalcEl ? recalcEl.checked : false;
+    let tip = '确定要把最近 ' + hours + ' 小时的事件重新关联吗？\n原有轨迹会被拆开重建，重建期间轨迹页数据会短暂变化。';
+    if (recalc) {
+        tip += '\n\n已勾选「重算外观特征」：这批事件的描述子会被清空并按当前后端重新提取。' +
+               '事件图已被清理的事件无法重算，会退化为纯时空关联。量大时融合队列会有积压。';
+    }
+    if (!confirm(tip)) {
         return;
     }
     try {
         const response = await fetch('/api/cross-camera/rebuild', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hours: hours })
+            body: JSON.stringify({ hours: hours, recalc_features: recalc })
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || '重建失败');
-        showNotification(data.message || '重建任务已提交', 'success');
+        let msg = data.message || '重建任务已提交';
+        if (data.features_cleared) {
+            msg += '，清空外观特征 ' + data.features_cleared + ' 条';
+        }
+        showNotification(msg, 'success');
     } catch (error) {
         console.error('重建跨相机关联失败:', error);
         showNotification('重建失败: ' + error.message, 'error');

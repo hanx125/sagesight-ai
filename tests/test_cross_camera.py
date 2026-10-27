@@ -361,10 +361,185 @@ def test_singleton_purged_after_ttl():
 
 
 # ========================================
+# 外观特征版本与降级
+# ========================================
+
+_ORIG_GET_FEATURE_CFG = feat.get_feature_config
+
+
+def _force_histogram():
+    feat.get_feature_config = lambda: {
+        'backend': 'histogram', 'min_crop_px': 0, 'min_sharpness': 0.0,
+    }
+
+
+def _force_reid(model_path: str):
+    feat.get_feature_config = lambda: {
+        'backend': 'reid', 'model_path': model_path,
+        'input_width': 128, 'input_height': 256, 'num_threads': 1,
+        'min_crop_px': 0, 'min_sharpness': 0.0,
+    }
+
+
+def _restore_feature_cfg():
+    feat.get_feature_config = _ORIG_GET_FEATURE_CFG
+
+
+def test_v2_descriptor_roundtrip():
+    """v2 自描述格式：编码后能原样解出维度、mu 指纹与单位向量"""
+    rng = np.random.default_rng(7)
+    vec = rng.normal(size=512).astype(np.float32)
+    mu = 1234567
+    raw = feat._encode_v2(vec, (200, 100, 90, 80), mu)
+    encoded = __import__('base64').b64encode(raw).decode('ascii')
+
+    parsed = feat.decode_any(encoded)
+    assert parsed is not None, 'v2 描述子解码失败'
+    version, decoded, meta, mu_hash = parsed
+    assert version == feat.REID_VERSION, f'版本错误: {version}'
+    assert decoded.shape[0] == 512, f'维度错误: {decoded.shape}'
+    assert mu_hash == mu, f'mu 指纹不一致: {mu_hash}'
+    assert meta == (200, 100, 90, 80), f'形状元数据错误: {meta}'
+    norm = float(np.linalg.norm(decoded))
+    assert abs(norm - 1.0) < 1e-2, f'应已归一化，实际范数 {norm:.4f}'
+    print(f"  维度={decoded.shape[0]} 范数={norm:.3f} mu_hash={mu_hash}")
+
+
+def test_v1_descriptor_still_readable():
+    """旧的 148 字节直方图描述子必须继续可读（历史数据不能作废）"""
+    _force_histogram()
+    try:
+        frame = make_person_frame((200, 40, 40), (40, 40, 200))
+        desc = feat.extract_descriptor(frame, (100, 100, 200, 300))
+        assert desc, '直方图描述子提取失败'
+        parsed = feat.decode_any(desc)
+        assert parsed is not None, 'v1 描述子解码失败'
+        version, vector, _meta, mu_hash = parsed
+        assert version == feat.DESCRIPTOR_VERSION, f'版本错误: {version}'
+        assert vector.shape[0] == 148, f'v1 长度应为 148，实际 {vector.shape}'
+        assert mu_hash == 0, 'v1 不应有 mu 指纹'
+        print(f"  v1 描述子仍可解析，长度 {vector.shape[0]}")
+    finally:
+        _force_histogram()
+
+
+def test_cross_version_incompatible():
+    """直方图特征与 ReID 特征不可比，必须显式判为不兼容"""
+    _force_histogram()
+    try:
+        frame = make_person_frame((200, 40, 40), (40, 40, 200))
+        v1 = feat.extract_descriptor(frame, (100, 100, 200, 300))
+    finally:
+        _force_histogram()
+
+    rng = np.random.default_rng(1)
+    raw = feat._encode_v2(rng.normal(size=512).astype(np.float32),
+                          (200, 100, 90, 80), 111)
+    v2 = __import__('base64').b64encode(raw).decode('ascii')
+
+    result = feat.compare(v1, v2)
+    assert result['compatible'] == 0, f'跨版本应判为不可比: {result}'
+    assert result['appearance'] == 0.0, '不可比时不应给出相似度'
+    print(f"  跨版本比较: compatible={result['compatible']}")
+
+
+def test_mu_hash_mismatch_incompatible():
+    """中心化均值变了，特征空间就变了，同样不能直接比"""
+    rng = np.random.default_rng(2)
+    vec = rng.normal(size=512).astype(np.float32)
+
+    def encode(mu):
+        raw = feat._encode_v2(vec, (200, 100, 90, 80), mu)
+        return __import__('base64').b64encode(raw).decode('ascii')
+
+    same = feat.compare(encode(111), encode(111))
+    diff = feat.compare(encode(111), encode(222))
+
+    assert same['compatible'] == 1, f'同均值应可比: {same}'
+    assert same['appearance'] > 0.99, f'同一向量余弦应约 1: {same}'
+    assert diff['compatible'] == 0, f'均值不同应判不可比: {diff}'
+    print(f"  同均值={same['appearance']:.3f} 异均值 compatible={diff['compatible']}")
+
+
+def test_reid_missing_model_falls_back():
+    """ReID 模型不存在时必须静默退回直方图，而不是抛错或不出特征"""
+    _force_reid('models/reid/__not_exists__.onnx')
+    try:
+        from src.tracking.cross_camera.reid import reset_backend
+        reset_backend()
+        frame = make_person_frame((200, 40, 40), (40, 40, 200))
+        desc = feat.extract_descriptor(frame, (100, 100, 200, 300))
+        assert desc, '降级后仍应产出直方图描述子'
+        parsed = feat.decode_any(desc)
+        assert parsed is not None, '降级描述子解码失败'
+        assert parsed[0] == feat.DESCRIPTOR_VERSION, \
+            f'应退回 v1 直方图，实际版本 {parsed[0]}'
+        print(f"  模型缺失 → 自动降级为 v1，长度 {parsed[1].shape[0]}")
+    finally:
+        _force_histogram()
+        from src.tracking.cross_camera.reid import reset_backend
+        reset_backend()
+
+
+def test_matcher_degrades_on_incompatible_feature():
+    """两侧特征不可比时，匹配器应忽略外观、按纯时空判断，而不是直接拒绝"""
+    cfg = _normalize({'enabled': True})
+    matcher = CrossCameraMatcher(cfg)
+
+    _force_histogram()
+    try:
+        frame = make_person_frame((200, 40, 40), (40, 40, 200))
+        v1 = feat.extract_descriptor(frame, (100, 100, 200, 300))
+    finally:
+        _force_histogram()
+
+    rng = np.random.default_rng(3)
+    raw = feat._encode_v2(rng.normal(size=512).astype(np.float32),
+                          (200, 100, 90, 80), 999)
+    v2 = __import__('base64').b64encode(raw).decode('ascii')
+
+    a = Tracklet('ev-a', 'camA', '人', 1000.0, 1010.0, feature=v1)
+    b = Tracklet('ev-b', 'camB', '人', 1015.0, 1025.0, feature=v2)
+    result = matcher.evaluate(a, b)
+
+    assert result is not None, '不可比特征不应导致整条候选被拒'
+    assert 'feature_version' not in result.components, \
+        f'不可比时不应记录外观版本: {result.components}'
+    assert result.components.get('temporal', 0) > 0.9, \
+        f'应退化为纯时空打分，实际 {result.components}'
+    print(f"  退化后得分={result.score:.3f} 依据={result.reason}")
+
+
+def test_bbox_fit_to_snapshot():
+    """落盘图被缩放后，bbox 必须换算回成品图坐标系"""
+    box = [239, 569, 282, 599]
+
+    # 原图 1440x1440，成品图 480x480 → 1/3
+    fitted, inset = feat.fit_bbox_to_image(box, (480, 480), 1440, 1440)
+    assert abs(fitted[0] - 239 / 3) < 1.5, f'x1 换算错误: {fitted}'
+    assert abs(fitted[1] - 569 / 3) < 1.5, f'y1 换算错误: {fitted}'
+    assert abs(fitted[3] - 599 / 3) < 1.5, f'y2 换算错误: {fitted}'
+    assert inset == 0.05
+
+    # 尺寸一致（未缩放）：原样返回
+    same, _ = feat.fit_bbox_to_image([10, 20, 30, 40], (480, 480), 480, 480)
+    assert same == [10, 20, 30, 40], f'未缩放时不应改动 bbox: {same}'
+
+    # 缺原图尺寸且 bbox 超出画面：说明图已是目标裁剪图，用整图
+    whole, inset2 = feat.fit_bbox_to_image(box, (480, 480), 0, 0)
+    assert whole == [0.0, 0.0, 480.0, 480.0], f'应回退整图: {whole}'
+    assert inset2 == 0.02
+    print(f"  缩放换算={[round(v, 1) for v in fitted]} 整图回退={whole}")
+
+
+# ========================================
 # 运行
 # ========================================
 
 def main():
+    # 合成测试图是为颜色直方图后端设计的，整体切过去；
+    # ReID 相关用例自行切换后端并在结束时切回
+    _force_histogram()
     tests = [
         ('外观特征相似度', test_descriptor_similarity),
         ('非法 bbox 容错', test_descriptor_rejects_bad_bbox),
@@ -378,6 +553,13 @@ def main():
         ('端到端融合', test_fusion_end_to_end),
         ('迟到事件自愈', test_pending_scan_self_heals),
         ('单点身份过期回收', test_singleton_purged_after_ttl),
+        ('v2 描述子往返', test_v2_descriptor_roundtrip),
+        ('v1 描述子兼容', test_v1_descriptor_still_readable),
+        ('跨版本不可比', test_cross_version_incompatible),
+        ('均值指纹不一致', test_mu_hash_mismatch_incompatible),
+        ('模型缺失降级', test_reid_missing_model_falls_back),
+        ('不可比时退化时空', test_matcher_degrades_on_incompatible_feature),
+        ('bbox 缩放换算', test_bbox_fit_to_snapshot),
     ]
     failed = 0
     for name, fn in tests:
@@ -390,6 +572,7 @@ def main():
         except Exception as e:
             failed += 1
             print(f"[ERR ] {name}: {type(e).__name__}: {e}")
+    _restore_feature_cfg()
     print(f"\n{'全部通过' if failed == 0 else f'{failed} 项失败'}")
     return 1 if failed else 0
 

@@ -810,6 +810,8 @@ class EventRecord:
     # 跨相机跟踪字段
     cross_feature: str = ""  # 外观描述子（base64，跨相机关联用）
     cross_identity_id: Optional[str] = None  # 所属跨相机身份（None=待融合，'-'=不参与）
+    image_width: int = 0   # 原图宽度（bbox 所在坐标系，落盘图缩放后换算用）
+    image_height: int = 0  # 原图高度
     created_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
@@ -1464,6 +1466,15 @@ class TaskManager:
             if 'cross_feature' not in columns:
                 cursor.execute("ALTER TABLE events ADD COLUMN cross_feature TEXT")
                 logger.info("[TaskManager] events 表添加 cross_feature 字段")
+            # 原图尺寸：事件图落盘时会等比缩放到 640x480 以内，但 bbox 仍是
+            # 原图坐标。融合线程按 event_id 读回图片后要重算外观特征，必须
+            # 靠这两个值把 bbox 换算到成品图坐标系，否则裁剪位置完全错位。
+            if 'image_width' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN image_width INTEGER DEFAULT 0")
+                logger.info("[TaskManager] events 表添加 image_width 字段")
+            if 'image_height' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN image_height INTEGER DEFAULT 0")
+                logger.info("[TaskManager] events 表添加 image_height 字段")
             try:
                 cursor.execute(
                     'CREATE INDEX IF NOT EXISTS ix_events_cross_identity '
@@ -1933,8 +1944,8 @@ class TaskManager:
                  confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
                  local_gif_url, minio_gif_url, ftp_gif_url,
                  metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
-                 cross_feature, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 cross_feature, image_width, image_height, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 event.event_id,
                 event.task_id,
@@ -1958,6 +1969,8 @@ class TaskManager:
                 event.zone_name,
                 json.dumps(event.loitered_zones),
                 event.cross_feature or '',
+                int(getattr(event, 'image_width', 0) or 0),
+                int(getattr(event, 'image_height', 0) or 0),
                 datetime.now()
             ))
             

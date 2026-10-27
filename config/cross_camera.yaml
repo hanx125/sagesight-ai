@@ -92,26 +92,34 @@ cross_camera:
   # ========================================
   # 各族的判定阈值
   # ========================================
-  # min_score   : 综合得分下限（有外观特征时），低于此值不关联
+  # min_score   : 综合得分下限（外观=直方图时），低于此值不关联
+  # min_score_reid: 综合得分下限（外观=ReID 时）。余弦分布和直方图交集不同，
+  #                 必须分开调：同一目标跨相机余弦常见 0.55~0.80，
+  #                 不同目标约 0.0~0.40，所以门槛放在 0.58 附近。
   # min_score_temporal_only: 快照缺失、只能靠时间判断时的下限（应明显更低）
   # min_margin  : 最高分需领先第二名多少（避免两个候选差不多时硬凑）
   # use_appearance: 是否使用外观特征（关闭则退化为纯时空关联）
   # max_gap_seconds: 该族覆盖默认通行时间窗
+  # same_camera_min_appearance: 同相机重入的外观门槛，0 = 按后端给默认
+  #                             （直方图 0.72 / ReID 0.80）
   thresholds:
     person:
       min_score: 0.62
+      min_score_reid: 0.58
       min_score_temporal_only: 0.35
       min_margin: 0.08
       use_appearance: true
       max_gap_seconds: 120
     vehicle:
       min_score: 0.66
+      min_score_reid: 0.62
       min_score_temporal_only: 0.40
       min_margin: 0.08
       use_appearance: true
       max_gap_seconds: 180
     other:
       min_score: 0.74
+      min_score_reid: 0.70
       min_score_temporal_only: 0.50
       min_margin: 0.10
       use_appearance: true
@@ -121,7 +129,7 @@ cross_camera:
   # 打分权重（三者相加建议为 1.0）
   # ========================================
   weights:
-    appearance: 0.55   # 外观相似度（直方图交集）
+    appearance: 0.55   # 外观相似度（ReID 余弦 / 直方图交集，按后端）
     shape: 0.15        # 形状先验（宽高比 + 相对身高）
     temporal: 0.30     # 时间接近度
 
@@ -133,3 +141,33 @@ cross_camera:
   # 开启后会把它们串成一条身份，轨迹越滚越大、跨机统计失真。
   # 只有确实需要"同机位目标重入"场景时才打开。
   link_same_camera: false
+
+  # ========================================
+  # 外观特征
+  # ========================================
+  # backend 决定"用什么描述目标外观"，两个选项：
+  #   reid      ONNX ReID 模型（默认）。能区分"同色不同人"，单次 20~80ms。
+  #             需要模型文件 models/reid/reid_resnet18.onnx，
+  #             以及中心化均值 models/reid/reid_resnet18.mu.npz（tools/calibrate_reid.py 生成）。
+  #             缺任何一个都会自动退回 histogram，不会报错中断。
+  #   histogram HSV 三区域颜色直方图。1~3ms，零依赖，对同色不同目标无力。
+  #
+  # extract_in 决定"在哪个进程提取"：
+  #   fusion    融合线程（默认）。整个进程只有一个模型实例，16 路相机也只占一份内存；
+  #             支持对历史事件补算/重算特征。
+  #   worker    相机进程。图在内存里不用读盘，但每个相机进程都会加载一份模型，
+  #             盒子 4GB 内存下 16 路会直接 OOM，只在单机位部署时考虑。
+  feature:
+    backend: reid
+    extract_in: fusion
+    model_path: models/reid/reid_resnet18.onnx
+    # 模型输入尺寸（模型自带固定尺寸时以模型为准）
+    input_width: 128
+    input_height: 256
+    # onnxruntime CPU 线程数。盒子 8 核且要留给解码/检测，别给太大
+    num_threads: 2
+    # 目标裁剪后短边小于该像素就跳过：这么小的目标提不出可靠特征，
+    # 硬算只会给匹配器喂噪声
+    min_crop_px: 32
+    # 模糊度下限（拉普拉斯方差），0 = 不检查
+    min_sharpness: 0.0
