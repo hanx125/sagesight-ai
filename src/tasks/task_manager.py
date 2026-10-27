@@ -807,6 +807,9 @@ class EventRecord:
     ai_description_time: Optional[datetime] = None  # 描述生成时间
     dedup_status: str = ""  # 去重状态：normal（正常）/duplicate（重复）
     dedup_reason: str = ""  # 去重判定原因
+    # 跨相机跟踪字段
+    cross_feature: str = ""  # 外观描述子（base64，跨相机关联用）
+    cross_identity_id: Optional[str] = None  # 所属跨相机身份（None=待融合，'-'=不参与）
     created_at: Optional[datetime] = None
     
     def to_dict(self) -> Dict:
@@ -848,6 +851,7 @@ class EventRecord:
             'ai_description_time': format_datetime(self.ai_description_time),
             'dedup_status': self.dedup_status,
             'dedup_reason': self.dedup_reason,
+            'cross_identity_id': self.cross_identity_id,
             'created_at': format_datetime(self.created_at)
         }
 
@@ -1451,6 +1455,35 @@ class TaskManager:
                 cursor.execute("ALTER TABLE events ADD COLUMN dedup_reason TEXT")
                 logger.debug("[TaskManager] events 表添加 dedup_reason 字段")
 
+            # 迁移：跨相机跟踪字段
+            # cross_identity_id: NULL=待融合 / '-'=历史事件不参与 / uuid=已关联身份
+            # cross_feature: 事件终态时提取的外观描述子（base64，约 200 字符）
+            if 'cross_identity_id' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN cross_identity_id TEXT")
+                logger.info("[TaskManager] events 表添加 cross_identity_id 字段")
+            if 'cross_feature' not in columns:
+                cursor.execute("ALTER TABLE events ADD COLUMN cross_feature TEXT")
+                logger.info("[TaskManager] events 表添加 cross_feature 字段")
+            try:
+                cursor.execute(
+                    'CREATE INDEX IF NOT EXISTS ix_events_cross_identity '
+                    'ON events (cross_identity_id)'
+                )
+            except sqlite3.OperationalError:
+                pass
+
+            # 跨相机身份/关联表（DDL 集中在 cross_camera.store，这里用同一个
+            # 连接执行，避免第二个连接在外层写事务里等锁）
+            try:
+                from src.tracking.cross_camera.store import SCHEMA_STATEMENTS
+                for statement in SCHEMA_STATEMENTS:
+                    try:
+                        cursor.execute(statement)
+                    except sqlite3.OperationalError as e:
+                        logger.debug(f"[TaskManager] 跨相机建表跳过: {e}")
+            except Exception as e:
+                logger.warning(f"[TaskManager] 跨相机表初始化失败: {e}")
+
             # ========================================
             # 人员统计（people counting）数据表
             # 计数区域按层级拆分存储：
@@ -1899,8 +1932,9 @@ class TaskManager:
                 (event_id, task_id, camera_id, algorithm, type, class_name,
                  confidence, bbox, local_image_url, minio_image_url, ftp_image_url,
                  local_gif_url, minio_gif_url, ftp_gif_url,
-                 metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
+                 cross_feature, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 event.event_id,
                 event.task_id,
@@ -1923,6 +1957,7 @@ class TaskManager:
                 json.dumps(event.entered_zones),
                 event.zone_name,
                 json.dumps(event.loitered_zones),
+                event.cross_feature or '',
                 datetime.now()
             ))
             
@@ -2120,7 +2155,7 @@ class TaskManager:
                        local_gif_url, minio_gif_url, ftp_gif_url,
                        metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
                        ai_description, ai_description_model, ai_description_time, dedup_status, dedup_reason,
-                       created_at FROM events WHERE 1=1'''
+                       created_at, cross_identity_id FROM events WHERE 1=1'''
             params = []
 
             if task_id:
@@ -2176,7 +2211,7 @@ class TaskManager:
                        local_gif_url, minio_gif_url, ftp_gif_url,
                        metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
                        ai_description, ai_description_model, ai_description_time, dedup_status, dedup_reason,
-                       created_at FROM events
+                       created_at, cross_identity_id FROM events
                        WHERE created_at >= datetime('now', 'localtime', ?)
                        AND (dedup_status IS NULL OR dedup_status != 'duplicate')'''
             params = [f'-{seconds} seconds']
@@ -2252,7 +2287,7 @@ class TaskManager:
                           local_gif_url, minio_gif_url, ftp_gif_url,
                           metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
                           ai_description, ai_description_model, ai_description_time, dedup_status, dedup_reason,
-                          created_at
+                          created_at, cross_identity_id
                    FROM events WHERE event_id = ?''',
                 (event_id,)
             )
@@ -2342,6 +2377,7 @@ class TaskManager:
             ai_description_time=ai_description_time,
             dedup_status=row[25] or '',
             dedup_reason=row[26] or '',
+            cross_identity_id=(row[28] if len(row) > 28 else None),
             created_at=created_at
         )
     

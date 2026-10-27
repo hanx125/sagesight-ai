@@ -654,6 +654,10 @@ if _is_main_process:
     from src.push.push_api import register_push_blueprint
     register_push_blueprint(app)
 
+    # 注册跨相机跟踪接口（目标轨迹）
+    from src.tracking.cross_camera.api import register_cross_camera_blueprint
+    register_cross_camera_blueprint(app)
+
     # 注册认证模块
     from src.auth.auth_api import register_auth_blueprint, login_required, get_current_user
     register_auth_blueprint(app)
@@ -797,6 +801,11 @@ if _is_main_process:
     @app.route('/events')
     def events_page():
         return render_template('events.html')
+
+    @app.route('/tracks')
+    def tracks_page():
+        """跨相机目标轨迹页"""
+        return render_template('tracks.html')
 
     @app.route('/monitor')
     def monitor_page():
@@ -1819,6 +1828,13 @@ if __name__ == '__main__':
     # enabled=false 时不启动后台线程（仍可通过 POST /api/events/clear 手动清理）
     from src.events.event_cleanup_service import start_event_cleanup_scheduler
     start_event_cleanup_scheduler()
+
+    # 启动跨相机跟踪融合服务（后台轮询事件 → 身份关联；配置关闭则不启动）
+    from src.tracking.cross_camera.fusion_service import start_cross_camera_service
+    if start_cross_camera_service(socketio):
+        logger.info("[Main] 跨相机跟踪融合服务已启动")
+    else:
+        logger.info("[Main] 跨相机跟踪未启用（可在 系统配置 → 跨相机跟踪 打开后重启生效）")
 
     # 启动节点管理客户端（向边缘平台注册节点、上报心跳与指标，接收部署/停止指令）
     # enabled=false 时不启动（仍可在前端系统管理页面启用后重启服务生效）

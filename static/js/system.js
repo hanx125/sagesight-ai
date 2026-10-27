@@ -1302,6 +1302,10 @@ switchTab = function(tabId) {
     if (tabId === 'cloud') {
         loadSSOConfig();
     }
+    // 切换到跨相机跟踪页时加载融合配置
+    if (tabId === 'crosscam') {
+        loadCrossCameraConfig();
+    }
 };
 
 // ========================================
@@ -2071,6 +2075,260 @@ async function toggleSSOEnabled(enabled) {
     }
 }
 
+// ========================================
+// 跨相机跟踪配置管理
+// ========================================
+
+var _ccCameras = [];
+var _ccLoading = false;
+
+function ccEsc(text) {
+    return String(text == null ? '' : text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function ccNum(id, fallback) {
+    const el = document.getElementById(id);
+    if (!el) return fallback;
+    const value = parseFloat(el.value);
+    return isNaN(value) ? fallback : value;
+}
+
+function ccSetInput(id, value) {
+    const el = document.getElementById(id);
+    if (el && value !== undefined && value !== null) el.value = value;
+}
+
+function ccSetChecked(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!value;
+}
+
+async function loadCrossCameraConfig() {
+    if (_ccLoading) return;
+    _ccLoading = true;
+    try {
+        const [cfgResp, camResp] = await Promise.all([
+            fetch('/api/cross-camera/config'),
+            fetch('/api/cross-camera/cameras')
+        ]);
+        const cfg = await cfgResp.json();
+        let cameras = [];
+        try {
+            cameras = (await camResp.json()).items || [];
+        } catch (e) {
+            cameras = [];
+        }
+        _ccCameras = cameras;
+        applyCrossCameraConfig(cfg);
+    } catch (error) {
+        console.error('加载跨相机配置失败:', error);
+        showNotification('加载跨相机配置失败: ' + error.message, 'error');
+    } finally {
+        _ccLoading = false;
+    }
+}
+
+function applyCrossCameraConfig(cfg) {
+    if (!cfg) return;
+    ccSetChecked('ccEnabledSwitch', cfg.enabled);
+    ccSetInput('ccMaxGap', cfg.max_gap_seconds);
+    ccSetInput('ccIdentityTtl', cfg.identity_ttl_minutes);
+    ccSetInput('ccMaxCameras', cfg.max_cameras_per_identity);
+    ccSetInput('ccPollInterval', cfg.poll_interval);
+    ccSetChecked('ccUseStrongId', cfg.use_strong_id);
+
+    const th = cfg.thresholds || {};
+    const person = th.person || {};
+    const vehicle = th.vehicle || {};
+    const other = th.other || {};
+    ccSetInput('ccPersonScore', person.min_score);
+    ccSetInput('ccPersonTemporal', person.min_score_temporal_only);
+    ccSetInput('ccPersonGap', person.max_gap_seconds);
+    ccSetInput('ccVehicleScore', vehicle.min_score);
+    ccSetInput('ccVehicleTemporal', vehicle.min_score_temporal_only);
+    ccSetInput('ccVehicleGap', vehicle.max_gap_seconds);
+    ccSetInput('ccOtherScore', other.min_score);
+    ccSetInput('ccOtherTemporal', other.min_score_temporal_only);
+    ccSetInput('ccOtherGap', other.max_gap_seconds);
+    ccSetInput('ccMinMargin', person.min_margin);
+
+    renderCrossCameraGroups(cfg.groups || []);
+}
+
+function crossCameraGroupRow(group, index) {
+    const selectedIds = (group.cameras || []).map(String);
+    const known = new Set(_ccCameras.map(function(c) { return String(c.id); }));
+    const options = _ccCameras.map(function(c) {
+        const selected = selectedIds.indexOf(String(c.id)) !== -1 ? ' selected' : '';
+        return '<option value="' + ccEsc(c.id) + '"' + selected + '>' +
+            ccEsc(c.name || c.id) + '</option>';
+    });
+    // 配置里存在但相机表已删除的，保留为选项避免保存时丢失
+    selectedIds.forEach(function(id) {
+        if (!known.has(id)) {
+            options.push('<option value="' + ccEsc(id) + '" selected>' + ccEsc(id.slice(0, 8)) + '（已删除）</option>');
+        }
+    });
+
+    const gap = Number(group.max_gap_seconds) || 120;
+
+    return '' +
+        '<div class="cc-group-row" data-index="' + index + '">' +
+            '<div class="cc-group-fields">' +
+                '<div>' +
+                    '<label>分组名称</label>' +
+                    '<input type="text" class="cc-group-name" value="' + ccEsc(group.name || '') + '" placeholder="例如 园区东区">' +
+                '</div>' +
+                '<div>' +
+                    '<label>组内容许时间窗（秒）</label>' +
+                    '<input type="number" class="cc-group-gap" min="1" max="3600" step="1" value="' + gap + '">' +
+                '</div>' +
+                '<div>' +
+                    '<label>包含相机（Ctrl / Cmd 多选）</label>' +
+                    '<select class="cc-group-cameras" multiple size="3">' + options.join('') + '</select>' +
+                '</div>' +
+            '</div>' +
+            '<button type="button" class="cc-group-remove" title="删除分组" ' +
+                'onclick="System.removeCrossCameraGroup(' + index + ')">&times;</button>' +
+        '</div>';
+}
+
+function renderCrossCameraGroups(groups) {
+    const box = document.getElementById('ccGroupList');
+    if (!box) return;
+    if (!groups || !groups.length) {
+        box.innerHTML = '<div class="cc-group-empty">未配置分组 —— 任意相机之间都允许关联</div>';
+        return;
+    }
+    box.innerHTML = groups.map(function(group, index) {
+        return crossCameraGroupRow(group, index);
+    }).join('');
+}
+
+function addCrossCameraGroup() {
+    const box = document.getElementById('ccGroupList');
+    if (!box) return;
+    if (box.querySelector('.cc-group-empty')) box.innerHTML = '';
+    const index = box.querySelectorAll('.cc-group-row').length;
+    const html = crossCameraGroupRow({
+        name: '分组' + (index + 1),
+        cameras: [],
+        max_gap_seconds: ccNum('ccMaxGap', 120)
+    }, index);
+    box.insertAdjacentHTML('beforeend', html);
+}
+
+function removeCrossCameraGroup(index) {
+    const box = document.getElementById('ccGroupList');
+    if (!box) return;
+    const rows = box.querySelectorAll('.cc-group-row');
+    if (rows[index]) rows[index].remove();
+    // 删除后重排索引，保证按钮参数与位置一致
+    box.querySelectorAll('.cc-group-row').forEach(function(row, i) {
+        row.setAttribute('data-index', i);
+        const btn = row.querySelector('.cc-group-remove');
+        if (btn) btn.setAttribute('onclick', 'System.removeCrossCameraGroup(' + i + ')');
+    });
+    if (!box.querySelectorAll('.cc-group-row').length) {
+        box.innerHTML = '<div class="cc-group-empty">未配置分组 —— 任意相机之间都允许关联</div>';
+    }
+}
+
+function collectCrossCameraGroups() {
+    const box = document.getElementById('ccGroupList');
+    if (!box) return [];
+    const groups = [];
+    box.querySelectorAll('.cc-group-row').forEach(function(row) {
+        const nameEl = row.querySelector('.cc-group-name');
+        const gapEl = row.querySelector('.cc-group-gap');
+        const selectEl = row.querySelector('.cc-group-cameras');
+        const cameras = selectEl
+            ? Array.from(selectEl.selectedOptions).map(function(o) { return o.value; }).filter(Boolean)
+            : [];
+        if (!cameras.length) return;  // 没选相机的分组直接丢弃
+        const gap = gapEl ? (parseFloat(gapEl.value) || 120) : 120;
+        groups.push({
+            name: (nameEl && nameEl.value.trim()) || ('分组' + (groups.length + 1)),
+            max_gap_seconds: gap,
+            cameras: cameras
+        });
+    });
+    return groups;
+}
+
+async function saveCrossCameraConfig() {
+    const margin = ccNum('ccMinMargin', 0.08);
+    const payload = {
+        enabled: document.getElementById('ccEnabledSwitch').checked,
+        max_gap_seconds: ccNum('ccMaxGap', 120),
+        identity_ttl_minutes: ccNum('ccIdentityTtl', 30),
+        max_cameras_per_identity: ccNum('ccMaxCameras', 32),
+        poll_interval: ccNum('ccPollInterval', 1),
+        use_strong_id: document.getElementById('ccUseStrongId').checked,
+        groups: collectCrossCameraGroups(),
+        thresholds: {
+            person: {
+                min_score: ccNum('ccPersonScore', 0.62),
+                min_score_temporal_only: ccNum('ccPersonTemporal', 0.35),
+                max_gap_seconds: ccNum('ccPersonGap', 120),
+                min_margin: margin
+            },
+            vehicle: {
+                min_score: ccNum('ccVehicleScore', 0.66),
+                min_score_temporal_only: ccNum('ccVehicleTemporal', 0.40),
+                max_gap_seconds: ccNum('ccVehicleGap', 180),
+                min_margin: margin
+            },
+            other: {
+                min_score: ccNum('ccOtherScore', 0.74),
+                min_score_temporal_only: ccNum('ccOtherTemporal', 0.50),
+                max_gap_seconds: ccNum('ccOtherGap', 60),
+                min_margin: margin
+            }
+        }
+    };
+
+    try {
+        const response = await fetch('/api/cross-camera/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '保存失败');
+        if (data.config) applyCrossCameraConfig(data.config);
+        showNotification(data.message || '跨相机跟踪配置已保存', 'success');
+    } catch (error) {
+        console.error('保存跨相机配置失败:', error);
+        showNotification('保存跨相机配置失败: ' + error.message, 'error');
+    }
+}
+
+async function rebuildCrossCamera() {
+    const hours = ccNum('ccRebuildHours', 6);
+    if (!confirm('确定要把最近 ' + hours + ' 小时的事件重新关联吗？\n原有轨迹会被拆开重建，重建期间轨迹页数据会短暂变化。')) {
+        return;
+    }
+    try {
+        const response = await fetch('/api/cross-camera/rebuild', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hours: hours })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '重建失败');
+        showNotification(data.message || '重建任务已提交', 'success');
+    } catch (error) {
+        console.error('重建跨相机关联失败:', error);
+        showNotification('重建失败: ' + error.message, 'error');
+    }
+}
+
 function getProviderLabel(provider) {
     const labels = {
         'openai': 'OpenAI 兼容',
@@ -2557,6 +2815,11 @@ return {
     loadSSOConfig: loadSSOConfig,
     saveSSOConfig: saveSSOConfig,
     toggleSSOEnabled: toggleSSOEnabled,
+    loadCrossCameraConfig: loadCrossCameraConfig,
+    saveCrossCameraConfig: saveCrossCameraConfig,
+    addCrossCameraGroup: addCrossCameraGroup,
+    removeCrossCameraGroup: removeCrossCameraGroup,
+    rebuildCrossCamera: rebuildCrossCamera,
     saveVoiceConfig: saveVoiceConfig,
     testVoice: testVoice,
     playVoiceFile: playVoiceFile,

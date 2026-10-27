@@ -918,9 +918,24 @@ class EventOutput:
                     logger.debug(f"[EventOutput] 创建事件图片处理失败: {e}")
                     compressed_image = None
 
+            # 跨相机：在此处提取一次外观描述子（约 1-3ms，仅开关打开时执行）
+            # 放在事件终态而不是逐帧，是为了不占检测/解码的算力
+            cross_feature = ''
+            if image is not None:
+                try:
+                    from src.tracking.cross_camera.config import is_cross_camera_enabled
+                    if is_cross_camera_enabled():
+                        from src.tracking.cross_camera.features import extract_descriptor
+                        cross_feature = extract_descriptor(
+                            image, (data or {}).get('bbox')
+                        ) or ''
+                except Exception as e:
+                    logger.debug(f"[EventOutput] 跨相机特征提取失败: {e}")
+
             # 同步写库：确保行存在，供后续 final/duplicate 状态切换的 UPDATE 命中
             record = self._insert_tracking_record(
-                event_id, status, data, image_urls, event_type, dedup_status, dedup_reason
+                event_id, status, data, image_urls, event_type, dedup_status, dedup_reason,
+                cross_feature=cross_feature,
             )
 
             # 异步：远程上传 + WebSocket 推送
@@ -938,7 +953,8 @@ class EventOutput:
 
     def _insert_tracking_record(self, event_id: str, status: str, data: Dict,
                                 image_urls: Dict, event_type: str,
-                                dedup_status: str, dedup_reason: str):
+                                dedup_status: str, dedup_reason: str,
+                                cross_feature: str = ''):
         """同步插入事件记录到数据库，返回 EventRecord"""
         from src.tasks.task_manager import TaskManager, EventRecord
 
@@ -969,6 +985,7 @@ class EventOutput:
             loitered_zones=loitered_zones,
             dedup_status=dedup_status or '',
             dedup_reason=dedup_reason or '',
+            cross_feature=cross_feature or '',
         )
         TaskManager().add_event(record)
         if not record.created_at:

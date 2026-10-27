@@ -489,6 +489,24 @@
         white-space: nowrap;
     }
 
+    /* ✅ 跨相机轨迹标记 */
+    .event-track-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        background: rgba(10, 95, 217, 0.14);
+        color: #0a5fd9;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.15s;
+    }
+    .event-track-badge:hover { background: rgba(10, 95, 217, 0.28); }
+    .event-track-badge svg { width: 11px; height: 11px; }
+
     /* ✅ 事件状态徽章（与 monitor.html 一致） */
     .event-status {
         display: inline-block;
@@ -807,6 +825,7 @@ window.Events = (function() {
                 <td>
                     <span class="event-class-badge">${getClassText(event.class_name)}</span>
                     ${formatLibMatchText(event) ? `<span class="lib-match-tag" title="${formatLibMatchText(event)}">${formatLibMatchText(event)}</span>` : ''}
+                    ${trackBadgeHtml(event)}
                 </td>
                 <td>${event.confidence ? (event.confidence * 100).toFixed(1) + '%' : '-'}</td>
                 <td class="channel-cell">${event.channel_name || event.camera_id || '-'}</td>
@@ -868,6 +887,7 @@ window.Events = (function() {
                         <span class="event-type-badge ${typeClass}">${typeText}</span>
                         <span class="event-class-badge">${getClassText(event.class_name)}</span>
                         <span class="event-status ${statusInfo.className}">${statusInfo.text}</span>
+                        ${trackBadgeHtml(event)}
                     </div>
                     <div class="event-card-time">${time}</div>
                     <div class="event-card-channel">${channelName}</div>
@@ -941,6 +961,30 @@ window.Events = (function() {
         const div = document.createElement('div');
         div.textContent = String(text == null ? '' : text);
         return div.innerHTML;
+    }
+
+    // 跨相机轨迹标记：cross_identity_id 三态（null=待融合 / '-'=不参与 / uuid=已关联）
+    function hasTrackIdentity(event) {
+        const cid = event && event.cross_identity_id;
+        return !!cid && cid !== '-';
+    }
+
+    function trackBadgeHtml(event) {
+        if (!hasTrackIdentity(event)) return '';
+        const cid = String(event.cross_identity_id);
+        return `<span class="event-track-badge" title="已关联跨相机轨迹，点击查看" onclick="event.stopPropagation(); Events.goToTrack('${cid}')">` +
+            '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>' +
+            '轨迹</span>';
+    }
+
+    // 跳转到轨迹页并展开该轨迹（tracks.js 未加载时退化为整页跳转）
+    function goToTrack(identityId) {
+        if (!identityId) return;
+        if (window.Tracks && typeof Tracks.goToTrack === 'function') {
+            Tracks.goToTrack(identityId);
+            return;
+        }
+        window.location.href = '/tracks?identity=' + encodeURIComponent(identityId);
     }
 
     // 格式化库比对信息（人脸带人名/相似度，车牌带车牌号/登记状态）
@@ -1427,6 +1471,7 @@ window.Events = (function() {
         nextPage: nextPage,
         changePageSize: changePageSize,
         openEventDetail: openEventDetail,
+        goToTrack: goToTrack,
         closeEventDetailModal: closeEventDetailModal,
         switchEventMedia: switchEventMedia,
         openClearModal: openClearModal,
