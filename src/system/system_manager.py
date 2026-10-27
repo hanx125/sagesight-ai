@@ -6,6 +6,7 @@ SageSight AI - 系统管理模块
 import os
 import json
 import sqlite3
+import time
 import yaml
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional, Dict, Any
@@ -178,8 +179,29 @@ class SystemManager:
         
         self._initialized = True
         self.db_path = self._get_db_path()
+        self._enable_wal()
         self._init_database()
         logger.info(f"系统管理器已初始化，数据库路径: {self.db_path}")
+
+    def _enable_wal(self) -> None:
+        """开启 WAL + busy_timeout
+
+        多进程（Web + 检测子进程）同时读写 tasks.db 时，默认的 rollback
+        journal 会让读操作在写事务期间直接报 database is locked，
+        导致「配置读不到 / 密钥读不到」这类看似配置丢失的间歇性故障。
+        WAL 允许读写并发，busy_timeout 让偶发写锁自动等待而不是立即失败。
+        """
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=15)
+            try:
+                mode = conn.execute('PRAGMA journal_mode=WAL').fetchone()
+                conn.execute('PRAGMA busy_timeout=15000')
+                conn.commit()
+                logger.info(f"数据库 journal_mode={mode[0] if mode else 'unknown'}, busy_timeout=15000")
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"设置 WAL 模式失败（不影响功能）: {e}")
     
     def _get_db_path(self) -> str:
         """获取数据库路径"""
@@ -288,6 +310,12 @@ class SystemManager:
         if 'support_images' not in llm_columns:
             cursor.execute('ALTER TABLE llm_config ADD COLUMN support_images INTEGER DEFAULT 1')
             logger.info("llm_config 表已迁移：新增 support_images 列")
+        if 'dedup_window_seconds' not in llm_columns:
+            cursor.execute('ALTER TABLE llm_config ADD COLUMN dedup_window_seconds INTEGER DEFAULT 300')
+            logger.info("llm_config 表已迁移：新增 dedup_window_seconds 列")
+        if 'dedup_iou_threshold' not in llm_columns:
+            cursor.execute('ALTER TABLE llm_config ADD COLUMN dedup_iou_threshold REAL DEFAULT 0.3')
+            logger.info("llm_config 表已迁移：新增 dedup_iou_threshold 列")
         conn.commit()
         logger.info("大模型 API 配置表已初始化")
 
@@ -493,40 +521,59 @@ class SystemManager:
     # 大模型 API 配置 CRUD
     # ========================================
 
+    # 显式列名（不用 SELECT *）：旧库增列顺序不一致时，位置映射会错位，
+    # 导致 is_default / enabled / support_images 读串，进而出现
+    # 「配置明明启用却判定未启用」「支持图片却当成纯文本」等诡异现象。
+    _LLM_COLUMNS = (
+        'id, name, provider, base_url, api_key, model, '
+        'temperature, max_tokens, enable_description, enable_dedup, '
+        'is_default, enabled, description, created_at, updated_at, support_images'
+    )
+
     def get_all_llm_configs(self) -> List[LLMConfig]:
         """获取所有大模型配置"""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=15)
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM llm_config ORDER BY is_default DESC, name')
+        cursor.execute(
+            f'SELECT {self._LLM_COLUMNS} FROM llm_config ORDER BY is_default DESC, name'
+        )
         rows = cursor.fetchall()
         conn.close()
         return [self._row_to_llm_config(row) for row in rows]
 
     def get_llm_config(self, config_id: int) -> Optional[LLMConfig]:
         """获取单个大模型配置"""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=15)
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM llm_config WHERE id = ?', (config_id,))
+        cursor.execute(
+            f'SELECT {self._LLM_COLUMNS} FROM llm_config WHERE id = ?', (config_id,)
+        )
         row = cursor.fetchone()
         conn.close()
         return self._row_to_llm_config(row) if row else None
 
     def get_default_llm_config(self) -> Optional[LLMConfig]:
         """获取默认的大模型配置（is_default=1 且 enabled=1）"""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=15)
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM llm_config WHERE is_default = 1 AND enabled = 1 LIMIT 1')
+        cursor.execute(
+            f'SELECT {self._LLM_COLUMNS} FROM llm_config '
+            'WHERE is_default = 1 AND enabled = 1 LIMIT 1'
+        )
         row = cursor.fetchone()
         conn.close()
         return self._row_to_llm_config(row) if row else None
 
     def create_llm_config(self, config: LLMConfig) -> int:
         """创建大模型配置"""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=15)
         cursor = conn.cursor()
 
         if config.is_default:
             cursor.execute('UPDATE llm_config SET is_default = 0')
+
+        # 统一清洗：粘贴密钥常带换行/空格，直接入库会导致 HTTP 头非法
+        api_key = (config.api_key or '').strip()
 
         cursor.execute('''
             INSERT INTO llm_config (
@@ -537,7 +584,7 @@ class SystemManager:
                 is_default, enabled, description
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            config.name, config.provider, config.base_url, config.api_key, config.model,
+            config.name, config.provider, (config.base_url or '').strip(), api_key, config.model,
             config.temperature, config.max_tokens,
             int(config.support_images),
             int(config.enable_description), int(config.enable_dedup),
@@ -550,14 +597,17 @@ class SystemManager:
 
     def update_llm_config(self, config_id: int, config: LLMConfig) -> bool:
         """更新大模型配置"""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=15)
         cursor = conn.cursor()
 
         if config.is_default:
             cursor.execute('UPDATE llm_config SET is_default = 0 WHERE id != ?', (config_id,))
 
+        api_key = (config.api_key or '').strip()
+        base_url = (config.base_url or '').strip()
+
         # api_key 为空时不更新（前端脱敏返回，不回传真实 key 时保留原值）
-        if config.api_key:
+        if api_key:
             cursor.execute('''
                 UPDATE llm_config SET
                     name = ?, provider = ?, base_url = ?, api_key = ?, model = ?,
@@ -568,7 +618,7 @@ class SystemManager:
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             ''', (
-                config.name, config.provider, config.base_url, config.api_key, config.model,
+                config.name, config.provider, base_url, api_key, config.model,
                 config.temperature, config.max_tokens,
                 int(config.support_images),
                 int(config.enable_description), int(config.enable_dedup),
@@ -586,7 +636,7 @@ class SystemManager:
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             ''', (
-                config.name, config.provider, config.base_url, config.model,
+                config.name, config.provider, base_url, config.model,
                 config.temperature, config.max_tokens,
                 int(config.support_images),
                 int(config.enable_description), int(config.enable_dedup),
@@ -627,6 +677,9 @@ class SystemManager:
     def get_setting(self, key: str, default: str = '') -> str:
         """读取系统全局设置
 
+        带重试：大模型密钥等关键配置在 SQLite 短暂写锁期间读失败时，
+        不能让上层误判为「未配置」（表现为「明明配了密钥却说没有」）。
+
         Args:
             key: 设置键名
             default: 不存在时的默认值
@@ -634,12 +687,25 @@ class SystemManager:
         Returns:
             设置值（字符串）
         """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('SELECT value FROM system_settings WHERE key = ?', (key,))
-        row = cursor.fetchone()
-        conn.close()
-        return row[0] if row else default
+        last_err = None
+        for attempt in range(3):
+            try:
+                conn = sqlite3.connect(self.db_path, timeout=15)
+                try:
+                    row = conn.execute(
+                        'SELECT value FROM system_settings WHERE key = ?', (key,)
+                    ).fetchone()
+                finally:
+                    conn.close()
+                return row[0] if row else default
+            except sqlite3.OperationalError as e:
+                last_err = e
+                time.sleep(0.05 * (attempt + 1))
+            except Exception as e:
+                logger.warning(f"读取系统设置 {key} 失败: {e}")
+                return default
+        logger.warning(f"读取系统设置 {key} 失败（已重试）: {last_err}")
+        return default
 
     def set_setting(self, key: str, value: str) -> bool:
         """写入系统全局设置（存在则更新）
@@ -651,19 +717,25 @@ class SystemManager:
         Returns:
             是否写入成功
         """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute(
-            '''INSERT INTO system_settings (key, value, updated_at)
-               VALUES (?, ?, CURRENT_TIMESTAMP)
-               ON CONFLICT(key) DO UPDATE SET
-                   value = excluded.value, updated_at = CURRENT_TIMESTAMP''',
-            (key, value)
-        )
-        conn.commit()
-        success = cursor.rowcount > 0
-        conn.close()
-        return success
+        conn = sqlite3.connect(self.db_path, timeout=15)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                '''INSERT INTO system_settings (key, value, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(key) DO UPDATE SET
+                       value = excluded.value, updated_at = CURRENT_TIMESTAMP''',
+                (key, value)
+            )
+            conn.commit()
+            # 注意：INSERT ... ON CONFLICT 在「值未变化」时 rowcount 可能为 0，
+            # 不能用 rowcount 判断成败，否则会误报「保存失败」。
+            return True
+        except Exception as e:
+            logger.warning(f"写入系统设置 {key} 失败: {e}")
+            return False
+        finally:
+            conn.close()
 
     def is_llm_enabled(self) -> bool:
         """大模型功能总开关：关闭时整个系统不调用大模型（防止 token 费用）"""
@@ -674,24 +746,24 @@ class SystemManager:
         return self.set_setting('llm_enabled', '1' if enabled else '0')
 
     def _row_to_llm_config(self, row: tuple) -> LLMConfig:
-        """将数据库行转换为 LLMConfig 对象"""
+        """将数据库行转换为 LLMConfig 对象（列顺序见 _LLM_COLUMNS）"""
         return LLMConfig(
             id=row[0],
             name=row[1] or '',
             provider=row[2] or 'openai',
             base_url=row[3] or '',
-            api_key=row[4] or '',
+            api_key=(row[4] or '').strip(),
             model=row[5] or '',
             temperature=row[6] if row[6] is not None else 0.3,
             max_tokens=row[7] if row[7] is not None else 500,
             enable_description=bool(row[8]) if row[8] is not None else True,
             enable_dedup=bool(row[9]) if row[9] is not None else True,
-            is_default=bool(row[12]),
-            enabled=bool(row[13]) if row[13] is not None else True,
-            description=row[14] or '',
-            created_at=row[15],
-            updated_at=row[16],
-            support_images=bool(row[17]) if row[17] is not None else True
+            is_default=bool(row[10]),
+            enabled=bool(row[11]) if row[11] is not None else True,
+            description=row[12] or '',
+            created_at=row[13],
+            updated_at=row[14],
+            support_images=bool(row[15]) if row[15] is not None else True
         )
 
 

@@ -275,6 +275,22 @@ def get_default_llm_config():
     return jsonify({'error': '未配置默认大模型'}), 404
 
 
+def _normalize_api_key(raw) -> str:
+    """规范化用户提交的 API 密钥
+
+    - 去除首尾空白/换行（粘贴时常带换行，直接放进 HTTP 头会导致
+      InvalidHeaderValue 或 401，看起来像「密钥无效」）
+    - 脱敏占位值（形如 sk-or-v1-abcd***）返回空字符串，交由上层保留原密钥，
+      避免把展示用的掩码当成真实密钥写库
+    """
+    key = (raw or '').strip()
+    if not key:
+        return ''
+    if '*' in key:
+        return ''
+    return key
+
+
 @system_bp.route('/llm-configs', methods=['POST'])
 def create_llm_config():
     """创建大模型配置"""
@@ -288,8 +304,8 @@ def create_llm_config():
     config = LLMConfig(
         name=data['name'],
         provider=data.get('provider', 'openai'),
-        base_url=data.get('base_url', ''),
-        api_key=data.get('api_key', ''),
+        base_url=(data.get('base_url') or '').strip(),
+        api_key=_normalize_api_key(data.get('api_key')),
         model=data['model'],
         temperature=float(data.get('temperature', 0.3)),
         max_tokens=int(data.get('max_tokens', 500)),
@@ -328,15 +344,15 @@ def update_llm_config(config_id: int):
         return jsonify({'error': '大模型配置不存在'}), 404
 
     # api_key 脱敏返回的 '***' 不回写，空值保留原 key
-    api_key = data.get('api_key', '')
-    if not api_key or api_key.endswith('***'):
+    api_key = _normalize_api_key(data.get('api_key'))
+    if not api_key:
         api_key = existing.api_key
 
     config = LLMConfig(
         id=config_id,
         name=data.get('name', existing.name),
         provider=data.get('provider', existing.provider),
-        base_url=data.get('base_url', existing.base_url),
+        base_url=(data.get('base_url') or existing.base_url or '').strip(),
         api_key=api_key,
         model=data.get('model', existing.model),
         temperature=float(data.get('temperature', existing.temperature)),
@@ -468,17 +484,52 @@ def get_openrouter_api_key():
 
 @system_bp.route('/openrouter/api-key', methods=['PUT'])
 def set_openrouter_api_key():
-    """设置/清除 OpenRouter 全局密钥（一处配置，所有免费模型共用）"""
+    """设置/清除 OpenRouter 全局密钥（一处配置，所有免费模型共用）
+
+    空值语义（防止密钥被误清空）：
+    - 不传 api_key 或传空字符串 -> **保留原密钥**（幂等保存）
+    - 只有显式传 clear=true 才真正清除
+    - 传脱敏占位值（形如 sk-or-v1-a***）-> 视为未修改，不回写
+    """
     data = request.get_json() or {}
     key = (data.get('api_key') or '').strip()
+    clear = bool(data.get('clear'))
     manager = get_system_manager()
+
+    if clear:
+        key = ''
+    elif not key:
+        # 留空 = 保留原密钥，避免「点一下保存就把密钥清掉」
+        current = manager.get_setting('openrouter_api_key', '')
+        return jsonify({
+            'message': '未填写新密钥，已保留原有配置'
+                       if current else '请填写 OpenRouter 全局密钥',
+            'configured': bool(current),
+            'unchanged': True
+        })
+    elif key.endswith('***') or '*' in key:
+        # 脱敏占位值（前端展示用）绝不能写入数据库
+        current = manager.get_setting('openrouter_api_key', '')
+        return jsonify({
+            'message': '检测到脱敏占位值，已忽略（原密钥保持不变）',
+            'configured': bool(current),
+            'unchanged': True
+        })
+
     if not manager.set_setting('openrouter_api_key', key):
         return jsonify({'error': '保存失败'}), 500
-    return jsonify({
-        'message': 'OpenRouter 全局密钥已保存，所有未单独配置密钥的 OpenRouter 免费模型将自动使用'
-                   if key else 'OpenRouter 全局密钥已清除',
-        'configured': bool(key)
-    })
+
+    resp = {
+        'message': 'OpenRouter 全局密钥已清除'
+                   if clear else
+                   'OpenRouter 全局密钥已保存，所有未单独配置密钥的 OpenRouter 免费模型将自动使用',
+        'configured': bool(key),
+        'length': len(key)
+    }
+    # 软校验：OpenRouter 官方密钥形如 sk-or-v1-<64位>，不合法时给出提示但仍允许保存
+    if key and not key.startswith('sk-or-'):
+        resp['warning'] = '该密钥不以 sk-or- 开头，可能不是 OpenRouter 官方密钥'
+    return jsonify(resp)
 
 
 @system_bp.route('/openrouter/free-vision-models', methods=['GET'])

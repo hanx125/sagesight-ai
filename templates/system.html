@@ -722,6 +722,7 @@
                     <div class="or-key-row">
                         <input type="password" id="openrouterApiKey" class="or-key-input" placeholder="sk-or-v1-...（OpenRouter 全局 API 密钥，仅免费模型使用）" autocomplete="off">
                         <button class="btn btn-primary btn-sm" onclick="System.saveOpenRouterApiKey()">保存密钥</button>
+                        <button class="btn btn-sm" onclick="System.clearOpenRouterApiKey()">清除</button>
                         <span class="or-key-status" id="openrouterKeyStatus"></span>
                     </div>
                     <p class="form-hint" style="margin: 6px 0 12px 0;">全局密钥<strong>仅对 OpenRouter 免费模型</strong>（模型 ID 以 :free 结尾）生效，供所有免费模型共用；付费模型需在配置中单独填写密钥。在模型配置中单独填写密钥时优先使用单独的</p>

@@ -117,14 +117,17 @@ class LLMRouter:
         - 本机/内网推理服务（如盒子本地 Qwen、局域网 vLLM）不校验密钥，
           未填写时用占位密钥直接调用
         - 仅 OpenRouter 免费模型可回退全局密钥，付费模型需自身配置密钥
+
+        注意：读取全局密钥失败（SQLite 短暂锁）时**不能**当成「没有密钥」，
+        否则会误报密钥缺失；此处会重试，读不到则抛异常交由上层区分处理。
         """
-        api_key = config.api_key
+        api_key = (config.api_key or '').strip()
         if not api_key and self.is_local_endpoint(config.base_url):
             api_key = 'local'
         elif (not api_key
                 and config.provider.lower() == 'openrouter'
                 and self.is_openrouter_free_model(config.model)):
-            api_key = get_system_manager().get_setting('openrouter_api_key', '')
+            api_key = (get_system_manager().get_setting('openrouter_api_key', '') or '').strip()
         if not api_key:
             return None
         return replace(config, api_key=api_key)
@@ -215,12 +218,13 @@ class LLMRouter:
     def _describe_no_candidate(self, feature: Optional[str]) -> str:
         """候选为空时给出可诊断的原因（避免笼统的「没有可用配置」）
 
-        三种情况分别提示：未启用 / 全部处于熔断冷却 / 缺少密钥。
+        三类情况分别提示：未启用 / 全部处于熔断冷却 / 缺少密钥。
+        严禁把「熔断冷却」说成「缺少密钥」——这会让用户误以为密钥丢了。
         """
         try:
             configs = get_system_manager().get_all_llm_configs()
-        except Exception:
-            return '没有可用的大模型配置（读取配置失败）'
+        except Exception as e:
+            return f'没有可用的大模型配置（读取配置失败: {e}）'
 
         enabled = [c for c in configs
                    if c.enabled and (not feature or getattr(c, feature, True))]
@@ -234,14 +238,24 @@ class LLMRouter:
             if len(cooling) == len(enabled):
                 soonest_name, soonest = min(cooling, key=lambda x: x[1])
                 reason = self._last_error.get(soonest_name.id, '')
-                return (f'所有大模型都在熔断冷却中，最近失败：{soonest_name.name} '
+                return (f'所有大模型都在熔断冷却中（密钥正常，非密钥问题），'
+                        f'最近失败：{soonest_name.name} '
                         f'（{max(int(soonest), 0)} 秒后自动重试）'
                         + (f'，原因：{reason}' if reason else ''))
-        no_key = [c.name for c in enabled if self._resolve_config(c) is None]
+        try:
+            no_key = [c.name for c in enabled if self._resolve_config(c) is None]
+        except Exception as e:
+            return f'没有可用的大模型配置（读取密钥失败: {e}）'
         if len(no_key) == len(enabled):
             return ('没有可用的大模型配置（' + '、'.join(no_key[:3]) +
                     ' 缺少 API 密钥；OpenRouter 免费模型可配置全局密钥）')
-        return '没有可用的大模型配置'
+        # 部分有密钥、部分没有：说明是「都没通过过滤」的其它原因
+        partial = ('；另有 ' + '、'.join(no_key[:3]) + ' 缺少 API 密钥') if no_key else ''
+        return f'没有可用的大模型配置（候选均被过滤）{partial}'
+
+    def describe_unavailable(self, feature: Optional[str] = None) -> str:
+        """对外暴露的「当前为何没有可用模型」说明（用于日志与页面提示）"""
+        return self._describe_no_candidate(feature)
 
     def _execute(self, method_name: str, feature: Optional[str],
                  require_images: bool, *args, **kwargs) -> str:

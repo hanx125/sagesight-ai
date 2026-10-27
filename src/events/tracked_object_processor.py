@@ -505,7 +505,11 @@ class TrackedObjectProcessor(mp.Process):
         先检查全局总开关（llm_enabled）：关闭时不初始化任何大模型服务，
         避免产生不必要的 token 费用。使用故障转移路由：所有已启用配置按
         「默认优先 → 添加顺序」组成候选链，某模型失败自动切换下一个并
-        重新执行任务，页面增删改配置实时生效。规则去重由事件管理独立执行。
+        重新执行任务，页面增删改配置实时生效。
+
+        重要：这里 **不会因为「启动瞬间没有可用候选」就永久关闭大模型**。
+        路由在每次调用时实时读取配置与密钥，因此只要服务对象建好，
+        后续补齐密钥 / 启用配置 / 熔断冷却到期都会自动恢复，无需重启进程。
         """
         try:
             from src.system.system_manager import get_system_manager
@@ -519,39 +523,34 @@ class TrackedObjectProcessor(mp.Process):
             from src.llm.llm_router import get_llm_router
             router = get_llm_router()
 
-            if not router.has_candidates():
-                proc_logger.info(
-                    "没有可用的大模型配置（未配置/未启用/缺少 API 密钥），"
-                    "事件描述+语义去重未启用"
-                )
-                return
-
-            has_desc = router.has_candidates(feature='enable_description')
-            has_dedup = router.has_candidates(feature='enable_dedup')
-
-            # 检查是否至少启用了一项功能
-            if not has_desc and not has_dedup:
-                proc_logger.info("大模型描述和语义去重均未启用，跳过初始化")
-                return
-
             from src.llm.event_describer import EventDescriber
             from src.llm.event_deduplicator import EventDeduplicator
 
             self.llm_executor = ThreadPoolExecutor(
                 max_workers=2, thread_name_prefix="LLM"
             )
+            # 无条件创建：路由每次调用实时解析候选，配置/密钥后补即时生效
+            self.llm_describer = EventDescriber()
+            self.llm_deduplicator = EventDeduplicator()
 
-            if has_desc:
-                self.llm_describer = EventDescriber()
-            if has_dedup:
-                self.llm_deduplicator = EventDeduplicator()
+            candidates = router.get_candidates()
+            if not candidates:
+                # 只提示一次，不关闭；EventDescriber 内部限流输出原因
+                proc_logger.warning(
+                    "大模型当前没有可用候选：%s；"
+                    "补齐密钥/启用配置/冷却到期后会自动恢复（无需重启）",
+                    router.describe_unavailable()
+                )
+                return
 
+            has_desc = router.has_candidates(feature='enable_description')
+            has_dedup = router.has_candidates(feature='enable_dedup')
             order = " -> ".join(
                 f"{c['name']}({c['model']}){'[默认]' if c['is_default'] else ''}"
                 for c in router.get_failover_order()
             )
             proc_logger.info(
-                f"大模型故障转移已启用（候选 {len(router.get_failover_order())} 个）: "
+                f"大模型故障转移已启用（候选 {len(candidates)} 个）: "
                 f"{order}; description={'on' if has_desc else 'off'}, "
                 f"semantic_dedup={'on' if has_dedup else 'off'}"
             )

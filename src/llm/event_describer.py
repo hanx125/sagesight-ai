@@ -66,6 +66,10 @@ class EventDescriber:
 
     def __init__(self, config: Optional[LLMConfig] = None):
         self.config = config
+        # 告警限流：没有可用模型时每个事件都打一条 WARNING 会把日志刷爆，
+        # 改成 5 分钟提示一次并累计被抑制的次数。
+        self._last_unavailable_warn = 0.0
+        self._suppressed_warn = 0
         if config is not None:
             self.client = LLMClient(config)
         else:
@@ -112,6 +116,11 @@ class EventDescriber:
 
         prompt = self._build_prompt(event_info)
 
+        # 路由模式：先确认是否有可用候选，没有就限流提示并跳过（避免刷日志）
+        if self.config is None and not self._has_candidates():
+            self._warn_unavailable()
+            return None
+
         try:
             if self.config is not None:
                 description = self.client.chat_with_image(
@@ -140,6 +149,29 @@ class EventDescriber:
         except Exception as e:
             logger.warning(f"[EventDescriber] 事件描述生成失败: {e}")
             return None
+
+    def _has_candidates(self) -> bool:
+        """当前是否存在可用（密钥齐备且未熔断）的事件描述候选模型"""
+        try:
+            return self.client.has_candidates(feature='enable_description')
+        except Exception:
+            return True  # 读取失败时交给真实调用去报错，避免误判
+
+    def _warn_unavailable(self) -> None:
+        """限流地提示「当前没有可用模型」，并给出可诊断原因"""
+        now = time.time()
+        if now - self._last_unavailable_warn < 300:
+            self._suppressed_warn += 1
+            logger.debug("[EventDescriber] 仍无可用大模型，跳过描述生成")
+            return
+        self._last_unavailable_warn = now
+        try:
+            reason = self.client.describe_unavailable(feature='enable_description')
+        except Exception:
+            reason = '没有可用的大模型配置'
+        extra = f"（期间抑制了 {self._suppressed_warn} 条同类提示）" if self._suppressed_warn else ''
+        self._suppressed_warn = 0
+        logger.warning(f"[EventDescriber] 跳过事件描述：{reason}{extra}")
 
     def _build_prompt(self, info: dict) -> str:
         """构建事件描述提示词"""

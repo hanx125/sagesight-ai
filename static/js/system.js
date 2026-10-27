@@ -1809,6 +1809,17 @@ async function saveOpenRouterApiKey() {
     const input = document.getElementById('openrouterApiKey');
     if (!input) return;
     const apiKey = input.value.trim();
+    // 留空不再提交：后端虽然会保留原密钥，但这里直接拦住，避免用户
+    // 误以为「点保存 = 确认已有密钥」而把手里的密钥清掉。
+    if (!apiKey) {
+        showNotification(
+            openRouterKeyConfigured
+                ? '输入框为空，已保留原有全局密钥；如需更换请粘贴新密钥'
+                : '请先粘贴 OpenRouter 全局 API 密钥（sk-or-v1-...）',
+            openRouterKeyConfigured ? 'info' : 'error'
+        );
+        return;
+    }
     try {
         const response = await fetch('/api/system/openrouter/api-key', {
             method: 'PUT',
@@ -1817,12 +1828,39 @@ async function saveOpenRouterApiKey() {
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || '保存失败');
-        showNotification(data.message, 'success');
+        showNotification(data.warning ? (data.message + '；' + data.warning) : data.message,
+                         data.warning ? 'info' : 'success');
         input.value = '';
         loadOpenRouterApiKey();
     } catch (e) {
         console.error('保存 OpenRouter 全局密钥失败:', e);
         showNotification('保存 OpenRouter 全局密钥失败: ' + e.message, 'error');
+    }
+}
+
+async function clearOpenRouterApiKey() {
+    if (!openRouterKeyConfigured) {
+        showNotification('当前没有配置全局密钥', 'info');
+        return;
+    }
+    if (!confirm('确定清除 OpenRouter 全局密钥？清除后所有依赖全局密钥的免费模型都将不可用。')) {
+        return;
+    }
+    try {
+        const response = await fetch('/api/system/openrouter/api-key', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clear: true })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '清除失败');
+        showNotification(data.message, 'success');
+        const input = document.getElementById('openrouterApiKey');
+        if (input) input.value = '';
+        loadOpenRouterApiKey();
+    } catch (e) {
+        console.error('清除 OpenRouter 全局密钥失败:', e);
+        showNotification('清除 OpenRouter 全局密钥失败: ' + e.message, 'error');
     }
 }
 
@@ -2181,6 +2219,10 @@ function openCreateLLMModal() {
     document.getElementById('llmEnabled').checked = true;
     document.getElementById('llmDefault').checked = false;
     document.getElementById('llmSupportImages').disabled = false;
+    // 添加时密钥输入框必须为空（form.reset 会清值，这里顺带恢复占位提示）
+    const keyInput = document.getElementById('llmApiKey');
+    keyInput.value = '';
+    keyInput.placeholder = 'sk-...（API 密钥，留空则使用 OpenRouter 全局密钥）';
     document.getElementById('llmModal').classList.add('show');
 }
 
@@ -2195,7 +2237,18 @@ function openEditLLMModal(configId) {
     document.getElementById('llmProvider').value = config.provider;
     document.getElementById('llmModel').value = config.model;
     document.getElementById('llmBaseUrl').value = config.base_url || '';
-    document.getElementById('llmApiKey').value = config.api_key || '';
+    // 不要把脱敏掩码（xxxx***）填进输入框：否则保存时会把掩码当新密钥提交。
+    // 留空 + 占位提示 = 保留原密钥。
+    const keyInput = document.getElementById('llmApiKey');
+    if (config.api_key_configured || config.api_key) {
+        keyInput.value = '';
+        keyInput.placeholder = '已配置（' + (config.api_key || '••••••••') + '），留空则保留原密钥';
+    } else {
+        keyInput.value = '';
+        keyInput.placeholder = isOpenRouterFreeModel(config.model) && openRouterKeyConfigured
+            ? '留空 = 使用全局 OpenRouter 密钥'
+            : 'sk-...（API 密钥）';
+    }
     document.getElementById('llmTemperature').value = config.temperature;
     document.getElementById('llmMaxTokens').value = config.max_tokens;
     document.getElementById('llmEnableDescription').checked = config.enable_description;
@@ -2226,7 +2279,7 @@ async function saveLLMConfig() {
         return;
     }
     
-    const apiKey = document.getElementById('llmApiKey').value;
+    const apiKey = document.getElementById('llmApiKey').value.trim();
     const llmData = {
         name: name,
         provider: document.getElementById('llmProvider').value,
@@ -2241,8 +2294,9 @@ async function saveLLMConfig() {
         enabled: document.getElementById('llmEnabled').checked,
         is_default: document.getElementById('llmDefault').checked
     };
-    // 编辑时空值表示保留原密钥，不提交 api_key 字段
-    if (apiKey) {
+    // 编辑时空值表示保留原密钥，不提交 api_key 字段；
+    // 含 * 的是脱敏掩码，绝不提交
+    if (apiKey && apiKey.indexOf('*') === -1) {
         llmData.api_key = apiKey;
     }
     
@@ -2499,6 +2553,7 @@ return {
     openAddOpenRouterModel: openAddOpenRouterModel,
     loadOpenRouterApiKey: loadOpenRouterApiKey,
     saveOpenRouterApiKey: saveOpenRouterApiKey,
+    clearOpenRouterApiKey: clearOpenRouterApiKey,
     loadSSOConfig: loadSSOConfig,
     saveSSOConfig: saveSSOConfig,
     toggleSSOEnabled: toggleSSOEnabled,
