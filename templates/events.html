@@ -4,6 +4,26 @@
 
 {% block content %}
 <div class="page-container">
+    <!-- 视图切换：事件记录 / 目标轨迹 -->
+    <div class="events-view-tabs">
+        <div class="tabs-nav">
+            <button class="tab-btn active" data-panel="events" onclick="Events.switchPanel('events')">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/>
+                </svg>
+                事件记录
+            </button>
+            <button class="tab-btn" data-panel="tracks" onclick="Events.switchPanel('tracks')">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                </svg>
+                目标轨迹
+            </button>
+        </div>
+    </div>
+
+    <!-- ============ 事件记录面板 ============ -->
+    <div id="eventsPanel">
     <!-- 筛选区域 -->
     <div class="filter-section">
         <div class="filter-left">
@@ -135,6 +155,199 @@
             </select>
         </div>
     </div>
+    </div><!-- /#eventsPanel -->
+
+    <!-- ============ 目标轨迹面板 ============ -->
+<div id="tracksPanel" class="tracks-page" style="display:none;">
+    <!-- 关闭 / 空数据提示 -->
+    <div id="tracksDisabledTip" class="tracks-disabled-tip" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+        <span>跨相机跟踪当前已关闭，历史轨迹仍可查询；开启后新事件才会自动关联。</span>
+        <a href="/system" class="btn btn-sm btn-primary">去开启</a>
+    </div>
+    <div id="tracksSingletonTip" class="tracks-disabled-tip tracks-info-tip" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+        </svg>
+        <span id="tracksSingletonTipText"></span>
+    </div>
+
+    <!-- 概览统计 -->
+    <div class="tracks-stats">
+        <div class="tracks-stat-card">
+            <div class="tracks-stat-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                </svg>
+            </div>
+            <div class="tracks-stat-body">
+                <div class="tracks-stat-value" id="statIdentities">-</div>
+                <div class="tracks-stat-label">已串联轨迹</div>
+            </div>
+        </div>
+        <div class="tracks-stat-card">
+            <div class="tracks-stat-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
+                </svg>
+            </div>
+            <div class="tracks-stat-body">
+                <div class="tracks-stat-value" id="statMultiCamera">-</div>
+                <div class="tracks-stat-label">跨机轨迹</div>
+            </div>
+        </div>
+        <div class="tracks-stat-card">
+            <div class="tracks-stat-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M3 5h18v2H3V5zm0 6h12v2H3v-2zm0 6h18v2H3v-2z"/>
+                </svg>
+            </div>
+            <div class="tracks-stat-body">
+                <div class="tracks-stat-value" id="statLinks">-</div>
+                <div class="tracks-stat-label">关联片段</div>
+            </div>
+        </div>
+        <div class="tracks-stat-card">
+            <div class="tracks-stat-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                </svg>
+            </div>
+            <div class="tracks-stat-body">
+                <div class="tracks-stat-value" id="statPending">-</div>
+                <div class="tracks-stat-label">待融合事件</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 筛选区域 -->
+    <div class="filter-section">
+        <div class="filter-left">
+            <div class="filter-group">
+                <label>时间范围：</label>
+                <select id="trackRange" onchange="Tracks.onRangeChange()">
+                    <option value="3600">最近 1 小时</option>
+                    <option value="21600">最近 6 小时</option>
+                    <option value="86400" selected>最近 24 小时</option>
+                    <option value="604800">最近 7 天</option>
+                    <option value="0">全部</option>
+                    <option value="custom">自定义...</option>
+                </select>
+            </div>
+            <div class="filter-group" id="trackCustomRange" style="display:none;">
+                <label>起：</label>
+                <input type="datetime-local" id="trackStartTime">
+                <label>止：</label>
+                <input type="datetime-local" id="trackEndTime">
+            </div>
+            <div class="filter-group">
+                <label>类别：</label>
+                <select id="trackClass" onchange="Tracks.applyFilters()">
+                    <option value="">全部类别</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>相机：</label>
+                <select id="trackCamera" onchange="Tracks.applyFilters()">
+                    <option value="">全部相机</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="trackMultiOnly" onchange="Tracks.applyFilters()">
+                    <span>仅看多机轨迹</span>
+                </label>
+            </div>
+            <div class="filter-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="trackIncludeSingleton" onchange="Tracks.toggleSingleton()">
+                    <span>包含单点片段</span>
+                </label>
+            </div>
+            <div class="filter-actions">
+                <button class="btn btn-secondary" onclick="Tracks.resetFilters()">重置</button>
+            </div>
+        </div>
+        <div class="filter-right">
+            <button class="btn btn-secondary" onclick="Tracks.refresh()">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 8 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                </svg>
+                刷新
+            </button>
+        </div>
+    </div>
+
+    <!-- 轨迹列表 -->
+    <div class="tracks-container">
+        <div class="tracks-header">
+            <h3>目标轨迹</h3>
+            <span id="tracksCountInfo" class="pagination-info">共 0 条轨迹</span>
+        </div>
+        <div id="tracksGrid" class="tracks-grid">
+            <div class="empty-state">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                </svg>
+                <p>暂无轨迹数据</p>
+                <p class="empty-tip">跨相机跟踪开启后，同一目标在不同相机的片段会自动串联成一条轨迹</p>
+            </div>
+        </div>
+
+        <!-- 分页控件 -->
+        <div class="pagination-container" id="tracksPagination">
+            <span class="pagination-info" id="tracksPaginationInfo">共 0 条轨迹</span>
+            <button class="pagination-btn prev" onclick="Tracks.prevPage()" id="tracksPrevBtn" disabled>
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
+                </svg>
+                上一页
+            </button>
+            <div id="tracksPageNumbers"></div>
+            <button class="pagination-btn next" onclick="Tracks.nextPage()" id="tracksNextBtn" disabled>
+                下一页
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
+                </svg>
+            </button>
+            <select class="page-size-select" id="tracksPageSize" onchange="Tracks.changePageSize()">
+                <option value="12">12条/页</option>
+                <option value="24" selected>24条/页</option>
+                <option value="48">48条/页</option>
+                <option value="96">96条/页</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<!-- 轨迹详情模态框 -->
+<div id="trackDetailModal" class="modal">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <div class="modal-header-title">
+                <span class="modal-header-icon">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                    </svg>
+                </span>
+                <h3 id="trackDetailTitle">轨迹详情</h3>
+            </div>
+            <button class="modal-close" onclick="Tracks.closeDetail()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="trackDetailBody">
+                <div class="loading-placeholder">加载中...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 图片预览 -->
+<div id="trackImageLightbox" class="tracks-lightbox" onclick="Tracks.closeLightbox()">
+    <img id="trackLightboxImg" src="" alt="片段预览" onclick="event.stopPropagation();">
+</div>
 </div>
 
 <!-- 事件详情模态框 -->
@@ -659,6 +872,276 @@
         font-size: 14px;
         color: var(--text-secondary);
     }
+
+/* ================= 视图切换（事件记录 / 目标轨迹） ================= */
+.events-view-tabs {
+    background: var(--bg-white, #fff);
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    margin-bottom: 16px;
+}
+
+.events-view-tabs .tabs-nav { padding: 0 12px; }
+
+body.theme-light .events-view-tabs {
+    background: var(--bg-white);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+/* ================= 目标轨迹页 ================= */
+.tracks-page .tracks-disabled-tip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    background: rgba(250, 173, 20, 0.12);
+    border: 1px solid rgba(250, 173, 20, 0.45);
+    color: var(--text-primary);
+    font-size: 13px;
+}
+.tracks-page .tracks-disabled-tip svg { width: 18px; height: 18px; flex-shrink: 0; color: var(--warning-color); }
+.tracks-page .tracks-disabled-tip span { flex: 1; }
+.tracks-page .tracks-info-tip { background: rgba(10, 95, 217, 0.08); border-color: rgba(10, 95, 217, 0.35); }
+.tracks-page .tracks-info-tip svg { color: var(--primary-color); }
+
+/* 概览统计 */
+.tracks-page .tracks-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+    margin-bottom: 16px;
+}
+.tracks-page .tracks-stat-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 18px;
+    border-radius: 10px;
+    background: var(--card-bg, var(--bg-white));
+    border: 1px solid var(--border-color);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+.tracks-page .tracks-stat-icon {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 105, 92, 0.12);
+    color: var(--primary-color);
+    flex-shrink: 0;
+}
+.tracks-page .tracks-stat-icon svg { width: 22px; height: 22px; }
+.tracks-page .tracks-stat-value { font-size: 22px; font-weight: 700; color: var(--text-primary); line-height: 1.2; }
+.tracks-page .tracks-stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+/* 列表容器 */
+.tracks-page .tracks-container {
+    background: var(--card-bg, var(--bg-white));
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px 18px 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+.tracks-page .tracks-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 12px; margin-bottom: 14px;
+    border-bottom: 1px solid var(--border-color);
+}
+.tracks-page .tracks-header h3 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+
+/* 卡片网格 */
+.tracks-page .tracks-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+    gap: 14px;
+    min-height: 160px;
+}
+
+.tracks-page .track-card {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg-white);
+    cursor: pointer;
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+.tracks-page .track-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+    border-color: var(--primary-color);
+}
+.tracks-page .track-card-media {
+    position: relative;
+    height: 132px;
+    background: rgba(0, 0, 0, 0.06);
+    overflow: hidden;
+}
+.tracks-page .track-card-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tracks-page .track-card-media .track-no-image {
+    width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; color: var(--text-muted); font-size: 12px;
+}
+.tracks-page .track-card-media .track-no-image svg { width: 34px; height: 34px; opacity: .45; }
+
+.tracks-page .track-cam-count {
+    position: absolute; left: 8px; top: 8px;
+    padding: 2px 8px; border-radius: 10px;
+    background: rgba(0, 0, 0, 0.62);
+    color: #fff; font-size: 11px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 4px;
+}
+.tracks-page .track-cam-count.multi { background: rgba(10, 95, 217, 0.9); }
+.tracks-page .track-status-tag {
+    position: absolute; right: 8px; top: 8px;
+    padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; color: #fff;
+    background: rgba(82, 196, 26, 0.9);
+}
+.tracks-page .track-status-tag.closed { background: rgba(120, 152, 180, 0.9); }
+.tracks-page .track-status-tag.singleton { background: rgba(250, 173, 20, 0.9); }
+
+.tracks-page .track-card-body { padding: 10px 12px 12px; }
+.tracks-page .track-card-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-bottom: 6px;
+}
+.tracks-page .track-class {
+    font-size: 13px; font-weight: 600; color: var(--text-primary);
+    max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tracks-page .track-seg-count { font-size: 12px; color: var(--text-secondary); flex-shrink: 0; }
+.tracks-page .track-strong {
+    display: inline-block;
+    font-size: 11px; padding: 2px 7px; border-radius: 9px;
+    background: rgba(0, 105, 92, .14); color: var(--primary-color);
+    margin-bottom: 6px; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tracks-page .track-range { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.tracks-page .track-duration { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.tracks-page .track-cams {
+    margin-top: 6px; font-size: 11px; color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 详情 */
+.tracks-page .track-detail-top {
+    display: flex; gap: 16px; margin-bottom: 18px; flex-wrap: wrap;
+}
+.tracks-page .track-detail-image {
+    position: relative;
+    width: 220px; height: 150px; flex-shrink: 0;
+    border-radius: 10px; overflow: hidden;
+    border: 1px solid var(--border-color);
+    background: rgba(0, 0, 0, .06);
+    cursor: zoom-in;
+}
+.tracks-page .track-detail-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tracks-page .track-detail-image .track-no-image { height: 100%; }
+.tracks-page .track-detail-meta {
+    flex: 1; min-width: 260px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px 18px; align-content: start;
+}
+.tracks-page .track-meta-item { font-size: 13px; color: var(--text-secondary); }
+.tracks-page .track-meta-item b { display: block; color: var(--text-primary); font-weight: 600; font-size: 14px; margin-top: 2px; word-break: break-all; }
+
+/* 时间轴 */
+.tracks-page .track-timeline-wrap {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 14px 14px 8px;
+    margin-bottom: 18px;
+}
+.tracks-page .track-section-title {
+    font-size: 14px; font-weight: 600; color: var(--text-primary);
+    margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+}
+.tracks-page .track-section-title span.hint { font-size: 12px; font-weight: 400; color: var(--text-muted); }
+.tracks-page .track-axis {
+    display: flex; justify-content: space-between;
+    font-size: 11px; color: var(--text-muted);
+    padding: 0 0 6px 120px;
+}
+.tracks-page .track-cam-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 0;
+}
+.tracks-page .track-cam-label {
+    width: 110px; flex-shrink: 0;
+    font-size: 12px; color: var(--text-secondary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tracks-page .track-cam-lane {
+    position: relative; flex: 1; height: 22px;
+    background: rgba(127, 127, 127, .1);
+    border-radius: 6px;
+}
+.tracks-page .track-seg-bar {
+    position: absolute; top: 3px; height: 16px;
+    min-width: 4px; border-radius: 4px;
+    background: linear-gradient(90deg, var(--primary-color), var(--primary-light));
+    cursor: pointer; transition: filter .15s;
+}
+.tracks-page .track-seg-bar:hover { filter: brightness(1.2); }
+
+/* 片段列表 */
+.tracks-page .track-seg-list { display: flex; flex-direction: column; gap: 8px; }
+.tracks-page .track-seg-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-white);
+    font-size: 12px;
+}
+.tracks-page .track-seg-thumb {
+    position: relative;
+    width: 76px; height: 50px; flex-shrink: 0;
+    border-radius: 6px; overflow: hidden;
+    background: rgba(0, 0, 0, .06);
+    cursor: zoom-in;
+}
+.tracks-page .track-seg-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tracks-page .track-seg-main { flex: 1; min-width: 0; }
+.tracks-page .track-seg-line1 { color: var(--text-primary); font-weight: 600; margin-bottom: 3px; }
+.tracks-page .track-seg-line2 { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tracks-page .track-seg-score {
+    flex-shrink: 0; font-size: 11px; padding: 2px 8px; border-radius: 9px;
+    background: rgba(0, 105, 92, .14); color: var(--primary-color);
+}
+
+/* 图片预览 */
+.tracks-lightbox {
+    display: none;
+    position: fixed; inset: 0; z-index: 3000;
+    background: rgba(0, 0, 0, .82);
+    align-items: center; justify-content: center;
+    cursor: zoom-out;
+}
+.tracks-lightbox.show { display: flex; }
+.tracks-lightbox img {
+    max-width: 92vw; max-height: 90vh;
+    border-radius: 8px; box-shadow: 0 8px 40px rgba(0, 0, 0, .6);
+}
+
+/* 图片加载失败占位 */
+.tracks-page .track-img-failed { position: relative; }
+.tracks-page .track-img-failed::after {
+    content: '无预览';
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-muted); font-size: 12px;
+    background: rgba(127, 127, 127, .08);
+}
+
+/* 深色科技蓝主题下的补丁 */
+body.theme-light .tracks-page .tracks-stat-icon { background: rgba(76, 159, 240, .16); }
+body.theme-light .tracks-page .track-card,
+body.theme-light .tracks-page .track-seg-item { background: rgba(16, 35, 62, .9); }
+body.theme-light .tracks-page .track-strong,
+body.theme-light .tracks-page .track-seg-score { background: rgba(76, 159, 240, .18); color: var(--primary-light); }
 </style>
 
 <script>
@@ -676,7 +1159,63 @@ window.Events = (function() {
         loadStats();
         loadTasksFilter();
         loadEvents();
+        // 支持外部直达轨迹视图：/events?tab=tracks 或 /events#tracks
+        switchPanel(getInitialPanel(), true);
+
+        // 带 identity 参数时（旧 /tracks?identity=... 跳转过来）直接展开该轨迹
+        var identityParam = getQueryParam('identity');
+        if (identityParam && window.Tracks && typeof Tracks.goToTrack === 'function') {
+            Tracks.goToTrack(identityParam);
+        }
     });
+
+    function getQueryParam(name) {
+        try {
+            return new URLSearchParams(window.location.search).get(name);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // ========================================
+    // 视图切换：事件记录 / 目标轨迹
+    // ========================================
+    var currentPanel = 'events';
+
+    function switchPanel(panel, silent) {
+        if (panel !== 'tracks') panel = 'events';
+        currentPanel = panel;
+
+        document.querySelectorAll('.events-view-tabs .tab-btn').forEach(function(btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-panel') === panel);
+        });
+
+        var eventsPanel = document.getElementById('eventsPanel');
+        var tracksPanel = document.getElementById('tracksPanel');
+        if (eventsPanel) eventsPanel.style.display = (panel === 'events') ? '' : 'none';
+        // tracksPanel 初始带 inline display:none，切回时清空即可
+        if (tracksPanel) tracksPanel.style.display = (panel === 'tracks') ? '' : 'none';
+
+        if (!silent && window.history && history.replaceState) {
+            try {
+                history.replaceState(null, '', panel === 'tracks' ? '/events?tab=tracks' : '/events');
+            } catch (e) { /* 忽略 */ }
+        }
+
+        // 轨迹模块按需加载，避免没用到的页面白跑一轮接口
+        if (panel === 'tracks' && window.Tracks && typeof Tracks.ensureInit === 'function') {
+            Tracks.ensureInit();
+        }
+    }
+
+    function getInitialPanel() {
+        try {
+            var params = new URLSearchParams(window.location.search);
+            if (params.get('tab') === 'tracks') return 'tracks';
+        } catch (e) { /* 忽略 */ }
+        if (window.location.hash === '#tracks') return 'tracks';
+        return 'events';
+    }
 
     // 视图切换
     function setView(view) {
@@ -977,14 +1516,15 @@ window.Events = (function() {
             '轨迹</span>';
     }
 
-    // 跳转到轨迹页并展开该轨迹（tracks.js 未加载时退化为整页跳转）
+    // 切到目标轨迹视图并展开该轨迹
     function goToTrack(identityId) {
         if (!identityId) return;
+        switchPanel('tracks');
         if (window.Tracks && typeof Tracks.goToTrack === 'function') {
             Tracks.goToTrack(identityId);
             return;
         }
-        window.location.href = '/tracks?identity=' + encodeURIComponent(identityId);
+        window.location.href = '/events?tab=tracks&identity=' + encodeURIComponent(identityId);
     }
 
     // 格式化库比对信息（人脸带人名/相似度，车牌带车牌号/登记状态）
@@ -1471,6 +2011,7 @@ window.Events = (function() {
         nextPage: nextPage,
         changePageSize: changePageSize,
         openEventDetail: openEventDetail,
+        switchPanel: switchPanel,
         goToTrack: goToTrack,
         closeEventDetailModal: closeEventDetailModal,
         switchEventMedia: switchEventMedia,
@@ -1482,4 +2023,7 @@ window.Events = (function() {
 
 })();
 </script>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/tracks.js') }}?v=20261028b"></script>
 {% endblock %}

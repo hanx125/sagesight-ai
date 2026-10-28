@@ -804,8 +804,12 @@ if _is_main_process:
 
     @app.route('/tracks')
     def tracks_page():
-        """跨相机目标轨迹页"""
-        return render_template('tracks.html')
+        """目标轨迹已并入事件管理页，旧链接重定向，保留 identity 参数"""
+        target = '/events?tab=tracks'
+        identity = request.args.get('identity')
+        if identity:
+            target += '&identity=' + identity
+        return redirect(target)
 
     @app.route('/monitor')
     def monitor_page():

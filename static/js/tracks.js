@@ -22,6 +22,8 @@ window.Tracks = (function() {
     };
 
     var trackSocket = null;
+    var socketBound = false;
+    var initialized = false;
     var reloadTimer = null;
     var camerasLoaded = false;
     var classesLoaded = false;
@@ -126,9 +128,10 @@ window.Tracks = (function() {
     }
 
     async function loadCameras() {
-        if (camerasLoaded) return;
         var select = document.getElementById('trackCamera');
         if (!select) return;
+        // pjax 换页后下拉是新的空元素，即使标志为真也要重填
+        if (camerasLoaded && select.options.length > 1) return;
         try {
             var resp = await fetch('/api/cross-camera/cameras');
             var data = await resp.json();
@@ -146,9 +149,9 @@ window.Tracks = (function() {
     }
 
     async function loadClasses() {
-        if (classesLoaded) return;
         var select = document.getElementById('trackClass');
         if (!select) return;
+        if (classesLoaded && select.options.length > 1) return;
         try {
             var resp = await fetch('/api/events/stats');
             var data = await resp.json();
@@ -225,6 +228,8 @@ window.Tracks = (function() {
             renderCards();
             renderPagination();
             setText('tracksCountInfo', '共 ' + state.total + ' 条轨迹');
+            // 标记本次 DOM 已渲染过，pjax 换页后据此判断需要重新拉数
+            if (grid) grid.setAttribute('data-ready', '1');
         } catch (e) {
             console.error('[Tracks] 加载轨迹失败:', e);
             if (grid) {
@@ -607,43 +612,56 @@ window.Tracks = (function() {
         }, 2500);
     }
 
+    /**
+     * WebSocket：优先复用 main.js 的全局连接，避免 pjax 切页后留下孤儿连接
+     */
     function initSocket() {
+        if (socketBound) return;
+        var conn = (typeof socket !== 'undefined' && socket) ? socket : null;
+        if (conn) {
+            conn.on('cross_camera_update', function(data) {
+                console.log('[Tracks] 轨迹更新:', data);
+                scheduleReload();
+            });
+            socketBound = true;
+            return;
+        }
         if (!window.io) return;
         try {
-            if (trackSocket) {
-                try { trackSocket.disconnect(); } catch (e) { /* ignore */ }
-                trackSocket = null;
-            }
             trackSocket = io('/ws', { transports: ['websocket', 'polling'] });
             trackSocket.on('cross_camera_update', function(data) {
                 console.log('[Tracks] 轨迹更新:', data);
                 scheduleReload();
             });
+            socketBound = true;
         } catch (e) {
             console.error('[Tracks] WebSocket 初始化失败:', e);
         }
     }
 
     /**
-     * 从其它页面（事件列表）跳到轨迹页并直接展开某条轨迹
+     * 展开指定轨迹（事件列表的"轨迹"徽标调用）
+     * 面板切换由事件页负责，这里只保证数据已加载并打开详情
      */
     function goToTrack(identityId) {
         if (!identityId) return;
-        if (window.Tracks) window.Tracks.pendingIdentity = identityId;
-        var target = '/tracks?identity=' + encodeURIComponent(identityId);
-        if (window.SageSight && typeof SageSight.navigateTo === 'function') {
-            SageSight.navigateTo(target);
-        } else {
-            window.location.href = target;
-        }
+        window.Tracks.pendingIdentity = identityId;
+        ensureInit();
+        openDetail(identityId);
+        window.Tracks.pendingIdentity = null;
     }
 
     // ========================================
-    // 初始化
+    // 初始化（首次切到轨迹视图时才真正跑接口）
     // ========================================
 
-    function init() {
-        if (!document.getElementById('tracksGrid')) return;
+    function ensureInit() {
+        var grid = document.getElementById('tracksGrid');
+        // pjax 换过 DOM 后 grid 是全新的（没有 data-ready），需要重新拉一次
+        if (initialized && grid && grid.getAttribute('data-ready') === '1') return;
+        if (!grid) return;
+        initialized = true;
+
         var rangeSelect = document.getElementById('trackRange');
         if (rangeSelect) state.range = rangeSelect.value || '86400';
 
@@ -656,19 +674,7 @@ window.Tracks = (function() {
         loadIdentities();
         initSocket();
 
-        // 从事件页跳进来时，直接展开指定轨迹
-        var pending = window.Tracks && window.Tracks.pendingIdentity;
-        if (!pending) {
-            try {
-                pending = new URLSearchParams(window.location.search).get('identity');
-            } catch (e) { pending = null; }
-        }
-        if (pending) {
-            openDetail(pending);
-            if (window.Tracks) window.Tracks.pendingIdentity = null;
-        }
-
-        // 弹窗遮罩点击关闭
+        // Esc 关闭弹层（document 级，只绑一次）
         if (!listenersBound) {
             listenersBound = true;
             document.addEventListener('keydown', function(e) {
@@ -678,18 +684,23 @@ window.Tracks = (function() {
                 }
             });
         }
+        // 弹窗遮罩：pjax 后是新的元素，按元素去重绑定
         var modal = document.getElementById('trackDetailModal');
-        if (modal) {
+        if (modal && modal.getAttribute('data-bound') !== '1') {
+            modal.setAttribute('data-bound', '1');
             modal.addEventListener('click', function(e) {
                 if (e.target === modal) closeDetail();
             });
         }
     }
 
-    SageSight.registerPage('/tracks', init);
+    function init() {
+        ensureInit();
+    }
 
     return {
         init: init,
+        ensureInit: ensureInit,
         pendingIdentity: null,
         goToTrack: goToTrack,
         refresh: refresh,
