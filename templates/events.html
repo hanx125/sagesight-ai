@@ -1164,9 +1164,7 @@ window.Events = (function() {
 
         // 带 identity 参数时（旧 /tracks?identity=... 跳转过来）直接展开该轨迹
         var identityParam = getQueryParam('identity');
-        if (identityParam && window.Tracks && typeof Tracks.goToTrack === 'function') {
-            Tracks.goToTrack(identityParam);
-        }
+        if (identityParam) goToTrack(identityParam);
     });
 
     function getQueryParam(name) {
@@ -1203,9 +1201,23 @@ window.Events = (function() {
         }
 
         // 轨迹模块按需加载，避免没用到的页面白跑一轮接口
-        if (panel === 'tracks' && window.Tracks && typeof Tracks.ensureInit === 'function') {
-            Tracks.ensureInit();
+        if (panel === 'tracks') ensureTracksModule();
+    }
+
+    /**
+     * 确保轨迹模块可用后再初始化
+     *
+     * pjax 首次进入事件页时，内联脚本会比 extra_scripts 里的 tracks.js 先执行，
+     * 此时 window.Tracks 还不存在，直接调用会静默失败，所以做一次轮询等待。
+     */
+    function ensureTracksModule(attempt) {
+        attempt = attempt || 0;
+        if (window.Tracks) {
+            if (typeof window.Tracks.ensureInit === 'function') window.Tracks.ensureInit();
+            return;
         }
+        if (attempt >= 25) return;  // 约 2.5 秒还没加载就算失败，保持空面板
+        setTimeout(function() { ensureTracksModule(attempt + 1); }, 100);
     }
 
     function getInitialPanel() {
@@ -1520,11 +1532,19 @@ window.Events = (function() {
     function goToTrack(identityId) {
         if (!identityId) return;
         switchPanel('tracks');
-        if (window.Tracks && typeof Tracks.goToTrack === 'function') {
-            Tracks.goToTrack(identityId);
+        openTrackWhenReady(identityId, 0);
+    }
+
+    function openTrackWhenReady(identityId, attempt) {
+        if (window.Tracks && typeof window.Tracks.goToTrack === 'function') {
+            window.Tracks.goToTrack(identityId);
             return;
         }
-        window.location.href = '/events?tab=tracks&identity=' + encodeURIComponent(identityId);
+        if (attempt >= 25) {
+            window.location.href = '/events?tab=tracks&identity=' + encodeURIComponent(identityId);
+            return;
+        }
+        setTimeout(function() { openTrackWhenReady(identityId, attempt + 1); }, 100);
     }
 
     // 格式化库比对信息（人脸带人名/相似度，车牌带车牌号/登记状态）
