@@ -3,8 +3,8 @@
 {% block title %}驾驶舱{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/nipplejs-ptz.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/audio-talk.css') }}">
+<link rel="stylesheet" data-page-style="monitor" href="{{ url_for('static', filename='css/nipplejs-ptz.css') }}">
+<link rel="stylesheet" data-page-style="monitor" href="{{ url_for('static', filename='css/audio-talk.css') }}">
 {% endblock %}
 
 {% block content %}
@@ -729,7 +729,11 @@
 <script src="{{ url_for('static', filename='js/ptz_joystick.js') }}?v=20260923ptz"></script>
 <script src="{{ url_for('static', filename='js/audio_talk_onvif.js') }}?v=20260923ptz"></script>
 
-<style>
+<!-- data-page-style: 标记为"整页加载时落在 main 之外的页面级样式"。
+     该块位于 </main> 之后，pjax 不会随内容替换而移除；
+     navigation.js 在每次 pjax 导航时统一清理带此标记的样式，
+     否则会残留并污染其他页面（例如 .gif-badge 的 left/right 冲突把事件卡片徽标拉伸成通栏长条）。 -->
+<style data-page-style="monitor">
 /* 电视墙下方可视化图表区域 */
 .monitor-charts {
     display: flex;

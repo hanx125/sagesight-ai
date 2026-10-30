@@ -621,10 +621,15 @@
         position: relative;
     }
 
-    .gif-badge {
+    /* 提高优先级并显式 right:auto：即使其他页面（如驾驶舱）的 .gif-badge 规则
+       因 pjax 残留而叠加（其规则含 right:4px），也不会出现 left+right 同时生效
+       把徽标拉伸成通栏长条的情况 */
+    .event-card .event-card-image-container .gif-badge {
         position: absolute;
         top: 6px;
         left: 6px;
+        right: auto;
+        width: auto;
         background: rgba(0, 0, 0, 0.7);
         color: #fff;
         padding: 2px 8px;
@@ -635,10 +640,12 @@
         pointer-events: none;
     }
 
-    /* 库比对信息标签（叠加在卡片图片左下角：人脸人名/车牌号） */
-    .event-lib-badge {
+    /* 库比对信息标签（叠加在卡片图片左下角：人脸人名/车牌号）
+       同样提权防残留样式污染（right:auto 保险） */
+    .event-card .event-card-image-container .event-lib-badge {
         position: absolute;
         left: 0;
+        right: auto;
         bottom: 0;
         max-width: calc(100% - 8px);
         background: linear-gradient(135deg, rgba(103, 58, 183, 0.92), rgba(81, 45, 168, 0.92));

@@ -290,6 +290,14 @@
         document.querySelectorAll('link[data-pjax][rel="stylesheet"]').forEach(el => el.remove());
         document.querySelectorAll('style[data-pjax]').forEach(el => el.remove());
 
+        // 1.5 清理"页面级残留样式"（带 data-page-style 标记）。
+        //     某些页面的 <style>/<link> 位于 </main> 之外（如驾驶舱 monitor.html 的
+        //     extra_scripts 样式块），整页加载后会残留在文档中且没有 data-pjax 标记，
+        //     pjax 永远不会清理它们，从而污染后续页面（典型症状：事件卡片 GIF 徽标
+        //     因 .gif-badge 的 left/right 双规则叠加被拉伸成通栏长条）。
+        //     这里统一移除；返回该页面时 syncPageStyles 会从新文档重新注入。
+        document.querySelectorAll('style[data-page-style], link[data-page-style]').forEach(el => el.remove());
+
         // 2. 加载目标页面 head 中的页面特定外部样式表
         doc.querySelectorAll('head link[rel="stylesheet"]').forEach(link => {
             const href = link.getAttribute('href') || '';
