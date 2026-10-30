@@ -2168,7 +2168,7 @@ class TaskManager:
                        local_gif_url, minio_gif_url, ftp_gif_url,
                        metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
                        ai_description, ai_description_model, ai_description_time, dedup_status, dedup_reason,
-                       created_at, cross_identity_id FROM events WHERE 1=1'''
+                       created_at, cross_identity_id, cross_feature, image_width, image_height FROM events WHERE 1=1'''
             params = []
 
             if task_id:
@@ -2224,7 +2224,7 @@ class TaskManager:
                        local_gif_url, minio_gif_url, ftp_gif_url,
                        metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
                        ai_description, ai_description_model, ai_description_time, dedup_status, dedup_reason,
-                       created_at, cross_identity_id FROM events
+                       created_at, cross_identity_id, cross_feature, image_width, image_height FROM events
                        WHERE created_at >= datetime('now', 'localtime', ?)
                        AND (dedup_status IS NULL OR dedup_status != 'duplicate')'''
             params = [f'-{seconds} seconds']
@@ -2300,7 +2300,7 @@ class TaskManager:
                           local_gif_url, minio_gif_url, ftp_gif_url,
                           metadata, start_time, end_time, status, entered_zones, zone_name, loitered_zones,
                           ai_description, ai_description_model, ai_description_time, dedup_status, dedup_reason,
-                          created_at, cross_identity_id
+                          created_at, cross_identity_id, cross_feature, image_width, image_height
                    FROM events WHERE event_id = ?''',
                 (event_id,)
             )
@@ -2391,6 +2391,12 @@ class TaskManager:
             dedup_status=row[25] or '',
             dedup_reason=row[26] or '',
             cross_identity_id=(row[28] if len(row) > 28 else None),
+            # 外观描述子与原始帧尺寸：终态推送要让边缘平台拿到可比的外观特征，
+            # 且 bbox 是原图坐标、落盘图被等比缩放过，必须有原图尺寸才能换算回裁剪窗口，
+            # 否则会把整帧当目标裁出来（特征全是背景，且不会报错）。
+            cross_feature=(row[29] if len(row) > 29 else '') or '',
+            image_width=int(row[30] or 0) if len(row) > 30 else 0,
+            image_height=int(row[31] or 0) if len(row) > 31 else 0,
             created_at=created_at
         )
     

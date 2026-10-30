@@ -1182,6 +1182,13 @@ class EventOutput:
                 )
                 return
 
+            # 跨镜身份融合：AI 只产单镜轨迹，身份由边缘平台聚合。
+            # 终态事件必须带上「单镜跟踪ID + 外观描述子」，边缘据此在几十上百路相机间串身份。
+            embedding, embedding_model, embedding_dim, embedding_mu = (
+                self._terminal_embedding(record, d))
+            metadata = d.get('metadata') or {}
+            track_id = metadata.get('track_id') if isinstance(metadata, dict) else None
+
             payload = {
                 'event_id': d['event_id'],
                 'update_type': 'final' if d['status'] == 'final' else 'duplicate',
@@ -1198,6 +1205,12 @@ class EventOutput:
                 'class_name': d['class_name'],
                 'confidence': d['confidence'],
                 'bbox': d['bbox'],
+                # 单镜跟踪ID + 外观描述子（跨镜身份融合用；描述子为空时边缘退化为纯时空关联）
+                'track_id': track_id,
+                'embedding': embedding,
+                'embedding_model': embedding_model,
+                'embedding_dim': embedding_dim,
+                'embedding_mu_hash': embedding_mu,   # 均值指纹：不同则特征空间不可比
                 'image_urls': {                     # 图片存储地址
                     'local': d['local_image_url'],
                     'minio': d['minio_image_url'],
@@ -1236,6 +1249,77 @@ class EventOutput:
             )
         except Exception as e:
             logger.warning(f"[EventOutput] MQTT 推送终态事件失败: {e}")
+
+    def _terminal_embedding(self, record, data: Dict):
+        """提取终态事件的外观描述子（跨镜身份融合用）
+
+        与跨相机融合服务独立：即使 AI 侧 cross_camera 关闭，也要在终态推送时
+        把描述子算出来，否则边缘拿到的事件没有可比的外观特征，只能退化为纯时空关联。
+        优先用落库时已算好的 cross_feature，缺失时现场读快照补算。
+
+        Returns:
+            (embedding, embedding_model, embedding_dim, mu_hash)，失败时全为 None。
+            mu_hash 是中心化均值文件的指纹：同一个 ONNX 配不同均值算出的向量
+            不可比，边缘必须连它一起做特征空间隔离。
+        """
+        try:
+            feature = (getattr(record, 'cross_feature', '') or '').strip()
+            if feature:
+                return (feature,) + self._embedding_meta(feature)
+
+            bbox = (data or {}).get('bbox')
+            if not bbox or not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+                return None, None, None, None
+
+            from src.tracking.cross_camera import features as feat_mod
+            from src.tracking.cross_camera import snapshot
+            image = snapshot.load_snapshot(
+                (data or {}).get('event_id') or getattr(record, 'event_id', ''),
+                (data or {}).get('local_image_url') or '',
+            )
+            if image is None:
+                return None, None, None, None
+            # 事件图落盘时被等比缩放过，bbox 是原图坐标，必须换算回成品图坐标。
+            # 尺寸缺失时 fit_bbox_to_image 会退化成「整张图就是目标」，
+            # 于是特征全是背景且不会报错 —— 所以原图尺寸必须从库里读出来。
+            bbox, inset = feat_mod.fit_bbox_to_image(
+                bbox, image.shape,
+                getattr(record, 'image_width', 0), getattr(record, 'image_height', 0),
+            )
+            if bbox is None:
+                return None, None, None, None
+            feature = feat_mod.extract_descriptor(image, bbox, inset=inset) or ''
+            if not feature:
+                return None, None, None, None
+            return (feature,) + self._embedding_meta(feature)
+        except Exception as e:
+            logger.debug(f"[EventOutput] 终态外观特征提取失败: {e}")
+            return None, None, None, None
+
+    @staticmethod
+    def _embedding_meta(feature: str):
+        """描述子元信息 (model, dim, mu_hash)
+
+        模型标识必须按「实际产出的描述子版本」判定，不能按配置里的 backend：
+        ONNX 缺失或加载失败时 extract_descriptor 会静默退回 HSV 直方图，
+        此时若仍标成 reid，边缘会把 148 维直方图和 512 维 ReID 向量
+        放进同一个空间算余弦，结果毫无意义且无从察觉。
+        """
+        try:
+            from src.tracking.cross_camera import features as feat_mod
+            parsed = feat_mod.decode_any(feature)
+        except Exception:
+            parsed = None
+        if not parsed:
+            return None, None, None
+        version, vector, _meta, mu_hash = parsed
+        model = ('cross_camera_reid' if int(version) >= feat_mod.REID_VERSION
+                 else 'cross_camera_histogram')
+        try:
+            dim = int(vector.shape[0])
+        except Exception:
+            dim = None
+        return model, dim, (int(mu_hash) if mu_hash else 0)
 
     def crop_library_image(self, image: np.ndarray, bbox: tuple) -> Optional[np.ndarray]:
         """按检测框外扩裁剪人脸/车牌抓拍小图（输入非法返回 None）
