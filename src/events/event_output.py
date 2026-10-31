@@ -719,6 +719,13 @@ class EventOutput:
             # loitered_zones：生命周期内累计曾徘徊的区域（只增不减），写入独立列
             loitered_zones = event_data.get('loitered_zones') or []
 
+            # 同 _insert_tracking_record：非生命周期事件（占道/堆积等）若带跟踪ID，
+            # 也要并进 metadata，否则边缘侧拿到的 track_id 为空。
+            record_meta = dict(event.get('metadata') or {})
+            track_id = event_data.get('track_id')
+            if track_id not in (None, '') and 'track_id' not in record_meta:
+                record_meta['track_id'] = track_id
+
             event_record = EventRecord(
                 event_id=event['event_id'],
                 task_id=event.get('task_id'),
@@ -734,7 +741,7 @@ class EventOutput:
                 local_gif_url=gif_urls.get('local', ''),
                 minio_gif_url=gif_urls.get('minio', ''),
                 ftp_gif_url=gif_urls.get('ftp', ''),
-                metadata=event.get('metadata', {}),
+                metadata=record_meta,
                 start_time=self._parse_datetime(event_data.get('start_time')),
                 end_time=self._parse_datetime(event_data.get('end_time')),
                 status=event_data.get('status', 'tracking_start'),
@@ -973,6 +980,14 @@ class EventOutput:
         zone_name = ",".join(current_zones) if current_zones else ""
         loitered_zones = event_data.get('loitered_zones') or []
 
+        # 单镜跟踪ID落库：终态 MQTT 推送时只读得到数据库记录，
+        # 而 track_id 原本只存在于 data 里、从不写库，导致边缘侧永远拿到 null。
+        # 统一并入 metadata（update_event 对 metadata 是合并语义，不会被库比对结果覆盖）。
+        record_meta = dict(event_data.get('metadata') or {})
+        track_id = event_data.get('track_id')
+        if track_id not in (None, '') and 'track_id' not in record_meta:
+            record_meta['track_id'] = track_id
+
         record = EventRecord(
             event_id=event_id,
             task_id=self.task_id,
@@ -985,7 +1000,7 @@ class EventOutput:
             local_image_url=image_urls.get('local', ''),
             minio_image_url=image_urls.get('MinIOOutputter', ''),
             ftp_image_url=image_urls.get('FTPOutputter', ''),
-            metadata=event_data.get('metadata', {}),
+            metadata=record_meta,
             start_time=self._parse_datetime(event_data.get('start_time')),
             end_time=self._parse_datetime(event_data.get('end_time')),
             status=status,
@@ -1187,7 +1202,19 @@ class EventOutput:
             embedding, embedding_model, embedding_dim, embedding_mu = (
                 self._terminal_embedding(record, d))
             metadata = d.get('metadata') or {}
+            if isinstance(metadata, str):
+                try:
+                    import json as _json
+                    metadata = _json.loads(metadata) or {}
+                except Exception:
+                    metadata = {}
             track_id = metadata.get('track_id') if isinstance(metadata, dict) else None
+            # 兼容 data 层直接带 track_id 的情况；空串统一归一为 null，
+            # 避免边缘侧把 "" 当成有效的轨迹标识。
+            if track_id in (None, ''):
+                track_id = d.get('track_id')
+            if track_id in (None, ''):
+                track_id = None
 
             payload = {
                 'event_id': d['event_id'],

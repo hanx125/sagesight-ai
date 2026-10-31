@@ -913,6 +913,12 @@ class TrackedObjectProcessor(mp.Process):
             regions=regions,
         )
 
+        # PTZ 自动跟踪：每帧刷新锁定目标的位置
+        # 必须放在 CameraState.update 之后（锁定关系由其中的 autotrack 回调建立），
+        # 又必须每帧执行（不能只靠回调，静止目标不会触发回调）
+        if camera_id in self.ptz_metrics:
+            self._update_ptz_target(camera_id, tracked_objects_dict, frame_time)
+
         # 人员统计：驱动计数（依赖跟踪轨迹做分界线跨越判定 / 方向去重）
         counting_manager = self.counting_managers.get(camera_id)
         if counting_manager is not None:
@@ -1366,15 +1372,14 @@ class TrackedObjectProcessor(mp.Process):
         self, camera_id: str, obj_dict: dict, frame_time: float
     ):
         """
-        PTZ 自动跟踪回调
+        PTZ 自动跟踪回调 —— 只负责"锁定谁"
 
-        当目标位置发生明显移动时触发,更新对应相机的 PTZMetrics 共享状态:
-        - frame_time: 当前帧时间（供运动估计器判断 PTZ 移动期间）
-        - tracking_active: 设置为活跃
-        - 选择跟踪目标（若当前无跟踪目标,选择该目标作为跟踪对象）
+        本回调由 CameraState 在目标中心位移超过阈值时触发，因此不能用来做
+        逐帧位置刷新（静止目标位移不足时不会触发，控制端会误判跟丢）。
+        位置刷新统一由 _update_ptz_target 每帧完成。
 
-        实际 PTZ ONVIF 控制由独立 PTZ 控制进程基于
-        src/cameras/ptz_service.py 的 PTZController 读取 PTZMetrics 完成。
+        锁定规则：当前无锁定目标时，第一个满足条件的合格目标即被锁定，
+        直到它消失（_clear_ptz_tracking）才释放。
 
         Args:
             camera_id: 摄像机ID
@@ -1386,53 +1391,119 @@ class TrackedObjectProcessor(mp.Process):
             return
 
         # 未启用自动跟踪则跳过
-        if not metrics.is_autotracker_enabled():
+        if not metrics.is_tracking_enabled():
+            return
+
+        # 已有锁定目标：不抢占（避免画面里出现新目标就改追别人）
+        if self.ptz_tracked_object.get(camera_id):
             return
 
         track_id = obj_dict.get("id", "")
-
-        # 选择跟踪目标:若当前无跟踪目标,则选当前目标
-        current_tracked = self.ptz_tracked_object.get(camera_id)
-        if current_tracked is None:
-            self.ptz_tracked_object[camera_id] = track_id
-            current_tracked = track_id
-            logger.info(
-                f"[{camera_id}] PTZ 锁定跟踪目标: id={track_id}, "
-                f"label={obj_dict.get('label', 'unknown')}"
-            )
-
-        # 仅更新当前跟踪目标的状态
-        if current_tracked != track_id:
+        if not track_id:
             return
 
-        # 更新 PTZMetrics 共享状态
+        label = obj_dict.get("label", "unknown")
+
+        # 类别白名单：只锁指定类别（留空 = 不限制）
         try:
-            metrics.frame_time.value = frame_time
-            metrics.tracking_active.set()
-            metrics.motor_stopped.clear()
+            from src.cameras.ptz_autotrack import get_autotrack_config
+            lock_labels = get_autotrack_config().get('lock_labels') or []
+        except Exception:
+            lock_labels = []
+        if lock_labels and label not in lock_labels:
+            return
+
+        self.ptz_tracked_object[camera_id] = track_id
+        logger.info(
+            f"[{camera_id}] PTZ 锁定跟踪目标: id={track_id}, label={label}"
+        )
+
+    def _update_ptz_target(
+        self, camera_id: str, tracked_objects: dict, frame_time: float
+    ):
+        """
+        每帧刷新 PTZ 跟踪目标位置（归一化坐标）
+
+        锁定关系由 _on_object_autotrack 建立，这里只做位置上报：
+        - 本帧检测到锁定目标 → 写归一化中心点/宽高（控制线程据此算速度）
+        - 本帧没检测到 → mark_lost，不刷新 seen_ts，
+          由控制线程按 lost_timeout 判断是否真的跟丢（避免转动模糊导致的
+          单帧丢失就急停，造成云台一起一停地抖）
+
+        Args:
+            camera_id: 摄像机ID
+            tracked_objects: 本帧跟踪对象字典 {obj_id: {...}}
+            frame_time: 当前帧时间戳
+        """
+        metrics = self.ptz_metrics.get(camera_id)
+        if metrics is None or not metrics.is_tracking_enabled():
+            return
+
+        track_id = self.ptz_tracked_object.get(camera_id)
+        if not track_id:
+            return
+
+        obj = (tracked_objects or {}).get(track_id)
+        if not obj:
+            metrics.mark_lost()
+            return
+
+        frame_shape = (self.camera_configs.get(camera_id) or {}).get('frame_shape') or (0, 0)
+        frame_h = int(frame_shape[0] or 0)
+        frame_w = int(frame_shape[1] or 0)
+        if frame_w <= 0 or frame_h <= 0:
+            return
+
+        box = obj.get("box") or []
+        if len(box) < 4:
+            return
+
+        x1, y1, x2, y2 = (float(v) for v in box[:4])
+        if x2 <= x1 or y2 <= y1:
+            return
+
+        # 本帧框是否来自真实检测
+        # disappeared>0 表示跟踪器本帧没匹配到检测，框是 Kalman 外推的。
+        # 这种框仍可用于平滑控制，但绝不能刷新"最后可见时间"，否则目标
+        # 已走出画面、轨迹还要 max_disappeared(≈1.8s) 才注销，这段时间
+        # 云台会一直追着外推框转到限位，lost_timeout 也永远不会触发。
+        coasting = int(obj.get("disappeared") or 0) > 0
+
+        try:
+            metrics.update_target(
+                cx=((x1 + x2) / 2.0) / frame_w,
+                cy=((y1 + y2) / 2.0) / frame_h,
+                w=(x2 - x1) / frame_w,
+                h=(y2 - y1) / frame_h,
+                label=str(obj.get("label") or ""),
+                obj_id=str(track_id),
+                frame_time=frame_time,
+                refresh_seen=not coasting,
+            )
         except Exception as e:
-            logger.debug(f"[{camera_id}] 更新 PTZMetrics 失败: {e}")
+            logger.debug(f"[{camera_id}] 更新 PTZ 目标位置失败: {e}")
 
     def _clear_ptz_tracking(self, camera_id: str, frame_time: float):
         """
         清除 PTZ 跟踪状态
 
-        当跟踪目标消失或停止跟踪时调用,通知 PTZ 控制进程停止移动。
+        目标结束（确实消失，已过事件宽限期）时调用：清空共享目标，控制线程
+        下一 tick 读到空目标会立即停转。
+
+        ⚠️ 不在这里写 motor_moving：云台是否还在转只由主进程控制线程维护，
+        事件进程擅自置 0 会让跟踪侧以为画面已稳定，从而恢复严格匹配，
+        而此时云台仍在转，目标会当场丢 ID。
 
         Args:
             camera_id: 摄像机ID
             frame_time: 当前帧时间戳
         """
         metrics = self.ptz_metrics.get(camera_id)
-        if metrics is None:
-            return
-
-        try:
-            metrics.stop_time.value = frame_time
-            metrics.tracking_active.clear()
-            metrics.motor_stopped.set()
-        except Exception as e:
-            logger.debug(f"[{camera_id}] 清除 PTZMetrics 失败: {e}")
+        if metrics is not None:
+            try:
+                metrics.clear_target()
+            except Exception as e:
+                logger.debug(f"[{camera_id}] 清除 PTZMetrics 失败: {e}")
 
         self.ptz_tracked_object[camera_id] = None
         logger.info(f"[{camera_id}] PTZ 跟踪已清除")
@@ -1742,6 +1813,10 @@ class TrackedObjectProcessor(mp.Process):
         bbox = obj_dict.get("box", [0, 0, 0, 0])
 
         update_data = {
+            # 单镜跟踪ID：边缘平台据此把全局身份映射回本机轨迹（PTZ 锁定/画框都用它）。
+            # 必须在终态数据里带上，否则落库记录无从获得该字段。
+            # 兜底用 pending_track_id：obj_dict 来自最后一帧快照，字段缺失时它就是同一个 ID。
+            "track_id": obj_dict.get("id") or pending_track_id or "",
             "confidence": confidence,
             "bbox": bbox,
             "class_name": class_name,
