@@ -194,7 +194,14 @@ def _run_executor_process(task_config: Dict, ai_stream_enabled_state=None):
     
     # 创建任务执行器并运行（run()方法包含主循环）
     from src.tasks.task_executor import MultiCameraTaskExecutor
-    executor = MultiCameraTaskExecutor(task_config, cameras, ai_stream_enabled_state=ai_stream_enabled_state)
+    # PTZ 共享状态由主进程注入，取出后立刻从 task_config 移除：
+    # 里面是 mp 同步对象，不能跟着 task_config 被序列化到状态接口/数据库
+    ptz_metrics_map = task_config.pop('_ptz_metrics', None) or None
+    executor = MultiCameraTaskExecutor(
+        task_config, cameras,
+        ai_stream_enabled_state=ai_stream_enabled_state,
+        ptz_metrics=ptz_metrics_map,
+    )
     executor.run()  # 运行任务执行器（阻塞，直到任务停止）
 
 
@@ -311,6 +318,25 @@ class TaskProcessManager:
                                 f"{list(shared_info_map.keys())}")
             except Exception as e:
                 logger.warning(f"[TaskProcessManager] 共享解码订阅失败（回退私有解码）: {e}")
+
+            # ========================================
+            # PTZ 自动跟踪共享状态注入
+            # ========================================
+            # 云台物理资源只能由主进程控制，任务进程负责写目标位置。
+            # 通过 task_config 传给子进程（mp.Value/Array/Event 支持跨进程传递），
+            # 子进程 TrackedObjectProcessor 每帧把锁定目标的归一化位置写进去。
+            task_config.pop('_ptz_metrics', None)
+            try:
+                from src.cameras.ptz_autotrack import build_metrics_map
+                _ptz_map = build_metrics_map(self.task_cameras.get(task_id) or [])
+                if _ptz_map:
+                    task_config['_ptz_metrics'] = _ptz_map
+                    logger.info(
+                        f"[TaskProcessManager] 任务 {task_name} 注入 PTZ 共享状态: "
+                        f"{len(_ptz_map)} 路相机"
+                    )
+            except Exception as e:
+                logger.warning(f"[TaskProcessManager] PTZ 共享状态注入失败: {e}")
 
             # 使用 Process 类启动 task_executor（自动配置日志队列）
             # 注意：设置为非守护进程（daemon=False），因为任务可能需要创建子进程
@@ -1839,6 +1865,15 @@ if __name__ == '__main__':
         logger.info("[Main] 跨相机跟踪融合服务已启动")
     else:
         logger.info("[Main] 跨相机跟踪未启用（可在 系统配置 → 跨相机跟踪 打开后重启生效）")
+
+    # 启动 PTZ 自动跟踪闭环服务（读 PTZMetrics 的目标位置 → 驱动云台转动）
+    # 注意：云台只能由主进程控制（ONVIF 连接不可跨进程共享），
+    # 任务进程只负责向共享状态写目标位置。
+    from src.cameras.ptz_autotrack import start_ptz_autotrack_service
+    if start_ptz_autotrack_service():
+        logger.info("[Main] PTZ 自动跟踪服务已启动")
+    else:
+        logger.info("[Main] PTZ 自动跟踪未启用（config/ptz_autotrack.yaml）")
 
     # 启动节点管理客户端（向边缘平台注册节点、上报心跳与指标，接收部署/停止指令）
     # enabled=false 时不启动（仍可在前端系统管理页面启用后重启服务生效）

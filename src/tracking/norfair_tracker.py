@@ -244,9 +244,16 @@ class NorfairTracker:
         # 使用 "iou" 向量化距离函数（Norfair 内置，自动按label分组匹配）
         # IoU 距离阈值：1 - IoU，越小表示要求匹配越严格
         # distance_threshold=0.7 等价于 IoU > 0.3 即可匹配
+        self._normal_distance_threshold = 0.7
+        # PTZ 转动期间放宽到 1.01：云台一转整幅画面在平移，若没有做相机运动
+        # 补偿，所有轨迹的预测框和新检测框都会错开，严格阈值会让目标全部换 ID。
+        # 1.01 等价于"只要 IoU >= 0 就允许配对"，靠匈牙利算法取最近邻。
+        self._ptz_distance_threshold = 1.01
+        self._ptz_moving = False
+
         self.tracker = Tracker(
             distance_function="iou",
-            distance_threshold=0.7,
+            distance_threshold=self._normal_distance_threshold,
             initialization_delay=self.min_initialized,
             hit_counter_max=self.max_disappeared,
             filter_factory=OptimizedKalmanFilterFactory(R=3.4),
@@ -498,6 +505,16 @@ class NorfairTracker:
         self.disappeared[obj_id] = 0
 
         tracked_obj = self.tracked_objects[obj_id]
+
+        # 云台转动期间：画面整体在平移，目标在画面里的"位移"主要是相机运动
+        # 造成的，静止/活动判定会完全失真（motionless_count 虚增会触发
+        # max_frames 注销，把正在被跟拍的目标半路清掉）。
+        # 这里只更新检测数据与轨迹，跳过状态判定和 zone 检测。
+        if self._ptz_moving:
+            tracked_obj.obj_data.update(obj)
+            self._append_trajectory(obj_id, obj.get("box", [0, 0, 0, 0]))
+            return
+
         stationary = tracked_obj.obj_data["motionless_count"] >= self.stationary_threshold
 
         # 更新位置,判断静止/移动
@@ -522,15 +539,7 @@ class NorfairTracker:
         tracked_obj.obj_data.update(obj)
 
         # 追加轨迹点（记录质心）
-        box = obj.get("box", [0, 0, 0, 0])
-        cx = int((box[0] + box[2]) / 2)
-        cy = int((box[1] + box[3]) / 2)
-        if obj_id not in self.trajectory_history:
-            self.trajectory_history[obj_id] = []
-        self.trajectory_history[obj_id].append((cx, cy))
-        # 限制轨迹长度
-        if len(self.trajectory_history[obj_id]) > self.max_trajectory_length:
-            self.trajectory_history[obj_id] = self.trajectory_history[obj_id][-self.max_trajectory_length:]
+        self._append_trajectory(obj_id, obj.get("box", [0, 0, 0, 0]))
 
         # 调用 TrackedObject.update() 执行 zone 检测和 loitering 计数
         # 必须在 obj_data 更新后调用，zone 检测依赖 centroid/box 等最新字段
@@ -545,6 +554,56 @@ class NorfairTracker:
                 f"[NorfairTracker-{self.camera_id}] TrackedObject.update() 失败 "
                 f"obj_id={obj_id}: {e}"
             )
+
+    def _append_trajectory(self, obj_id: str, box) -> None:
+        """追加轨迹点（质心），限制最大长度"""
+        if not box or len(box) < 4:
+            return
+        cx = int((box[0] + box[2]) / 2)
+        cy = int((box[1] + box[3]) / 2)
+        if obj_id not in self.trajectory_history:
+            self.trajectory_history[obj_id] = []
+        self.trajectory_history[obj_id].append((cx, cy))
+        if len(self.trajectory_history[obj_id]) > self.max_trajectory_length:
+            self.trajectory_history[obj_id] = self.trajectory_history[obj_id][
+                -self.max_trajectory_length:
+            ]
+
+    def _apply_ptz_tolerance(self, frame_time: float) -> bool:
+        """
+        根据云台是否转动切换匹配严格度
+
+        云台转动时整幅画面在平移，而本项目没有实现相机运动补偿
+        （coord_transformations 恒为 None），轨迹的 Kalman 预测框会与
+        新检测框整体错开，严格的 IoU 阈值会让目标当场换 ID。
+        转动期间放宽到 _ptz_distance_threshold，转动停止立刻恢复。
+
+        Returns:
+            bool: 当前是否处于云台转动期间
+        """
+        moving = False
+        if self.ptz_metrics is not None:
+            try:
+                moving = self.ptz_metrics.is_ptz_moving_at(frame_time)
+            except Exception:
+                moving = False
+
+        if moving != self._ptz_moving:
+            self._ptz_moving = moving
+            if moving:
+                self.tracker.distance_threshold = self._ptz_distance_threshold
+                logger.info(
+                    f"[NorfairTracker-{self.camera_id}] 云台转动中，"
+                    f"匹配阈值 {self._normal_distance_threshold} → "
+                    f"{self._ptz_distance_threshold}（静止判定暂停）"
+                )
+            else:
+                self.tracker.distance_threshold = self._normal_distance_threshold
+                logger.info(
+                    f"[NorfairTracker-{self.camera_id}] 云台停止，"
+                    f"匹配阈值恢复 {self._normal_distance_threshold}"
+                )
+        return moving
 
     def update_frame_times(self, frame_name: str, frame_time: float):
         """
@@ -587,6 +646,9 @@ class NorfairTracker:
                 - ratio: 宽高比
                 - region: 检测区域 [x1, y1, x2, y2]
         """
+        # 云台转动期间放宽匹配阈值（必须在 tracker.update 之前生效）
+        self._apply_ptz_tolerance(frame_time)
+
         # 转换为 norfair Detection
         norfair_detections = []
         for obj in detections:
@@ -616,18 +678,12 @@ class NorfairTracker:
                 )
             )
 
-        # PTZ autotrack: 计算坐标变换（补偿相机运动）
+        # PTZ 相机运动补偿
+        # 当前不做真正的坐标变换（PtzMotionEstimator 未实现）：云台转动期间
+        # 改为在上面的 _apply_ptz_tolerance 里放宽匹配阈值来维持 ID 连续。
+        # 这是"够用"而非"最优"的方案——若后续要做精确补偿，可在这里接
+        # 特征点/相位相关估计的全局平移，把 estimate 映射到新帧坐标系。
         coord_transformations = None
-        if self.ptz_metrics and self.ptz_metrics.is_autotracker_enabled():
-            # TODO: 后续实现 PtzMotionEstimator,与项目 ptz_service.py 对接
-            # 目前 coord_transformations=None,不补偿相机运动
-            # 实现后:
-            #   if not self.ptz_motion_estimator:
-            #       self.ptz_motion_estimator = PtzMotionEstimator(...)
-            #   coord_transformations = self.ptz_motion_estimator.motion_estimator(
-            #       detections, frame_name, frame_time, self.camera_id
-            #   )
-            pass
 
         # 调用 norfair Tracker 更新
         tracked_objects = self.tracker.update(
@@ -681,7 +737,9 @@ class NorfairTracker:
         ]
 
         # Zone 级持久化 loitering 聚合（在所有 TrackedObject 更新后执行）
-        if self._zone_loitering_state:
+        # 云台转动期间 zone 判定不可靠（画面在平移，目标可能"假进入/假离开"），
+        # 暂停聚合，避免误触发徘徊告警
+        if self._zone_loitering_state and not self._ptz_moving:
             self._update_zone_loitering(frame_time)
 
     def _update_zone_loitering(self, frame_time: float):
@@ -735,6 +793,11 @@ class NorfairTracker:
             obj_dict = obj.to_dict()
             # 注入轨迹历史
             obj_dict["trajectory"] = self.trajectory_history.get(obj_id, [])
+            # 注入本帧是否真的检测到：disappeared>0 表示当前框来自
+            # Kalman 外推而非真实检测（目标短暂遮挡/运动模糊/已离开画面）。
+            # PTZ 自动跟踪靠它区分"真实可见"与"预测出来的幽灵框"，
+            # 否则目标出画后云台会持续追着外推框转。
+            obj_dict["disappeared"] = int(self.disappeared.get(obj_id, 0))
             result[obj_id] = obj_dict
         return result
 

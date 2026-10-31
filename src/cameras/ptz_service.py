@@ -11,6 +11,7 @@ ONVIF PTZ服务
 """
 
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from typing import Dict, Optional, Any, Iterable, List
@@ -115,6 +116,9 @@ class PTZController:
         self._media_token = media_token
         self._ptz_config_token = ptz_config_token
         self._capabilities = self._detect_capabilities()
+        # 自动跟踪的速度控制锁：避免控制线程与 HTTP 手动控制同时下发 ONVIF 指令
+        self._motion_lock = threading.Lock()
+        self._moving = False
         logger.info(f"PTZ capabilities detected: {self._capabilities}")
 
     def _detect_capabilities(self) -> PTZCapabilities:
@@ -206,6 +210,70 @@ class PTZController:
             self._absolute_move(translation, speed)
         else:
             logger.warning("No PTZ move method available")
+
+    # ========================================
+    # 非阻塞速度控制（供 PTZ 自动跟踪使用）
+    # ========================================
+
+    def move_velocity(self, pan: float, tilt: float, zoom: float = 0.0) -> bool:
+        """
+        以指定速度持续转动（非阻塞，立即返回）
+
+        与 move() 的区别：move() 按 duration 阻塞等待并自动 Stop，适合
+        "转到某个方向"的一次性动作；自动跟踪需要每隔一两百毫秒调整一次速度，
+        必须发完即返回，由调用方在需要时显式调用 stop_move()。
+
+        Args:
+            pan: 水平速度，-1.0 ~ 1.0
+            tilt: 垂直速度，-1.0 ~ 1.0
+            zoom: 变焦速度，-1.0 ~ 1.0（0 表示不变焦）
+
+        Returns:
+            bool: 指令是否成功下发（设备不支持连续移动时返回 False）
+        """
+        if not self._capabilities.continuous_move:
+            return False
+
+        pan = max(-1.0, min(1.0, float(pan)))
+        tilt = max(-1.0, min(1.0, float(tilt)))
+        zoom = max(-1.0, min(1.0, float(zoom)))
+
+        vector = self._generate_vector([pan, tilt, zoom])
+        if not vector:
+            # 三个分量全为 0，不下发指令（避免无意义的 ONVIF 请求）
+            return False
+
+        with self._motion_lock:
+            try:
+                self._ptz_svc.ContinuousMove({
+                    'ProfileToken': self._media_token,
+                    'Velocity': vector
+                })
+                self._moving = True
+                return True
+            except Exception as e:
+                logger.warning(f"ContinuousMove(velocity) failed: {e}")
+                return False
+
+    def stop_move(self) -> bool:
+        """停止当前转动（与 move_velocity 配对）"""
+        with self._motion_lock:
+            try:
+                self._ptz_svc.Stop({
+                    'ProfileToken': self._media_token,
+                    'PanTilt': True,
+                    'Zoom': True
+                })
+                self._moving = False
+                return True
+            except Exception as e:
+                logger.warning(f"Stop(velocity) failed: {e}")
+                return False
+
+    @property
+    def is_moving(self) -> bool:
+        """当前是否处于自动跟踪下发的转动中"""
+        return self._moving
 
     def _execute_threaded(self, func, *args):
         """使用线程池执行任务"""

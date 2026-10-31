@@ -737,7 +737,10 @@ class MultiCameraTaskExecutor:
         self.detected_objects_queue = None
         self.stop_event = None
         self.tracked_object_processor = None
-        self.ptz_metrics = {}
+        # ⚠️ 这里曾写成 self.ptz_metrics = {}，把构造参数传入的共享状态直接清空，
+        # 导致主进程注入的 PTZMetrics 到不了 TrackedObjectProcessor，
+        # PTZ 自动跟踪的整条链路因此静默失效。保留参数值。
+        self.ptz_metrics = ptz_metrics or {}
         self.detector_params_by_camera: Dict[str, Dict] = {}
         self.out_events: Dict[str, object] = {}
 

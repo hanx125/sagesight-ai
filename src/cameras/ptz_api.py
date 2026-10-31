@@ -836,6 +836,63 @@ def get_patrols():
         return jsonify({'error': str(e)}), 500
 
 
+@ptz_bp.route('/autotrack', methods=['GET'])
+def get_autotrack_status():
+    """查询 PTZ 自动跟踪状态（含各相机锁定目标与云台移动状态）"""
+    try:
+        from src.cameras.ptz_autotrack import get_ptz_autotrack_service
+        return jsonify({'success': True, **get_ptz_autotrack_service().snapshot()})
+    except Exception as e:
+        logger.error(f"查询 PTZ 自动跟踪状态失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@ptz_bp.route('/autotrack', methods=['POST'])
+def set_autotrack_switch():
+    """
+    开关 PTZ 自动跟踪
+
+    Body:
+        {"camera_id": "xxx", "enabled": true}   单路开关
+        {"enabled": false}                       全部开关
+
+    关闭时会同时清空锁定目标，云台在当前 tick 内停转。
+    """
+    try:
+        payload = request.get_json(silent=True) or {}
+        if 'enabled' not in payload:
+            return jsonify({'error': '缺少 enabled 字段'}), 400
+
+        enabled = bool(payload.get('enabled'))
+        camera_id = payload.get('camera_id')
+
+        from src.cameras.ptz_autotrack import get_ptz_autotrack_service
+        service = get_ptz_autotrack_service()
+
+        if camera_id:
+            metrics = service.get_metrics(str(camera_id))
+            if metrics is None:
+                return jsonify({'error': f'相机 {camera_id} 未注册自动跟踪'}), 404
+            metrics.set_runtime_enabled(enabled)
+            if not enabled:
+                metrics.clear_target()
+            logger.info(f"PTZ 自动跟踪开关: camera={camera_id} enabled={enabled}")
+        else:
+            for cam_id in (service.snapshot().get('cameras') or {}):
+                metrics = service.get_metrics(str(cam_id))
+                if metrics is not None:
+                    metrics.set_runtime_enabled(enabled)
+                    if not enabled:
+                        metrics.clear_target()
+            logger.info(f"PTZ 自动跟踪开关（全部相机）: enabled={enabled}")
+
+        return jsonify({'success': True, 'enabled': enabled, 'camera_id': camera_id})
+
+    except Exception as e:
+        logger.error(f"设置 PTZ 自动跟踪开关失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 def register_ptz_api(app):
     """
     注册云台控制API到Flask应用
