@@ -692,7 +692,13 @@ class CameraWorker:
 class MultiCameraTaskExecutor:
     """多摄像机任务执行器 - 一个任务同时检测多个摄像机"""
 
-    def __init__(self, task_config: Dict, cameras: List[Dict], ai_stream_enabled_state=None):
+    def __init__(
+        self,
+        task_config: Dict,
+        cameras: List[Dict],
+        ai_stream_enabled_state=None,
+        ptz_metrics=None,
+    ):
         """
         初始化多摄像机任务执行器
 
@@ -702,6 +708,8 @@ class MultiCameraTaskExecutor:
             ai_stream_enabled_state: 跨进程共享的 AI 流启用状态 dict（Manager dict 代理）
                 前端通过 /api/ai-stream/enable|disable 控制此状态，
                 TrackedObjectProcessor 读取此状态决定是否推送 AI 帧。
+            ptz_metrics: {camera_id: PTZMetrics} 共享状态（由主进程 TaskProcessManager 注入）
+                缺失时为空 dict，PTZ 自动跟踪随之停用，其余功能不受影响。
         """
         self.task_config = task_config
         self.cameras = cameras
