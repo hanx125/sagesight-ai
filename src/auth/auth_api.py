@@ -272,12 +272,20 @@ _SSO_PENDING = {}
 _SSO_PENDING_TTL = 600
 
 
-def _sso_pending_put(state: str, code_verifier):
-    """登记一次待回调的授权上下文，并顺带清理过期项。"""
+def _sso_pending_put(state: str, code_verifier, runtime_mode=None):
+    """登记一次待回调的授权上下文，并顺带清理过期项。
+
+    runtime_mode 一并登记：回调时若浏览器未带回会话 Cookie，仍能按用户在
+    登录页选择的运行模式落库，不会退回默认值。
+    """
     now = time.time()
     for k in [k for k, v in _SSO_PENDING.items() if v['exp'] < now]:
         _SSO_PENDING.pop(k, None)
-    _SSO_PENDING[state] = {'code_verifier': code_verifier, 'exp': now + _SSO_PENDING_TTL}
+    _SSO_PENDING[state] = {
+        'code_verifier': code_verifier,
+        'runtime_mode': runtime_mode,
+        'exp': now + _SSO_PENDING_TTL,
+    }
 
 
 def _sso_pending_pop(state: str):
@@ -370,11 +378,19 @@ def sso_login():
 
     state = generate_state()
     code_verifier = generate_code_verifier() if cfg.get('use_pkce', True) else None
+    # 登录页选择的运行模式：随授权上下文暂存，回调认证成功后再落库（部署级配置）
+    runtime_mode = (request.args.get('runtime_mode') or '').strip()
+    if runtime_mode:
+        from src.system.runtime_mode import VALID_MODES
+        if runtime_mode not in VALID_MODES:
+            return jsonify({'error': '运行模式不合法'}), 400
     # 授权上下文优先存入 Flask 会话（同域回调自动携带），回调时校验防 CSRF；
     # 同时登记服务端一次性兜底缓存（浏览器访问主机与回调地址不同源时仍可完成）。
     session['sso_state'] = state
     session['sso_code_verifier'] = code_verifier
-    _sso_pending_put(state, code_verifier)
+    if runtime_mode:
+        session['sso_runtime_mode'] = runtime_mode
+    _sso_pending_put(state, code_verifier, runtime_mode)
     logger.info(f"SSO 发起登录: state={state[:8]}..., 浏览器Host={request.host}, redirect_uri={cfg.get('redirect_uri')}")
 
     return jsonify({'url': build_authorize_url(cfg, state, code_verifier)})
@@ -407,9 +423,11 @@ def sso_callback():
 
     stored_state = session.pop('sso_state', None)
     code_verifier = session.pop('sso_code_verifier', None)
+    # 登录页选择的运行模式：会话优先，服务端兜底记录兜第二次
+    runtime_mode = session.pop('sso_runtime_mode', None)
     if stored_state and state == stored_state:
         # 会话校验通过：消费服务端兜底记录，防同一 state 重放
-        _sso_pending_pop(state)
+        pending = _sso_pending_pop(state)
     else:
         # 会话 Cookie 未随回调带回（访问主机与回调地址不同源、浏览器禁 Cookie、
         # 重复回调/并发发起等）：改用服务端一次性签发的 state 兜底校验。
@@ -433,6 +451,10 @@ def sso_callback():
             f"浏览器Host={request.host}, redirect_uri={cfg.get('redirect_uri')}"
         )
         code_verifier = pending['code_verifier']
+
+    # 会话未带回模式时，用兜底记录里的模式补上（老版本发起的授权无此字段，保持不动）
+    if not runtime_mode and pending:
+        runtime_mode = pending.get('runtime_mode')
 
     from src.auth.sso_client import exchange_code, fetch_user_identity
     try:
@@ -471,6 +493,18 @@ def sso_callback():
     session['username'] = user.username
     session['role'] = user.role
     session.permanent = True
+
+    # 认证通过后才落运行模式：授权失败/被拒不会改动部署配置
+    if runtime_mode:
+        from src.system.runtime_mode import VALID_MODES, set_runtime_mode
+        if runtime_mode in VALID_MODES:
+            if set_runtime_mode(runtime_mode):
+                logger.info(f"单点登录：运行模式已切换为 {runtime_mode}（操作人: {user.username}）")
+            else:
+                logger.error(f"单点登录：运行模式保存失败 {runtime_mode}（操作人: {user.username}）")
+        else:
+            logger.warning(f"单点登录：忽略非法运行模式 {runtime_mode}")
+
     logger.info(f"单点登录成功: {user.username}")
 
     return render_template('sso_callback.html', result_type='success', message=user.display_name or user.username)

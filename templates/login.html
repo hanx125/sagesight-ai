@@ -523,12 +523,11 @@
             flex-direction: column;
             align-items: center;
             text-align: center;
-            padding: 22px 4px 4px;
+            padding: 18px 4px 4px;
         }
 
         .form-card.mode-cloud .sso-panel { display: flex; }
-        .form-card.mode-cloud .login-form,
-        .form-card.mode-cloud .login-hint { display: none; }
+        .form-card.mode-cloud .login-form { display: none; }
 
         .sso-orb {
             width: 58px;
@@ -573,7 +572,7 @@
             display: flex;
             flex-direction: column;
             gap: 18px;
-            margin-top: 28px;
+            margin-top: 20px;
         }
 
         .input-group { position: relative; }
@@ -864,24 +863,7 @@
 
         .sso-btn svg { width: 17px; height: 17px; flex-shrink: 0; }
 
-        /* 底部提示 */
-        .login-hint {
-            margin-top: 22px;
-            padding: 11px 14px;
-            background: var(--accent-soft);
-            border: 1px solid rgba(0, 229, 195, 0.18);
-            border-radius: 10px;
-            font-size: 12px;
-            color: var(--muted);
-            text-align: center;
-            letter-spacing: 0.5px;
-        }
-
-        .login-hint code {
-            color: var(--accent);
-            font-family: 'Consolas', monospace;
-        }
-
+        /* 底部版权 */
         .login-footer {
             margin-top: 18px;
             text-align: center;
@@ -1001,40 +983,40 @@
                 </div>
                 {% endif %}
 
-                <form class="login-form" id="loginForm" onsubmit="return false;">
-                    <!-- 运行模式：下拉选项；登录成功后持久化为部署级配置 -->
-                    <div class="mode-select">
-                        <div class="mode-select-head">
-                            <span>运行模式</span>
-                            <span class="mode-select-hint">登录后生效</span>
-                        </div>
-                        <input type="hidden" name="runtimeMode" id="runtimeModeInput"
-                               value="{{ 'cluster' if runtime_mode == 'cluster' else 'standalone' }}">
-                        <div class="mode-dropdown" id="modeDropdown">
-                            <button type="button" class="mode-dropdown-btn" id="modeDropdownBtn"
-                                    aria-haspopup="listbox" onclick="toggleModeDropdown(event)">
-                                <span id="modeDropdownLabel">{% if runtime_mode == 'cluster' %}接入模式{% else %}标准模式{% endif %}</span>
-                                <svg class="chev" viewBox="0 0 24 24" fill="currentColor">
-                                    <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/>
-                                </svg>
-                            </button>
-                            <div class="mode-dropdown-list" role="listbox" aria-label="运行模式">
-                                <div class="mode-dropdown-item {% if runtime_mode != 'cluster' %}selected{% endif %}"
-                                     data-value="standalone" data-label="标准模式" role="option"
-                                     onclick="selectMode(this)">
-                                    <span class="mode-title">标准模式</span>
-                                    <span class="mode-desc">本机独立运行；设备、流媒体与驾驶舱由本平台管理</span>
-                                </div>
-                                <div class="mode-dropdown-item {% if runtime_mode == 'cluster' %}selected{% endif %}"
-                                     data-value="cluster" data-label="接入模式" role="option"
-                                     onclick="selectMode(this)">
-                                    <span class="mode-title">接入模式</span>
-                                    <span class="mode-desc">接入边缘平台；设备与流媒体由边缘平台统一下发与管理</span>
-                                </div>
+                <!-- 运行模式：两种登录方式共用；登录/授权成功后持久化为部署级配置 -->
+                <div class="mode-select">
+                    <div class="mode-select-head">
+                        <span>运行模式</span>
+                        <span class="mode-select-hint">登录后生效</span>
+                    </div>
+                    <input type="hidden" name="runtimeMode" id="runtimeModeInput"
+                           value="{{ 'cluster' if runtime_mode == 'cluster' else 'standalone' }}">
+                    <div class="mode-dropdown" id="modeDropdown">
+                        <button type="button" class="mode-dropdown-btn" id="modeDropdownBtn"
+                                aria-haspopup="listbox" onclick="toggleModeDropdown(event)">
+                            <span id="modeDropdownLabel">{% if runtime_mode == 'cluster' %}接入模式{% else %}标准模式{% endif %}</span>
+                            <svg class="chev" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/>
+                            </svg>
+                        </button>
+                        <div class="mode-dropdown-list" role="listbox" aria-label="运行模式">
+                            <div class="mode-dropdown-item {% if runtime_mode != 'cluster' %}selected{% endif %}"
+                                 data-value="standalone" data-label="标准模式" role="option"
+                                 onclick="selectMode(this)">
+                                <span class="mode-title">标准模式</span>
+                                <span class="mode-desc">本机独立运行；设备、流媒体与驾驶舱由本平台管理</span>
+                            </div>
+                            <div class="mode-dropdown-item {% if runtime_mode == 'cluster' %}selected{% endif %}"
+                                 data-value="cluster" data-label="接入模式" role="option"
+                                 onclick="selectMode(this)">
+                                <span class="mode-title">接入模式</span>
+                                <span class="mode-desc">接入边缘平台；设备与流媒体由边缘平台统一下发与管理</span>
                             </div>
                         </div>
                     </div>
+                </div>
 
+                <form class="login-form" id="loginForm" onsubmit="return false;">
                     <div class="input-group">
                         <input type="text" id="username" placeholder="请输入用户名" autocomplete="username" value="">
                         <svg viewBox="0 0 24 24" fill="currentColor">
@@ -1087,13 +1069,9 @@
                         </svg>
                         进入云平台授权
                     </button>
-                    <div class="sso-panel-note">授权将在新窗口中完成，全程不离开本机数据</div>
+                    <div class="sso-panel-note">授权通过后按所选运行模式生效，全程不离开本机数据</div>
                 </div>
                 {% endif %}
-
-                <div class="login-hint">
-                    默认账户: <code>admin</code> / <code>admin123</code>
-                </div>
 
                 <div class="login-footer">
                     © 2026 SageSight AI · 推理分析平台
@@ -1532,7 +1510,9 @@
                 if (btn) btn.disabled = false;
             };
             try {
-                const resp = await fetch('/api/auth/sso/login');
+                // 运行模式随授权请求提交，由回调在授权成功后落库（与账号密码登录一致）
+                const ssoMode = runtimeModeInput ? runtimeModeInput.value : 'standalone';
+                const resp = await fetch('/api/auth/sso/login?runtime_mode=' + encodeURIComponent(ssoMode));
                 const data = await resp.json();
                 if (!resp.ok || !data.url) {
                     fail(data.error || '单点登录发起失败');
