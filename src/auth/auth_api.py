@@ -50,17 +50,31 @@ def login():
     
     username = data.get('username', '').strip()
     password = data.get('password', '')
-    
+    runtime_mode = (data.get('runtime_mode') or '').strip()
+
     if not username or not password:
         return jsonify({'error': '用户名和密码不能为空'}), 400
-    
+
+    # 运行模式随登录提交（登录页选择）；非法值直接拒绝，避免写入未知模式
+    if runtime_mode:
+        from src.system.runtime_mode import VALID_MODES
+        if runtime_mode not in VALID_MODES:
+            return jsonify({'error': '运行模式不合法'}), 400
+
     manager = get_auth_manager()
     user = manager.authenticate(username, password)
     
     if not user:
         logger.warning(f"登录失败: username={username}")
         return jsonify({'error': '用户名或密码错误'}), 401
-    
+
+    # 认证通过后才允许持久化运行模式（部署级全局配置）
+    if runtime_mode:
+        from src.system.runtime_mode import set_runtime_mode
+        if not set_runtime_mode(runtime_mode):
+            return jsonify({'error': '运行模式保存失败，请检查系统配置库'}), 500
+        logger.info(f"运行模式已切换为: {runtime_mode}（操作人: {user.username}）")
+
     # 保存会话
     session['user_id'] = user.id
     session['username'] = user.username

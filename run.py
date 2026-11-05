@@ -794,6 +794,17 @@ if _is_main_process:
         return response
 
 
+    @app.context_processor
+    def inject_runtime_mode():
+        """向全部模板注入运行模式：导航与系统管理按模式禁用页面/标签"""
+        from src.system.runtime_mode import get_runtime_mode, MODE_LABELS, MODE_BLOCKED_MESSAGES
+        mode = get_runtime_mode()
+        return {
+            'runtime_mode': mode,
+            'runtime_mode_label': MODE_LABELS.get(mode, MODE_LABELS['standalone']),
+            'runtime_mode_blocked': MODE_BLOCKED_MESSAGES.get(mode, {}),
+        }
+
     # ========================================
     # 页面路由
     # ========================================
@@ -814,6 +825,10 @@ if _is_main_process:
 
     @app.route('/')
     def index():
+        # 接入模式下驾驶舱不可用，登录后直接落到任务管理，避免进入不可用页面
+        from src.system.runtime_mode import get_runtime_mode, MODE_CLUSTER
+        if get_runtime_mode() == MODE_CLUSTER:
+            return redirect('/tasks')
         return render_template('monitor.html')
 
     @app.route('/tasks')
@@ -822,6 +837,16 @@ if _is_main_process:
 
     @app.route('/cameras')
     def cameras_page():
+        # 接入模式下设备由边缘平台统一下发，本页不可用
+        from src.system.runtime_mode import get_runtime_mode, get_blocked_message, MODE_CLUSTER
+        if get_runtime_mode() == MODE_CLUSTER:
+            return render_template(
+                'mode_unavailable.html',
+                page_title='设备管理',
+                block_reason=get_blocked_message('cameras'),
+                suggest_url='/tasks',
+                suggest_text='前往任务管理',
+            )
         return render_template('cameras.html')
 
     @app.route('/events')
@@ -839,6 +864,16 @@ if _is_main_process:
 
     @app.route('/monitor')
     def monitor_page():
+        # 接入模式下驾驶舱由边缘平台提供，本页不可用
+        from src.system.runtime_mode import get_runtime_mode, get_blocked_message, MODE_CLUSTER
+        if get_runtime_mode() == MODE_CLUSTER:
+            return render_template(
+                'mode_unavailable.html',
+                page_title='驾驶舱',
+                block_reason=get_blocked_message('monitor'),
+                suggest_url='/tasks',
+                suggest_text='前往任务管理',
+            )
         return render_template('monitor.html')
 
     @app.route('/algorithms')

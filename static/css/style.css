@@ -781,6 +781,28 @@ a:hover {
     background: rgba(38, 108, 251, 0.15);
 }
 
+/* 运行模式下不可用的导航入口：保留位置，弱化显示并给出提示 */
+.nav-link-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.nav-link-disabled:hover {
+    color: var(--text-secondary);
+    background: transparent;
+}
+
+/* 运行模式下不可用的系统管理标签页 */
+.tab-btn-blocked {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.tab-btn-blocked:hover {
+    color: var(--text-secondary);
+    background: transparent;
+}
+
 /* 右侧功能区 */
 .header-right {
     display: flex;

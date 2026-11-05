@@ -336,6 +336,238 @@
             letter-spacing: 1px;
         }
 
+        /* 运行模式选择（下拉选项） */
+        .mode-select {
+            margin-top: 22px;
+        }
+
+        .mode-select-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .mode-select-head > span:first-child {
+            font-size: 13px;
+            color: var(--muted);
+            letter-spacing: 1px;
+        }
+
+        .mode-select-hint {
+            font-size: 12px;
+            color: var(--faint);
+        }
+
+        .mode-dropdown {
+            position: relative;
+        }
+
+        .mode-dropdown-btn {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 12px 14px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--line);
+            border-radius: 11px;
+            color: var(--text);
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            font-family: inherit;
+            cursor: pointer;
+            text-align: left;
+            transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease;
+        }
+
+        .mode-dropdown-btn:hover {
+            border-color: var(--accent-dim);
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .mode-dropdown.open .mode-dropdown-btn {
+            border-color: var(--accent-dim);
+            background: rgba(255, 255, 255, 0.06);
+            box-shadow: 0 0 0 4px rgba(0, 229, 195, 0.10);
+        }
+
+        .mode-dropdown-btn .chev {
+            width: 16px;
+            height: 16px;
+            color: var(--muted);
+            flex-shrink: 0;
+            transition: transform 0.25s ease, color 0.25s ease;
+        }
+
+        .mode-dropdown.open .mode-dropdown-btn .chev {
+            transform: rotate(180deg);
+            color: var(--accent);
+        }
+
+        .mode-dropdown-list {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            right: 0;
+            z-index: 30;
+            display: none;
+            flex-direction: column;
+            gap: 4px;
+            padding: 6px;
+            background: rgba(11, 21, 36, 0.97);
+            border: 1px solid var(--accent-dim);
+            border-radius: 12px;
+            box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
+        }
+
+        .mode-dropdown.open .mode-dropdown-list {
+            display: flex;
+            animation: dropIn 0.18s ease;
+        }
+
+        @keyframes dropIn {
+            from { opacity: 0; transform: translateY(-6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .mode-dropdown-item {
+            display: block;
+            padding: 9px 11px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s ease, border-color 0.2s ease;
+        }
+
+        .mode-dropdown-item:hover { background: rgba(255, 255, 255, 0.05); }
+
+        .mode-dropdown-item.selected {
+            background: var(--accent-soft);
+            border-color: var(--accent-dim);
+        }
+
+        .mode-title {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            letter-spacing: 0.5px;
+        }
+
+        .mode-desc {
+            display: block;
+            margin-top: 4px;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--muted);
+        }
+
+        /* 登录方式切换（与边缘平台同款：分段式滑块切换器） */
+        .login-modes {
+            position: relative;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            margin-top: 22px;
+            padding: 4px;
+            border-radius: 12px;
+            background: rgba(3, 7, 14, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .login-modes-thumb {
+            position: absolute;
+            top: 4px;
+            bottom: 4px;
+            left: 4px;
+            width: calc(50% - 4px);
+            border-radius: 9px;
+            background: linear-gradient(135deg, rgba(0, 229, 195, 0.30), rgba(56, 189, 248, 0.16));
+            border: 1px solid rgba(0, 229, 195, 0.35);
+            box-shadow:
+                0 4px 14px -6px rgba(0, 229, 195, 0.55),
+                inset 0 1px 0 rgba(255, 255, 255, 0.08);
+            transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+        }
+
+        .login-modes-thumb.is-cloud { transform: translateX(100%); }
+
+        .login-modes button {
+            position: relative;
+            z-index: 1;
+            height: 36px;
+            border: none;
+            background: none;
+            padding: 0 8px;
+            font-size: 13px;
+            letter-spacing: 1px;
+            color: rgba(214, 226, 240, 0.55);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            font-family: inherit;
+            transition: color 0.25s;
+        }
+
+        .login-modes button:hover { color: rgba(230, 240, 252, 0.85); }
+        .login-modes button.is-active { color: #eaf6ff; }
+        .login-modes button svg { width: 15px; height: 15px; }
+
+        /* 云平台登录面板（切到"云平台登录"页签时显示） */
+        .sso-panel {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            padding: 22px 4px 4px;
+        }
+
+        .form-card.mode-cloud .sso-panel { display: flex; }
+        .form-card.mode-cloud .login-form,
+        .form-card.mode-cloud .login-hint { display: none; }
+
+        .sso-orb {
+            width: 58px;
+            height: 58px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--accent-soft);
+            border: 1px solid var(--accent-dim);
+            box-shadow: 0 0 30px rgba(0, 229, 195, 0.18);
+        }
+
+        .sso-orb svg { width: 26px; height: 26px; color: var(--accent); }
+
+        .sso-panel-title {
+            margin-top: 14px;
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+
+        .sso-panel-desc {
+            margin-top: 8px;
+            max-width: 300px;
+            font-size: 12.5px;
+            line-height: 1.7;
+            color: var(--muted);
+        }
+
+        .sso-panel .sso-btn { margin-top: 20px; }
+
+        .sso-panel-note {
+            margin-top: 10px;
+            font-size: 11.5px;
+            letter-spacing: 0.5px;
+            color: var(--faint);
+        }
+
         /* 表单 */
         .login-form {
             display: flex;
@@ -748,7 +980,61 @@
                     <span id="loginErrorMsg">用户名或密码错误</span>
                 </div>
 
+                {% if sso_enabled %}
+                <!-- 登录方式切换：分段式滑块切换器（与边缘平台登录页同款） -->
+                <div class="login-modes" id="loginModes" role="tablist" aria-label="选择登录方式">
+                    <div class="login-modes-thumb" id="loginModesThumb"></div>
+                    <button type="button" role="tab" id="tabLocal" aria-selected="true" class="is-active"
+                            onclick="switchLoginMode('local')">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                        </svg>
+                        账号密码登录
+                    </button>
+                    <button type="button" role="tab" id="tabCloud" aria-selected="false"
+                            onclick="switchLoginMode('cloud')">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
+                        </svg>
+                        云平台登录
+                    </button>
+                </div>
+                {% endif %}
+
                 <form class="login-form" id="loginForm" onsubmit="return false;">
+                    <!-- 运行模式：下拉选项；登录成功后持久化为部署级配置 -->
+                    <div class="mode-select">
+                        <div class="mode-select-head">
+                            <span>运行模式</span>
+                            <span class="mode-select-hint">登录后生效</span>
+                        </div>
+                        <input type="hidden" name="runtimeMode" id="runtimeModeInput"
+                               value="{{ 'cluster' if runtime_mode == 'cluster' else 'standalone' }}">
+                        <div class="mode-dropdown" id="modeDropdown">
+                            <button type="button" class="mode-dropdown-btn" id="modeDropdownBtn"
+                                    aria-haspopup="listbox" onclick="toggleModeDropdown(event)">
+                                <span id="modeDropdownLabel">{% if runtime_mode == 'cluster' %}接入模式{% else %}标准模式{% endif %}</span>
+                                <svg class="chev" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/>
+                                </svg>
+                            </button>
+                            <div class="mode-dropdown-list" role="listbox" aria-label="运行模式">
+                                <div class="mode-dropdown-item {% if runtime_mode != 'cluster' %}selected{% endif %}"
+                                     data-value="standalone" data-label="标准模式" role="option"
+                                     onclick="selectMode(this)">
+                                    <span class="mode-title">标准模式</span>
+                                    <span class="mode-desc">本机独立运行；设备、流媒体与驾驶舱由本平台管理</span>
+                                </div>
+                                <div class="mode-dropdown-item {% if runtime_mode == 'cluster' %}selected{% endif %}"
+                                     data-value="cluster" data-label="接入模式" role="option"
+                                     onclick="selectMode(this)">
+                                    <span class="mode-title">接入模式</span>
+                                    <span class="mode-desc">接入边缘平台；设备与流媒体由边缘平台统一下发与管理</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="input-group">
                         <input type="text" id="username" placeholder="请输入用户名" autocomplete="username" value="">
                         <svg viewBox="0 0 24 24" fill="currentColor">
@@ -786,13 +1072,23 @@
                 </form>
 
                 {% if sso_enabled %}
-                <div class="sso-divider">或</div>
-                <button type="button" class="sso-btn" id="ssoBtn" onclick="handleSSOLogin()">
-                    <svg viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95C8.08 7.14 9.94 6 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.1c1.56.1 2.78 1.41 2.78 2.97 0 1.65-1.35 3-3 3z"/>
-                    </svg>
-                    云平台单点登录
-                </button>
+                <!-- 方式二：云平台统一登录（切换页签后显示） -->
+                <div class="sso-panel" id="ssoPanel">
+                    <div class="sso-orb">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
+                        </svg>
+                    </div>
+                    <div class="sso-panel-title">云平台统一登录</div>
+                    <p class="sso-panel-desc">跳转睿观云授权中心完成一次认证，云边账号互通，多端免重复登录。</p>
+                    <button type="button" class="sso-btn" id="ssoBtn" onclick="handleSSOLogin()">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z"/>
+                        </svg>
+                        进入云平台授权
+                    </button>
+                    <div class="sso-panel-note">授权将在新窗口中完成，全程不离开本机数据</div>
+                </div>
                 {% endif %}
 
                 <div class="login-hint">
@@ -1082,6 +1378,54 @@
         initSlideVerify();
 
         // ========================================
+        // 运行模式：下拉选项
+        // ========================================
+        const modeDropdown = document.getElementById('modeDropdown');
+        const runtimeModeInput = document.getElementById('runtimeModeInput');
+
+        function toggleModeDropdown(e) {
+            e.stopPropagation();
+            modeDropdown.classList.toggle('open');
+        }
+
+        function selectMode(itemEl) {
+            runtimeModeInput.value = itemEl.dataset.value;
+            document.getElementById('modeDropdownLabel').textContent = itemEl.dataset.label;
+            modeDropdown.querySelectorAll('.mode-dropdown-item').forEach(function (i) {
+                i.classList.toggle('selected', i === itemEl);
+            });
+            modeDropdown.classList.remove('open');
+        }
+
+        document.addEventListener('click', function (e) {
+            if (modeDropdown && !modeDropdown.contains(e.target)) {
+                modeDropdown.classList.remove('open');
+            }
+        });
+
+        // ========================================
+        // 登录方式切换：分段式滑块切换器（与边缘平台同款）
+        // ========================================
+        function switchLoginMode(mode) {
+            const card = document.querySelector('.form-card');
+            const isCloud = mode === 'cloud';
+            card.classList.toggle('mode-cloud', isCloud);
+            const tabLocal = document.getElementById('tabLocal');
+            const tabCloud = document.getElementById('tabCloud');
+            if (tabLocal) {
+                tabLocal.classList.toggle('is-active', !isCloud);
+                tabLocal.setAttribute('aria-selected', String(!isCloud));
+            }
+            if (tabCloud) {
+                tabCloud.classList.toggle('is-active', isCloud);
+                tabCloud.setAttribute('aria-selected', String(isCloud));
+            }
+            const thumb = document.getElementById('loginModesThumb');
+            if (thumb) thumb.classList.toggle('is-cloud', isCloud);
+            hideError();
+        }
+
+        // ========================================
         // 登录逻辑
         // ========================================
         function togglePassword() {
@@ -1133,10 +1477,12 @@
             spinner.style.display = 'block';
 
             try {
+                // 运行模式随登录提交：后端认证通过后持久化为部署级配置
+                const runtimeMode = runtimeModeInput ? runtimeModeInput.value : 'standalone';
                 const response = await fetch('/api/auth/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
+                    body: JSON.stringify({ username, password, runtime_mode: runtimeMode })
                 });
 
                 const data = await response.json();

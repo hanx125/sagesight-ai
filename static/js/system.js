@@ -239,6 +239,15 @@ async function deleteVoiceFile(name) {
 // ========================================
 
 function switchTab(tabId) {
+    // 运行模式禁用的标签页（流媒体服务器 / 节点管理）：拦截切换并提示原因
+    const blockedBtn = document.querySelector('.tab-btn[data-tab="' + tabId + '"][data-blocked-msg]');
+    if (blockedBtn) {
+        if (window.showRuntimeModeNotice) {
+            window.showRuntimeModeNotice(blockedBtn.dataset.blockedMsg);
+        }
+        return;
+    }
+
     // 更新标签按钮状态
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.tab === tabId);

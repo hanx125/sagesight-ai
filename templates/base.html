@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}SageSight AI{% endblock %} - 睿观sagesight-ai分析平台</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%234285f4'/><path d='M50 25 L75 75 L25 75 Z' fill='white'/></svg>">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=20260929d">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=20261031a">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <!-- 提前定义 SageSight 全局对象和 registerPage 存根，确保内联脚本（content 块中）可在基础脚本加载前注册页面初始化函数 -->
@@ -45,7 +45,8 @@
         <div class="header-center">
             <!-- 左侧导航菜单 -->
             <nav class="header-nav-left">
-                <a href="/monitor" class="nav-link {% if request.path == '/monitor' %}active{% endif %}">
+                <a href="/monitor" class="nav-link {% if request.path == '/monitor' %}active{% endif %} {% if runtime_mode == 'cluster' %}nav-link-disabled{% endif %}"
+                   {% if runtime_mode == 'cluster' %}data-blocked-msg="接入模式下，驾驶舱由边缘平台统一提供，本页面不可用。请在边缘平台查看驾驶舱。" title="接入模式下不可用"{% endif %}>
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/>
                     </svg>
@@ -57,7 +58,8 @@
                     </svg>
                     <span>任务管理</span>
                 </a>
-                <a href="/cameras" class="nav-link {% if request.path == '/cameras' %}active{% endif %}">
+                <a href="/cameras" class="nav-link {% if request.path == '/cameras' %}active{% endif %} {% if runtime_mode == 'cluster' %}nav-link-disabled{% endif %}"
+                   {% if runtime_mode == 'cluster' %}data-blocked-msg="接入模式下，设备由边缘平台统一下发与管理，本页面不可用。请在边缘平台进行设备管理。" title="接入模式下不可用"{% endif %}>
                     <svg viewBox="0 0 24 24" fill="currentColor">
                         <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
                     </svg>
@@ -204,6 +206,31 @@
     <script src="{{ url_for('static', filename='js/diagnostic.js') }}?v=20260731"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}?v=20260802"></script>
     <script src="{{ url_for('static', filename='js/navigation.js') }}?v=20261030"></script>
+    <script>
+        // 运行模式禁用页面的统一提示入口：
+        // 导航链接（捕获阶段拦截，先于 navigation.js 的跳转）与系统管理标签共用。
+        (function () {
+            function showRuntimeModeNotice(message) {
+                if (typeof showNotification === 'function') {
+                    showNotification(message || '当前运行模式下该页面不可用', 'warning', 4000);
+                    return;
+                }
+                alert(message || '当前运行模式下该页面不可用');
+            }
+
+            window.showRuntimeModeNotice = showRuntimeModeNotice;
+
+            document.addEventListener('click', function (event) {
+                var link = event.target && event.target.closest
+                    ? event.target.closest('a.nav-link-disabled')
+                    : null;
+                if (!link) return;
+                event.preventDefault();
+                event.stopPropagation();
+                showRuntimeModeNotice(link.dataset.blockedMsg);
+            }, true);
+        })();
+    </script>
     {% block extra_scripts %}{% endblock %}
 </body>
 </html>

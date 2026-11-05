@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title }}不可用{% endblock %}
+
+{% block extra_head %}
+<style>
+    .mode-unavailable {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: calc(100vh - 220px);
+        padding: 40px 20px;
+    }
+
+    .mode-unavailable-card {
+        width: 100%;
+        max-width: 620px;
+        padding: 44px 40px;
+        border: 1px solid rgba(148, 196, 210, 0.16);
+        border-radius: 18px;
+        background: rgba(11, 21, 36, 0.55);
+        text-align: center;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+    }
+
+    .mode-unavailable-icon {
+        width: 60px;
+        height: 60px;
+        margin: 0 auto 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 16px;
+        background: rgba(239, 83, 80, 0.12);
+        color: #ef5350;
+    }
+
+    .mode-unavailable-icon svg { width: 30px; height: 30px; }
+
+    .mode-unavailable-card h2 {
+        margin: 0 0 12px;
+        font-size: 20px;
+        font-weight: 600;
+        color: #e8f1f5;
+        letter-spacing: 1px;
+    }
+
+    .mode-unavailable-mode {
+        display: inline-block;
+        margin-bottom: 16px;
+        padding: 4px 12px;
+        border: 1px solid rgba(0, 229, 195, 0.35);
+        border-radius: 999px;
+        font-size: 12px;
+        color: #00e5c3;
+    }
+
+    .mode-unavailable-card p {
+        margin: 0 auto 28px;
+        max-width: 480px;
+        font-size: 14px;
+        line-height: 1.8;
+        color: rgba(232, 241, 245, 0.62);
+    }
+
+    .mode-unavailable-actions {
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    .mode-unavailable-actions a {
+        min-width: 132px;
+        padding: 10px 20px;
+        border-radius: 10px;
+        font-size: 14px;
+        text-decoration: none;
+        transition: all 0.25s ease;
+    }
+
+    .mode-unavailable-actions .is-primary {
+        background: linear-gradient(135deg, #00795f 0%, #00b894 100%);
+        color: #04121c;
+        font-weight: 600;
+    }
+
+    .mode-unavailable-actions .is-primary:hover {
+        box-shadow: 0 10px 26px rgba(0, 229, 195, 0.22);
+    }
+
+    .mode-unavailable-actions .is-ghost {
+        border: 1px solid rgba(148, 196, 210, 0.22);
+        color: rgba(232, 241, 245, 0.78);
+    }
+
+    .mode-unavailable-actions .is-ghost:hover {
+        border-color: rgba(0, 229, 195, 0.45);
+        color: #00e5c3;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mode-unavailable">
+    <div class="mode-unavailable-card">
+        <div class="mode-unavailable-icon">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+            </svg>
+        </div>
+        <span class="mode-unavailable-mode">当前模式：{{ runtime_mode_label }}</span>
+        <h2>{{ page_title }}暂不可用</h2>
+        <p>{{ block_reason }}</p>
+        <div class="mode-unavailable-actions">
+            <a class="is-primary" href="{{ suggest_url }}">{{ suggest_text }}</a>
+            <a class="is-ghost" href="/events">前往事件管理</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
