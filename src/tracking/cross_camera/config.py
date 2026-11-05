@@ -24,7 +24,8 @@ CONFIG_PATH = _PROJECT_ROOT / 'config' / 'cross_camera.yaml'
 # 默认配置（与 cross_camera.yaml 保持一致）
 # ========================================
 DEFAULTS: Dict[str, Any] = {
-    'enabled': True,
+    # 本机融合已停用（跨相机串联由边缘平台负责），保持关闭
+    'enabled': False,
     'poll_interval': 1.0,
     'batch_size': 100,
     'max_gap_seconds': 120,
@@ -70,36 +71,27 @@ _lock = threading.RLock()
 
 # 保存时写在文件头部的字段说明（yaml.safe_dump 不保留注释，重写后靠这段兜底）
 _FILE_HEADER = """# ========================================
-# 跨相机跟踪配置
+# 跨相机特征提取配置
 # ========================================
-# 本文件由「系统配置 → 跨相机跟踪」页面写入，保存时会整体重写（手写注释不保留）。
-# 字段说明：
-#   enabled                   总开关（关闭后融合服务不工作，事件不再提取外观特征）
-#   poll_interval             轮询间隔（秒）
-#   batch_size                单次轮询最多处理的事件数（防重启后积压）
-#   max_gap_seconds           默认通行时间窗（秒）：A 消失到 B 出现的最长间隔
-#   max_overlap_seconds       两相机同时看到同一目标的允许重叠（秒）
-#   identity_ttl_minutes      身份活跃窗口（分钟），超时标记 closed 不再参与关联
-#   max_cameras_per_identity  单个身份最多关联的相机数
-#   groups[]                  区域分组 {name, cameras[], max_gap_seconds}；
-#                             只有同组相机之间才允许关联，空列表 = 全部互通
-#   class_families            类别族（中英文标签都收录），决定用哪套阈值
-#   thresholds.<family>       min_score / min_score_temporal_only / min_margin /
-#                             max_gap_seconds（family = person | vehicle | other）
-#   weights                   appearance / shape / temporal 权重（保存时自动归一化）
-#   use_strong_id             是否用 人脸姓名 / 车牌号 做硬关联
-#   link_same_camera          是否允许同一相机上的两段轨迹互相关联（默认 false；
-#                             只在同相机重入场景才有意义，开启容易把不同目标串成一条）
+# 本文件由「系统配置 → 特征提取」页面写入，保存时会整体重写（手写注释不保留）。
+#
+# 当前职责划分：
+#   本平台  单机位跟踪 + 每条终态轨迹提取一次外观描述子，随事件上报给边缘平台
+#   边缘平台 跨相机身份聚合与轨迹串联（本机不再建立跨相机身份）
+#
+# 因此页面只维护 feature.* 这一组参数；下列融合相关键为早期本机融合的遗留配置，
+# 已无消费方（run.py 不再启动融合线程），保留仅为兼容旧配置读取：
+#   enabled / poll_interval / batch_size / max_gap_seconds / max_overlap_seconds /
+#   identity_ttl_minutes / max_cameras_per_identity / groups / thresholds /
+#   weights / use_strong_id / link_same_camera / class_families
+#
+# feature 段说明：
 #   feature.backend           外观特征后端：reid（ONNX 模型，判别力强）/ histogram（颜色直方图，兜底）
-#   feature.extract_in        提取时机：fusion（融合线程，单份模型、支持历史重算，默认）
-#                             / worker（相机进程，内存按相机数翻倍，只在单机位场景考虑）
 #   feature.model_path        ONNX 模型路径（相对项目根目录）
 #   feature.input_width/height 模型输入尺寸，模型自带固定尺寸时以模型为准
 #   feature.num_threads       onnxruntime CPU 线程数（盒子要给解码/检测留余量）
 #   feature.min_crop_px       目标过小时跳过（像素），避免给小目标算噪声特征
 #   feature.min_sharpness     模糊度下限（拉普拉斯方差），0 = 不检查
-#   thresholds.<family>.min_score_reid  ReID 后端的综合分下限（与直方图的 min_score 分开调）
-#   thresholds.<family>.same_camera_min_appearance 同相机重入的外观门槛，0 = 按版本默认
 """
 
 
@@ -130,7 +122,7 @@ def _normalize(raw: Dict[str, Any]) -> Dict[str, Any]:
     """把任意输入归一化成可用配置"""
     cfg = _deep_merge(DEFAULTS, raw or {})
 
-    cfg['enabled'] = bool(cfg.get('enabled', True))
+    cfg['enabled'] = bool(cfg.get('enabled', False))
     cfg['poll_interval'] = _to_float(cfg.get('poll_interval'), 1.0, 0.2, 60.0)
     cfg['max_gap_seconds'] = _to_float(cfg.get('max_gap_seconds'), 120.0, 1.0, 3600.0)
     cfg['max_overlap_seconds'] = _to_float(cfg.get('max_overlap_seconds'), 60.0, 0.0, 600.0)

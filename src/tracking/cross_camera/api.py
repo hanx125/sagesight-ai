@@ -166,22 +166,24 @@ def register_cross_camera_blueprint(app):
 
     @bp.route('/api/cross-camera/config', methods=['PUT'])
     def cross_camera_config_put():
+        """只接受特征提取参数（feature 段）
+
+        跨相机串联由边缘平台负责，本机的关联参数（时间窗/阈值/分组）已无消费方，
+        因此这里不再接收这些键：即使旧客户端提交了也会被忽略。enabled 强制保持
+        关闭，避免本机再起一套身份聚合，和边缘平台的全局身份对不上。
+        """
         data = request.get_json() or {}
+        feature = data.get('feature')
+        payload = {'enabled': False}
+        if isinstance(feature, dict):
+            payload['feature'] = feature
         try:
-            saved = save_cross_camera_config(data)
+            saved = save_cross_camera_config(payload)
         except Exception as e:
             logger.error(f"[CrossCamera] 保存配置失败: {e}")
             return jsonify({'error': f'保存失败: {e}'}), 500
+        return jsonify({'message': '特征提取配置已保存', 'config': saved})
 
-        # 开关从关变开时，确保历史事件已标记，避免把旧事件重新串一遍
-        try:
-            from src.system.system_manager import get_system_manager
-            manager = get_system_manager()
-            store.mark_history_excluded(manager.get_setting, manager.set_setting)
-        except Exception as e:
-            logger.debug(f"[CrossCamera] 历史标记失败: {e}")
-
-        return jsonify({'message': '跨相机跟踪配置已保存', 'config': saved})
 
     @bp.route('/api/cross-camera/cameras', methods=['GET'])
     def cross_camera_cameras():
@@ -204,75 +206,6 @@ def register_cross_camera_blueprint(app):
             logger.debug(f"[CrossCamera] 读取事件相机失败: {e}")
         items.sort(key=lambda i: i['name'])
         return jsonify({'items': items})
-
-    @bp.route('/api/cross-camera/rebuild', methods=['POST'])
-    def cross_camera_rebuild():
-        """重建最近一段时间的事件关联（默认 6 小时，最多 72 小时）
-
-        可选 recalc_features=true：先把这批事件的外观特征清空，让融合线程
-        按当前后端（直方图 / ReID）重新提取。切换特征后端、或重新校准过
-        中心化均值之后必须这么做，否则新旧特征不可比，外观维度会直接失效。
-        """
-        data = request.get_json() or {}
-        try:
-            hours = float(data.get('hours', 6))
-        except (TypeError, ValueError):
-            hours = 6.0
-        hours = max(0.5, min(72.0, hours))
-        since = time.time() - hours * 3600
-        recalc_features = bool(data.get('recalc_features'))
-
-        cleared = 0
-        if recalc_features:
-            cleared = store.clear_features(since)
-
-        try:
-            with sqlite3.connect(str(_DB_PATH), timeout=20) as conn:
-                rows = conn.execute(
-                    '''
-                    SELECT event_id FROM events
-                    WHERE end_time >= datetime(?, 'unixepoch')
-                      AND cross_identity_id IS NOT NULL
-                      AND cross_identity_id != ?
-                    ''',
-                    (since, store.EXCLUDED_ID),
-                ).fetchall()
-                event_ids = [r[0] for r in rows]
-
-                if event_ids:
-                    # 1) 拆掉这些事件原有的关联记录
-                    conn.executemany(
-                        'DELETE FROM cross_camera_links WHERE event_id = ?',
-                        [(eid,) for eid in event_ids],
-                    )
-                    # 2) 事件回到"待融合"状态，融合服务会按 id 顺序重新处理
-                    conn.executemany(
-                        'UPDATE events SET cross_identity_id = NULL WHERE event_id = ?',
-                        [(eid,) for eid in event_ids],
-                    )
-                    # 3) 清理已经没有关联记录的空身份
-                    removed = conn.execute(
-                        'DELETE FROM cross_camera_identities '
-                        'WHERE identity_id NOT IN '
-                        '(SELECT DISTINCT identity_id FROM cross_camera_links)'
-                    ).rowcount
-                else:
-                    removed = 0
-                conn.commit()
-        except Exception as e:
-            logger.error(f"[CrossCamera] 重建失败: {e}")
-            return jsonify({'error': f'重建失败: {e}'}), 500
-
-        logger.info(
-            f"[CrossCamera] 重建已提交：{len(event_ids)} 条事件重新排队，"
-            f'清理 {removed} 个空身份，重算外观特征 {cleared} 条（最近 {hours:g} 小时）'
-        )
-        return jsonify({
-            'message': f'{len(event_ids)} 条事件已重新排队，融合服务会按时间顺序重新关联',
-            'requeued': len(event_ids),
-            'removed_identities': removed,
-            'features_cleared': cleared,
-        })
 
     app.register_blueprint(bp)
     logger.info("[CrossCamera] 接口已注册: /api/cross-camera/*")

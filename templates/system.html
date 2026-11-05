@@ -75,7 +75,7 @@
                 <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
                 </svg>
-                跨相机跟踪
+                特征提取
             </button>
         </div>
         
@@ -825,10 +825,10 @@
                 </div>
             </div>
 
-            <!-- 跨相机跟踪标签页 -->
+            <!-- 特征提取标签页 -->
             <div class="tab-panel" id="crosscamTab">
                 <div class="tab-header">
-                    <h3>跨相机跟踪</h3>
+                    <h3>特征提取</h3>
                     <div style="display:flex; gap:8px;">
                         <button class="btn btn-secondary btn-sm" onclick="System.loadCrossCameraConfig()">重新加载</button>
                         <button class="btn btn-primary btn-sm" onclick="System.saveCrossCameraConfig()">
@@ -838,122 +838,17 @@
                     </div>
                 </div>
 
-                <!-- 总开关 -->
+                <!-- 职责边界 -->
                 <div class="config-section">
-                    <div class="llm-master-switch">
+                    <div class="llm-master-switch" style="align-items:flex-start;">
                         <div class="switch-text">
-                            <h4>跨相机跟踪总开关</h4>
-                            <p>开启后，轨迹结束的事件会自动提取外观特征，并与其它相机的轨迹做时空 + 外观匹配，串联成同一条目标轨迹。关闭后不再关联新事件，历史轨迹仍可查询。</p>
-                        </div>
-                        <label class="switch">
-                            <input type="checkbox" id="ccEnabledSwitch">
-                            <span class="slider"></span>
-                        </label>
-                    </div>
-                </div>
-
-                <!-- 关联参数 -->
-                <div class="config-section">
-                    <h4 class="config-section-title">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
-                        关联参数
-                    </h4>
-                    <p class="config-section-desc">时间窗决定"两个相机上的片段相距多久内还可能属于同一个人/车"。取值越大越容易关联，但误关联风险也越高。</p>
-                    <div class="config-form-grid">
-                        <div class="form-group">
-                            <label>全局最大跨机时间窗（秒）</label>
-                            <input type="number" id="ccMaxGap" min="1" max="3600" step="1">
-                        </div>
-                        <div class="form-group">
-                            <label>轨迹超时时间（分钟）</label>
-                            <input type="number" id="ccIdentityTtl" min="1" max="1440" step="1">
-                        </div>
-                        <div class="form-group">
-                            <label>单轨迹最大相机数</label>
-                            <input type="number" id="ccMaxCameras" min="1" max="256" step="1">
-                        </div>
-                        <div class="form-group">
-                            <label>轮询间隔（秒）</label>
-                            <input type="number" id="ccPollInterval" min="0.2" max="60" step="0.1">
-                        </div>
-                        <div class="form-group checkbox-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="ccUseStrongId">
-                                <span>优先使用强 ID 关联（人脸姓名 / 车牌号）</span>
-                            </label>
-                        </div>
-                        <div class="form-group checkbox-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="ccLinkSameCamera">
-                                <span>允许同一相机内互相关联（默认关闭：同机位的不同目标容易被串成一条轨迹）</span>
-                            </label>
+                            <h4>本平台负责特征提取，跨相机串联由边缘平台完成</h4>
+                            <p>
+                                每条单机位轨迹结束时提取一次外观描述子，随终态事件上报（<code>embedding / embedding_model / embedding_dim / mu_hash</code>）；
+                                跨相机的身份聚合与轨迹串联在边缘平台进行，本机不再建立跨相机身份，因此这里只保留特征提取参数。
+                            </p>
                         </div>
                     </div>
-                </div>
-
-                <!-- 匹配阈值 -->
-                <div class="config-section">
-                    <h4 class="config-section-title">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3 17h6v-2H3v2zm0-6h10v-2H3v2zm0-8v2h18V3H3zm10 16h8v-2h-8v2zm-4-6h12v-2H9v2z"/></svg>
-                        匹配阈值
-                    </h4>
-                    <p class="config-section-desc">匹配分数低于阈值不关联；多个候选分差小于"唯一性间隔"时宁可放弃也不硬凑。没有外观特征时（快照缺失）改用"纯时空阈值"。</p>
-                    <div class="config-form-grid cc-threshold-grid">
-                        <div class="form-group">
-                            <label>人员 · 匹配阈值</label>
-                            <input type="number" id="ccPersonScore" min="0" max="1" step="0.01">
-                        </div>
-                        <div class="form-group">
-                            <label>人员 · 纯时空阈值</label>
-                            <input type="number" id="ccPersonTemporal" min="0" max="1" step="0.01">
-                        </div>
-                        <div class="form-group">
-                            <label>人员 · 时间窗（秒）</label>
-                            <input type="number" id="ccPersonGap" min="1" max="3600" step="1">
-                        </div>
-                        <div class="form-group">
-                            <label>车辆 · 匹配阈值</label>
-                            <input type="number" id="ccVehicleScore" min="0" max="1" step="0.01">
-                        </div>
-                        <div class="form-group">
-                            <label>车辆 · 纯时空阈值</label>
-                            <input type="number" id="ccVehicleTemporal" min="0" max="1" step="0.01">
-                        </div>
-                        <div class="form-group">
-                            <label>车辆 · 时间窗（秒）</label>
-                            <input type="number" id="ccVehicleGap" min="1" max="3600" step="1">
-                        </div>
-                        <div class="form-group">
-                            <label>其它 · 匹配阈值</label>
-                            <input type="number" id="ccOtherScore" min="0" max="1" step="0.01">
-                        </div>
-                        <div class="form-group">
-                            <label>其它 · 纯时空阈值</label>
-                            <input type="number" id="ccOtherTemporal" min="0" max="1" step="0.01">
-                        </div>
-                        <div class="form-group">
-                            <label>其它 · 时间窗（秒）</label>
-                            <input type="number" id="ccOtherGap" min="1" max="3600" step="1">
-                        </div>
-                        <div class="form-group">
-                            <label>唯一性间隔（三类共用）</label>
-                            <input type="number" id="ccMinMargin" min="0" max="1" step="0.01">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 区域分组 -->
-                <div class="config-section">
-                    <h4 class="config-section-title">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M3 5h18v2H3V5zm0 6h12v2H3v-2zm0 6h18v2H3v-2z"/></svg>
-                        区域分组（拓扑）
-                    </h4>
-                    <p class="config-section-desc">只有同一分组内的相机之间才允许关联，避免把物理上不相邻的两个区域串成一条轨迹。不配置分组时不做相机限制（全国一盘棋）。</p>
-                    <div id="ccGroupList" class="cc-group-list"></div>
-                    <button class="btn btn-secondary btn-sm" onclick="System.addCrossCameraGroup()" style="margin-top:10px;">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-                        添加分组
-                    </button>
                 </div>
 
                 <!-- 外观特征 -->
@@ -963,7 +858,7 @@
                         外观特征
                     </h4>
                     <p class="config-section-desc">
-                        决定"凭什么判断两台相机里是同一个目标"。ReID 模型能区分同色不同人，单条轨迹多花几十毫秒；颜色直方图几乎零成本，但同款衣服/同色车会混淆。
+                        决定上报给边缘平台的描述子长什么样。ReID 模型能区分同色不同人，单条轨迹多花几十毫秒；颜色直方图几乎零成本，但同款衣服/同色车会混淆。
                     </p>
                     <div class="config-form-grid">
                         <div class="form-group">
@@ -971,13 +866,6 @@
                             <select id="ccFeatureBackend">
                                 <option value="reid">ReID 模型（推荐）</option>
                                 <option value="histogram">颜色直方图（兜底）</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>提取位置</label>
-                            <select id="ccFeatureExtractIn">
-                                <option value="fusion">融合线程（推荐，省内存）</option>
-                                <option value="worker">相机进程（图在内存，但每路一份模型）</option>
                             </select>
                         </div>
                         <div class="form-group">
@@ -998,35 +886,8 @@
                         </div>
                     </div>
                     <div class="cc-feature-tip">
-                        模型不可用（文件缺失 / 未装 onnxruntime）时会自动退回颜色直方图，不会中断跟踪。
-                        换了后端或重新校准过特征均值，请到下方「重建关联」勾选“重算外观特征”，否则新旧特征不可比。
-                    </div>
-                </div>
-
-                <!-- 重建 -->
-                <div class="config-section">
-                    <h4 class="config-section-title">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 8 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
-                        重建关联
-                    </h4>
-                    <p class="config-section-desc">调整阈值或分组后，可把最近一段时间的事件拆开重新融合一遍。重建由后台融合服务异步完成，耗时取决于事件数量。</p>
-                    <div class="config-form-grid">
-                        <div class="form-group">
-                            <label>重建时间范围（小时）</label>
-                            <input type="number" id="ccRebuildHours" min="0.5" max="72" step="0.5" value="6">
-                        </div>
-                        <div class="form-group" style="display:flex; align-items:flex-end; gap:12px;">
-                            <button class="btn btn-warning" onclick="System.rebuildCrossCamera()">开始重建</button>
-                        </div>
-                    </div>
-                    <div class="form-group checkbox-group" style="margin-top:8px;">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="ccRecalcFeatures">
-                            <span>重算外观特征（切换特征后端、或重新校准过均值时必须勾选）</span>
-                        </label>
-                    </div>
-                    <div class="cc-feature-tip">
-                        重算会把这个时间范围内事件的描述子清空，由融合线程按当前后端重新提取。事件图已被清理的事件无法重算，会自动退化为纯时空关联。
+                        模型不可用（文件缺失 / 未装 onnxruntime）时会自动退回颜色直方图，不会中断跟踪；上报时按实际产出的描述子标注模型与维度，边缘据此隔离特征空间，不会把直方图和 ReID 向量混算。
+                        更换后端或重新校准过特征均值后，新旧描述子不可比，边缘侧需要重新建立串联关系。
                     </div>
                 </div>
             </div>
@@ -1429,50 +1290,7 @@
     .restart-overlay-box h3 { margin: 0 0 8px; color: var(--text-primary, #1f2937); }
     .restart-overlay-box p { margin: 0; color: var(--text-secondary, #6b7280); font-size: 14px; }
 
-    /* ===== 跨相机跟踪 · 区域分组编辑 ===== */
-    .cc-group-list { display: flex; flex-direction: column; gap: 10px; }
-    .cc-group-empty {
-        padding: 14px;
-        border: 1px dashed var(--border-color);
-        border-radius: 8px;
-        text-align: center;
-        color: var(--text-muted);
-        font-size: 13px;
-    }
-    .cc-group-row {
-        display: flex;
-        align-items: flex-start;
-        gap: 10px;
-        padding: 12px;
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        background: rgba(127, 127, 127, 0.04);
-    }
-    .cc-group-row .cc-group-fields {
-        flex: 1;
-        display: grid;
-        grid-template-columns: 1fr 130px 1.4fr;
-        gap: 10px;
-        min-width: 0;
-    }
-    .cc-group-row label {
-        display: block;
-        font-size: 12px;
-        color: var(--text-secondary);
-        margin-bottom: 4px;
-    }
-    .cc-group-row input,
-    .cc-group-row select {
-        width: 100%;
-        padding: 7px 10px;
-        border: 1px solid var(--border-color);
-        border-radius: 6px;
-        background: var(--bg-white);
-        color: var(--text-primary);
-        font-size: 13px;
-        box-sizing: border-box;
-    }
-    .cc-group-row select[multiple] { height: 76px; }
+    /* ===== 特征提取 · 提示条 ===== */
     .cc-feature-tip {
         margin-top: 10px;
         padding: 10px 12px;
@@ -1482,29 +1300,6 @@
         color: var(--text-secondary);
         font-size: 12px;
         line-height: 1.65;
-    }
-    .cc-group-row input:focus,
-    .cc-group-row select:focus {
-        outline: none;
-        border-color: var(--primary-color);
-    }
-    .cc-group-remove {
-        flex-shrink: 0;
-        width: 30px;
-        height: 30px;
-        border: 1px solid var(--border-color);
-        border-radius: 6px;
-        background: transparent;
-        color: var(--danger-color);
-        cursor: pointer;
-        font-size: 16px;
-        line-height: 1;
-        margin-top: 20px;
-    }
-    .cc-group-remove:hover { background: rgba(255, 77, 79, 0.12); }
-    @media (max-width: 900px) {
-        .cc-group-row .cc-group-fields { grid-template-columns: 1fr; }
-        .cc-group-remove { margin-top: 0; }
     }
 </style>
 {% endblock %}

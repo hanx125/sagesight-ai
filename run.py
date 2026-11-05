@@ -1894,12 +1894,10 @@ if __name__ == '__main__':
     from src.events.event_cleanup_service import start_event_cleanup_scheduler
     start_event_cleanup_scheduler()
 
-    # 启动跨相机跟踪融合服务（后台轮询事件 → 身份关联；配置关闭则不启动）
-    from src.tracking.cross_camera.fusion_service import start_cross_camera_service
-    if start_cross_camera_service(socketio):
-        logger.info("[Main] 跨相机跟踪融合服务已启动")
-    else:
-        logger.info("[Main] 跨相机跟踪未启用（可在 系统配置 → 跨相机跟踪 打开后重启生效）")
+    # 跨相机身份聚合已交由边缘平台：本机只做单机位跟踪 + 终态特征提取上报，
+    # 不再启动本地融合线程（避免同一目标在本机与边缘各建一套身份、ID 对不上）。
+    # 历史本地轨迹仍可通过事件页查询，特征参数在 系统配置 → 特征提取 调整。
+    logger.info("[Main] 跨相机串联由边缘平台负责，本机不启动融合服务")
 
     # 启动 PTZ 自动跟踪闭环服务（读 PTZMetrics 的目标位置 → 驱动云台转动）
     # 注意：云台只能由主进程控制（ONVIF 连接不可跨进程共享），
