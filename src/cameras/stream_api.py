@@ -211,10 +211,13 @@ def get_camera_snapshot(camera_id: str):
                 return Response(cached[1], mimetype='image/jpeg',
                                 headers={'Cache-Control': 'no-store'})
 
-            # ffmpeg 从 RTSP 源抓一帧到 stdout（-loglevel error 防止日志混入图片数据）
+            # ffmpeg 从 RTSP 源抓一帧到 stdout（-loglevel error 防止日志混入图片数据）；
+            # -skip_frame nokey 只解码关键帧：从 GOP 中间接入时首批 P 帧缺参考帧，
+            # 解码会得到瀑布条纹残帧，只取关键帧保证画面完整
             proc = subprocess.run(
                 ['ffmpeg', '-rtsp_transport', 'tcp', '-y', '-loglevel', 'error',
-                 '-i', camera.source, '-frames:v', '1', '-q:v', '5', '-f', 'image2', '-'],
+                 '-skip_frame', 'nokey', '-i', camera.source,
+                 '-frames:v', '1', '-q:v', '5', '-f', 'image2', '-'],
                 capture_output=True, timeout=15
             )
             jpeg = proc.stdout

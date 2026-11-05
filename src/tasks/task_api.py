@@ -1316,9 +1316,27 @@ def get_channel_snapshot(channel_id: int):
 
     # 抓帧在独立子进程中执行：转发流按需回源可能长时间阻塞，
     # 阻塞中的 FFmpeg 会拖慢同进程内其他 VideoCapture，子进程隔离互不影响且超时可强制终止
+    # 首选 ffmpeg -skip_frame nokey 只解码关键帧：RTSP 从 GOP 中间接入时，
+    # 首批 P 帧缺少参考帧，解码结果是上半截正常、下半截瀑布条纹的残帧；
+    # 只取关键帧可保证首帧必然是完整的 IDR 画面
     _snapshot_child_code = (
-        "import sys, cv2\n"
+        "import sys, subprocess\n"
+        "import cv2\n"
         "url = sys.argv[1]\n"
+        "budget = max(int(float(sys.argv[2])) - 2, 3)\n"
+        "try:\n"
+        "    p = subprocess.run(\n"
+        "        ['ffmpeg', '-rtsp_transport', 'tcp', '-y', '-loglevel', 'error',\n"
+        "         '-skip_frame', 'nokey', '-i', url,\n"
+        "         '-frames:v', '1', '-q:v', '5', '-f', 'image2', '-'],\n"
+        "        capture_output=True, timeout=budget)\n"
+        "    if p.returncode == 0 and p.stdout:\n"
+        "        sys.stdout.buffer.write(p.stdout)\n"
+        "        sys.exit(0)\n"
+        "except Exception:\n"
+        "    pass\n"
+        "# ffmpeg 失败（未安装/参数不支持）时回退 OpenCV：连读多帧取最后一帧，\n"
+        "# 尽量等到关键帧之后画面恢复完整\n"
         "cap = cv2.VideoCapture(url)\n"
         "try:\n"
         "    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)\n"
@@ -1326,11 +1344,11 @@ def get_channel_snapshot(channel_id: int):
         "    pass\n"
         "frame = None\n"
         "if cap.isOpened():\n"
-        "    for _ in range(10):\n"
+        "    for _ in range(12):\n"
         "        ret, f = cap.read()\n"
-        "        if ret and f is not None and f.size > 0:\n"
-        "            frame = f\n"
+        "        if not ret or f is None or f.size == 0:\n"
         "            break\n"
+        "        frame = f\n"
         "cap.release()\n"
         "if frame is None:\n"
         "    sys.exit(1)\n"
@@ -1344,7 +1362,7 @@ def get_channel_snapshot(channel_id: int):
         """子进程抓一帧；成功返回 (frame, None)，失败返回 (None, 错误信息)"""
         try:
             proc = subprocess.run(
-                [sys.executable, '-c', _snapshot_child_code, url],
+                [sys.executable, '-c', _snapshot_child_code, url, str(timeout)],
                 capture_output=True, timeout=timeout
             )
         except subprocess.TimeoutExpired:
