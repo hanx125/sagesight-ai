@@ -798,6 +798,9 @@ class NorfairTracker:
             # PTZ 自动跟踪靠它区分"真实可见"与"预测出来的幽灵框"，
             # 否则目标出画后云台会持续追着外推框转。
             obj_dict["disappeared"] = int(self.disappeared.get(obj_id, 0))
+            # Kalman 速度（角点速度，单位：像素/帧），供 AI 流绘制时按
+            # "最新帧 - 消息帧" 的帧差做位置外推，消除框滞后于画面
+            obj_dict["estimate_velocity"] = obj.obj_data.get("estimate_velocity")
             result[obj_id] = obj_dict
         return result
 

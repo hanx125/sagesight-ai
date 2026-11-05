@@ -219,6 +219,15 @@ class TrackedObjectProcessor(mp.Process):
         # AI 流 per-camera 背压锁（防止线程池积压，丢旧帧）
         self.ai_stream_inflight_locks: dict[str, threading.Lock] = {}
 
+        # 每相机帧间隔估计（EMA，秒）：由相邻消息 frame_time 差推得，
+        # 用于把"最新帧 - 消息帧"的帧差换算成时间做框位置外推
+        self._cam_frame_interval: dict[str, float] = {}
+        self._cam_last_frame_time: dict[str, float] = {}
+        # AI 流滞后诊断（帧差 = 最新帧序号 - 消息帧序号）
+        self._ai_lag_frames_sum = 0
+        self._ai_lag_frames_count = 0
+        self._ai_lag_frames_max = 0
+
         # ✅ 复用 HTTP 连接池：AI 流每帧推送（6fps×N相机），不复用 Session 会导致
         # urllib3 PoolManager/HTTPAdapter 反复创建销毁，内存碎片持续增长（~6MB/min）
         self._http_session: Optional[Any] = None  # requests.Session，在 run() 中初始化
@@ -413,6 +422,11 @@ class TrackedObjectProcessor(mp.Process):
                     cache_rate = (
                         self._frame_cache_push_success / max(1, self._frame_cache_push_total) * 100
                     )
+                    # 诊断：AI 流"最新帧 - 消息帧"滞后帧数（框外推补偿的依据）
+                    ai_lag_avg = (
+                        self._ai_lag_frames_sum / self._ai_lag_frames_count
+                        if self._ai_lag_frames_count else 0
+                    )
                     # 内存监控：采集当前进程 RSS（Resident Set Size）
                     _current_rss_mb = _get_process_rss_mb()
                     proc_logger.info(
@@ -427,6 +441,7 @@ class TrackedObjectProcessor(mp.Process):
                         f"缓存写入成功率: {cache_rate:.1f}% ({self._frame_cache_push_success}/{self._frame_cache_push_total}), "
                         f"队列最大积压: {self._max_queue_size}, "
                         f"高水位跳帧: {self._skipped_frames_total}, "
+                        f"AI流滞后帧数: avg={ai_lag_avg:.1f}/max={self._ai_lag_frames_max} ({self._ai_lag_frames_count}样本), "
                         f"内存RSS: {_current_rss_mb:.1f}MB"
                     )
                     last_stats_time = now
@@ -871,6 +886,16 @@ class TrackedObjectProcessor(mp.Process):
         # 诊断：记录本帧跟踪对象数量（供主循环统计累计值）
         self._last_tracked_count = len(tracked_objects_dict or {})
 
+        # 帧间隔估计（EMA）：相邻消息 frame_time 差 → 1/fps，
+        # 供 AI 流按帧差外推框位置使用
+        last_ft = self._cam_last_frame_time.get(camera_id)
+        if last_ft is not None and frame_time > last_ft:
+            dt = frame_time - last_ft
+            if 0.001 < dt < 2.0:
+                prev = self._cam_frame_interval.get(camera_id, dt)
+                self._cam_frame_interval[camera_id] = prev * 0.9 + dt * 0.1
+        self._cam_last_frame_time[camera_id] = frame_time
+
         # 保存当前帧的共享内存信息（用于事件回调时回读帧）
         self._current_shm_info = {
             "shm_block_id": shm_block_id,
@@ -944,6 +969,7 @@ class TrackedObjectProcessor(mp.Process):
             camera_id, frame_time, tracked_objects_dict,
             motion_boxes, regions, detection_results,
             frame=self._current_frame,
+            msg_frame_seq=frame_seq,
         )
 
         # 清理当前帧引用
@@ -2558,6 +2584,7 @@ class TrackedObjectProcessor(mp.Process):
         motion_boxes: list = None, regions: list = None,
         detection_results: list = None,
         frame: Optional[np.ndarray] = None,
+        msg_frame_seq: Optional[int] = None,
     ):
         """AI 视频流推送（异步方案：主循环只做检查+计数+submit，画框+编码+HTTP在线程池）
 
@@ -2592,17 +2619,28 @@ class TrackedObjectProcessor(mp.Process):
         # AI 流画面严格向前：优先读环形缓冲中帧序号最大的最新帧。
         # 处理积压时消息对应 shm 块可能是旧内容，且积压量波动会导致
         # 画面在时间轴上来回倒退（表现为目标前进又"倒车重放"）；
-        # 读最新帧保证显示不受积压影响（检测框允许轻微滞后于画面）。
+        # 读最新帧保证显示不受积压影响，检测框滞后用速度外推补偿。
+        latest_seq = None
         try:
             from src.utils.shared_memory import read_latest_frame_from_shared_memory
             shm_name = (self._current_shm_info or {}).get("shm_name")
             if shm_name:
                 cam_cfg = self.camera_configs.get(camera_id, {})
-                frame, _ = read_latest_frame_from_shared_memory(
+                frame, latest_seq = read_latest_frame_from_shared_memory(
                     shm_name, cam_cfg.get("frame_shape", (640, 640))
                 )
         except Exception as e:
             logger.debug(f"[{camera_id}] AI流：读取最新帧失败，回退消息帧: {e}")
+
+        # 滞后量（帧）= 最新帧序号 - 消息帧序号。框来自消息帧时刻，
+        # 画面是最新帧，移动目标的框因此落后于画面（"框追着目标跑"）。
+        lag_frames = 0
+        if latest_seq is not None and msg_frame_seq is not None:
+            lag_frames = max(0, min(int(latest_seq) - int(msg_frame_seq), 30))
+            self._ai_lag_frames_sum += lag_frames
+            self._ai_lag_frames_count += 1
+            if lag_frames > self._ai_lag_frames_max:
+                self._ai_lag_frames_max = lag_frames
 
         # 最新帧读取失败时，回退复用主循环已读帧 / 消息对应 shm 块
         frame_aligned = True
@@ -2642,6 +2680,17 @@ class TrackedObjectProcessor(mp.Process):
             return
 
         logger.debug(f"[{camera_id}] AI流：提交编码推送任务 frame_seq={frame_seq}")
+        # 速度外推：把跟踪框/标签沿 Kalman 速度方向平移 lag 帧，
+        # 使框的位置与"最新帧"画面对齐（仅影响 AI 流绘制，不改事件数据）。
+        # 帧差为 0（处理完全跟上）时直接用原始数据，零开销。
+        if lag_frames >= 1 and tracked_objects:
+            draw_objects = self._predict_tracked_boxes(
+                tracked_objects, lag_frames,
+                frame.shape[:2] if frame is not None else
+                self.camera_configs.get(camera_id, {}).get("frame_shape", (640, 640)),
+            )
+        else:
+            draw_objects = tracked_objects
         # submit：画框+编码+HTTP 全部在线程池异步执行
         # shallow copy 可变结构，避免主循环下一帧修改
         self.ai_stream_executor.submit(
@@ -2649,7 +2698,7 @@ class TrackedObjectProcessor(mp.Process):
             frame,
             camera_id,
             frame_seq,
-            dict(tracked_objects) if tracked_objects else {},
+            dict(draw_objects) if draw_objects else {},
             list(motion_boxes) if motion_boxes else [],
             list(regions) if regions else [],
             list(detection_results) if detection_results else [],
@@ -2657,6 +2706,57 @@ class TrackedObjectProcessor(mp.Process):
             api_url,
             camera_lock,
         )
+
+    def _predict_tracked_boxes(
+        self, tracked_objects: dict, lag_frames: int, frame_shape
+    ) -> dict:
+        """按 Kalman 速度把跟踪框外推 lag_frames 帧（AI 流绘制专用）
+
+        - 优先用 Kalman 估计框 estimate：tracker 每帧都跑预测步，estimate
+          比只在推理帧更新的检测框 box 新鲜（轮询模式下 box 停留在最近
+          一次推理帧，滞后最多 polling_interval 帧）；
+        - 速度 estimate_velocity 为角点速度（像素/帧，norfair predict 为
+          x += v 的每帧步进），直接乘帧差外推；
+        - 幽灵框守卫：disappeared 只是"本帧未检出"，轮询模式下正常目标
+          也会短暂 >0（≤polling 间隔）；只有连续多帧未检出（接近
+          max_disappeared=30 清理线）才视为离画目标，退回原始框不外推；
+        - 外推结果裁剪在画面范围内；任何异常回退原始框。
+        """
+        frame_h, frame_w = frame_shape[0], frame_shape[1]
+        out = {}
+        for obj_id, od in tracked_objects.items():
+            try:
+                ghost = int(od.get("disappeared", 0) or 0) > 10
+                vel = od.get("estimate_velocity")
+                base = None if ghost else od.get("estimate")
+                if base is None:
+                    base = od.get("box")
+                if vel is None or base is None or lag_frames <= 0:
+                    out[obj_id] = od
+                    continue
+                v = np.asarray(vel, dtype=float)
+                b = np.asarray(base, dtype=float)
+                # estimate 是展平的 [x1,y1,x2,y2]；速度是角点对 [[vx1,vy1],[vx2,vy2]]
+                # （角点顺序 = 左上、右下，与 norfair points [[x1,y1],[x2,y2]] 一致）
+                if v.shape != (2, 2) or b.shape != (4,):
+                    out[obj_id] = od
+                    continue
+                nb = (
+                    b[0] + v[0][0] * lag_frames,
+                    b[1] + v[0][1] * lag_frames,
+                    b[2] + v[1][0] * lag_frames,
+                    b[3] + v[1][1] * lag_frames,
+                )
+                x1 = min(max(nb[0][0], 0.0), frame_w - 2.0)
+                y1 = min(max(nb[0][1], 0.0), frame_h - 2.0)
+                x2 = min(max(nb[1][0], x1 + 1.0), frame_w - 1.0)
+                y2 = min(max(nb[1][1], y1 + 1.0), frame_h - 1.0)
+                nod = dict(od)
+                nod["box"] = [int(x1), int(y1), int(x2), int(y2)]
+                out[obj_id] = nod
+            except Exception:
+                out[obj_id] = od
+        return out
 
     def _async_encode_and_push(
         self,
