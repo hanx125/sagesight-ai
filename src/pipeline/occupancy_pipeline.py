@@ -141,7 +141,42 @@ def run_occupancy_pipeline(
     while not stop_event.is_set():
         try:
             # ========================================
-            # 1. 解码
+            # 1. 拍摄基线请求（置于解码之前：解码器无帧/流未就绪时
+            #    也要消费请求并回写失败原因，否则前端永远停在"未校准"）
+            # ========================================
+            if BaselineManager.consume_capture_request(task_id, baseline_channel):
+                proc_logger.info("收到基线拍摄请求，开始采集...")
+                result = _capture_baseline(decoder, proc_logger)
+                if result is not None:
+                    baseline_y, block_id, seq_num = result
+                    BaselineManager.save(
+                        baseline_channel,
+                        baseline_y,
+                        {
+                            'captured_at': datetime.now().isoformat(),
+                            'frame_shape': [baseline_y.shape[0], baseline_y.shape[1]],
+                            'task_id': str(task_id),
+                            'camera_id': str(camera_id),
+                        },
+                    )
+                    monitor.handle_baseline_captured(baseline_y, time.time())
+                    proc_logger.info(
+                        f"基线拍摄完成: shape={baseline_y.shape}, 已复位区域状态"
+                    )
+                else:
+                    err_msg = '拍摄失败：解码器无视频帧（检查摄像机在线与转发流状态后重试）'
+                    proc_logger.warning(f"基线拍摄失败: {err_msg}")
+                    BaselineManager.save_status(baseline_channel, {
+                        'state': 'capture_failed',
+                        'error': err_msg,
+                        'channel_id': baseline_channel,
+                        'updated_at': time.time(),
+                    })
+                last_status_write = 0.0  # 立即回写新状态
+                continue
+
+            # ========================================
+            # 2. 解码
             # ========================================
             frame_index = decoder.get_frame_index()
             if frame_index is None:
@@ -171,32 +206,7 @@ def run_occupancy_pipeline(
                 first_frame = False
 
             # ========================================
-            # 2. 拍摄基线请求（每帧检查，低开销文件存在性判断）
-            # ========================================
-            if BaselineManager.consume_capture_request(task_id, baseline_channel):
-                proc_logger.info("收到基线拍摄请求，开始采集...")
-                result = _capture_baseline(decoder, proc_logger)
-                if result is not None:
-                    baseline_y, block_id, seq_num = result
-                    BaselineManager.save(
-                        baseline_channel,
-                        baseline_y,
-                        {
-                            'captured_at': datetime.now().isoformat(),
-                            'frame_shape': [baseline_y.shape[0], baseline_y.shape[1]],
-                            'task_id': str(task_id),
-                            'camera_id': str(camera_id),
-                        },
-                    )
-                    monitor.handle_baseline_captured(baseline_y, time.time())
-                    proc_logger.info(
-                        f"基线拍摄完成: shape={baseline_y.shape}, 已复位区域状态"
-                    )
-                last_status_write = 0.0  # 立即回写新状态
-                continue
-
-            # ========================================
-            # 3. 帧消息输出（每帧）：供事件进程推送 AI 视频流，
+            # 4. 帧消息输出（每帧）：供事件进程推送 AI 视频流，
             #    帧本体在共享内存中，队列仅传递标识；无跟踪对象与检测结果
             # ========================================
             try:
@@ -218,7 +228,7 @@ def run_occupancy_pipeline(
                 pass  # AI 流帧消息允许丢弃（下一帧即续上），不告警避免刷屏
 
             # ========================================
-            # 4. 降频差分（每 OCCUPANCY_INTERVAL_FRAMES 帧一次）
+            # 5. 降频差分（每 OCCUPANCY_INTERVAL_FRAMES 帧一次）
             # ========================================
             if frame_count % OCCUPANCY_INTERVAL_FRAMES != 0:
                 _malloc_trim()
@@ -242,7 +252,7 @@ def run_occupancy_pipeline(
                     proc_logger.warning("事件队列满,丢弃遗留物消息")
 
             # ========================================
-            # 5. 状态回写（定期，供 API/前端读取）
+            # 6. 状态回写（定期，供 API/前端读取）
             # ========================================
             if now - last_status_write >= STATUS_WRITE_INTERVAL:
                 last_status_write = now

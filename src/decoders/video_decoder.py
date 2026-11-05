@@ -280,6 +280,12 @@ class VideoDecoder:
         self.start_pts_ns = None  # 第一帧的PTS（纳秒）
         self.start_pts_lock = threading.Lock()
 
+        # FFmpeg 进程连续退出计数（成功解码一帧后清零）；
+        # 硬件解码链路（rkmpp/RGA 等）连续失败时自动降级 CPU 软解
+        self._exit_count = 0
+        self._sw_fallback_done = False
+        self._stderr_thread: Optional[threading.Thread] = None
+
         # 初始化 FFmpeg 参数
         self._init_ffmpeg_args()
 
@@ -545,6 +551,9 @@ class VideoDecoder:
             self.thread = threading.Thread(target=self._decode_loop, daemon=True)
             self.thread.start()
 
+            # 启动 stderr 消费线程：stderr=PIPE 无人读取会积压 64KB 后阻塞 ffmpeg
+            self._start_stderr_thread()
+
             logger.debug(f"[VideoDecoder] 启动成功（{self.config.hwaccel_preset or 'CPU'} 硬件加速）")
             return True
 
@@ -620,19 +629,25 @@ class VideoDecoder:
             try:
                 # 检查 FFmpeg 进程状态
                 if self.process.poll() is not None:
-                    # FFmpeg 进程已退出
+                    # FFmpeg 进程已退出：取 stderr 摘要并按 warning 记录（失败原因此前只有 debug 级，线上不可见）
                     ret_code = self.process.poll()
-                    logger.debug(f"[VideoDecoder] FFmpeg 进程退出，返回码={ret_code}")
-                    if error_count < 5:
-                        # 读取 stderr 输出（已重定向到 stdout）
-                        if self.process.stdout:
-                            stderr_output = self.process.stdout.read().decode('utf-8', errors='replace')
-                            if stderr_output:
-                                logger.debug(f"[VideoDecoder] FFmpeg 输出:\n{stderr_output[:2000]}")
-                            else:
-                                logger.debug("[VideoDecoder] FFmpeg stdout 为空")
-                        error_count += 1
+                    stderr_tail = ''
+                    try:
+                        if self.process.stderr:
+                            stderr_tail = self.process.stderr.read().decode('utf-8', errors='replace').strip()
+                    except Exception:
+                        pass
+                    if stderr_tail:
+                        logger.warning(f"[VideoDecoder] FFmpeg 进程退出 ret={ret_code}，stderr 摘要: {stderr_tail[-400:]}")
+                    else:
+                        logger.warning(f"[VideoDecoder] FFmpeg 进程退出 ret={ret_code}（连续第 {self._exit_count + 1} 次）")
+                    error_count += 1
+                    self._exit_count += 1
                     if self.config.reconnect:
+                        # 硬件解码链路（rkmpp/RGA 等）反复秒退 → 降级 CPU 软解，保证任务可用
+                        if (not self._sw_fallback_done and self.config.hwaccel_preset
+                                and self._exit_count >= 5):
+                            self._fallback_to_software_decode()
                         logger.debug(f"[VideoDecoder] {self.config.reconnect_delay}秒后重连...")
                         time.sleep(self.config.reconnect_delay)
                         self.stats['reconnect_count'] += 1
@@ -711,6 +726,7 @@ class VideoDecoder:
                 # 更新统计
                 self.stats['frames_decoded'] += 1
                 self.stats['last_frame_time'] = time.time()
+                self._exit_count = 0  # 解码恢复正常，重置连续退出计数
 
             except Exception as e:
                 self.stats['decode_errors'] += 1
@@ -758,7 +774,17 @@ class VideoDecoder:
         # 更新序列号
         self.sequence_num += 1
 
-    def _parse_stderr_for_pts(self):
+    def _start_stderr_thread(self):
+        """启动 stderr 消费线程（进程重启后旧线程已随旧管道结束，需重新拉起）"""
+        self._stderr_gen = getattr(self, '_stderr_gen', 0) + 1
+        gen = self._stderr_gen
+        if self.process and self.process.stderr:
+            self._stderr_thread = threading.Thread(
+                target=self._parse_stderr_for_pts, args=(gen,), daemon=True
+            )
+            self._stderr_thread.start()
+
+    def _parse_stderr_for_pts(self, gen: int = 0):
         """
         解析FFmpeg stderr输出的PTS信息（从showinfo滤镜）
 
@@ -771,7 +797,8 @@ class VideoDecoder:
 
         logger.debug(f"[VideoDecoder] stderr PTS解析线程开始运行")
 
-        while self.is_running and self.process and self.process.stderr:
+        while self.is_running and self.process and self.process.stderr \
+                and gen == getattr(self, '_stderr_gen', gen):
             try:
                 # 读取一行stderr输出
                 line = self.process.stderr.readline()
@@ -854,6 +881,24 @@ class VideoDecoder:
         fps = self.config.fps if self.config and hasattr(self.config, 'fps') else 25
         return int(frame_seq * 1_000_000_000 / fps)
 
+    def _fallback_to_software_decode(self):
+        """硬件解码链路（rkmpp/RGA 等）连续失败时，降级为 CPU 软解重建参数
+
+        RK 平台上 scale_rkrga 可能因 RGA 驱动 map 失败持续报错（dmesg:
+        rga ... job buffer map failed / unsupported mm_flag），导致 FFmpeg
+        反复秒退、任务拿不到任何帧。软解消耗 CPU 但保证可用。
+        """
+        self._sw_fallback_done = True
+        logger.warning(
+            f"[VideoDecoder] 硬件解码链路连续 {self._exit_count} 次启动失败，"
+            f"降级为 CPU 软解（preset={self.config.hwaccel_preset} 弃用）"
+        )
+        try:
+            self.config.hwaccel_preset = None
+            self._init_ffmpeg_args()
+        except Exception as e:
+            logger.error(f"[VideoDecoder] 降级软解重建参数失败: {e}")
+
     def _restart_ffmpeg(self):
         """重启 FFmpeg 进程"""
         if self.process:
@@ -870,6 +915,8 @@ class VideoDecoder:
                 stderr=subprocess.PIPE,
                 bufsize=self.config.buffer_size,
             )
+            # 重启 stderr 消费线程：无人读取时 stderr 积压 64KB 会阻塞 ffmpeg
+            self._start_stderr_thread()
             # 重置统计基准
             self.stats['last_frame_time'] = None
             self.stats['start_time'] = time.time()

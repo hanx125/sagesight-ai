@@ -237,6 +237,35 @@ class CameraWorker:
                                 else:
                                     logger.warning(f"[CameraWorker-{self.camera_id}] ZLM 推流启动失败: {result.get('message', '未知错误')}")
 
+                            # 等待转发流真正就绪（回源拉流需数秒）：解码器首连踩到
+                            # "流在线但无视频轨"窗口会立即失败退出，随后只能靠
+                            # 重连慢慢撞就绪窗口，表现为任务长时间无帧
+                            if stream_exists:
+                                _ready_deadline = time.time() + 15
+                                _ready = False
+                                while time.time() < _ready_deadline:
+                                    try:
+                                        _info = get_stream_media_info(
+                                            server_host=server_host,
+                                            http_port=http_port,
+                                            secret=secret,
+                                            app=app,
+                                            stream_id=stream_id
+                                        )
+                                        if _info.get('success'):
+                                            self.zlm_original_width = _info['width']
+                                            self.zlm_original_height = _info['height']
+                                            logger.debug(f"[CameraWorker-{self.camera_id}] ZLM 流就绪: "
+                                                         f"{self.zlm_original_width}x{self.zlm_original_height}")
+                                            _ready = True
+                                            break
+                                    except Exception as e:
+                                        logger.debug(f"[CameraWorker-{self.camera_id}] 等待流就绪查询失败: {e}")
+                                    time.sleep(1.5)
+                                if not _ready:
+                                    logger.warning(f"[CameraWorker-{self.camera_id}] 等待 ZLM 流就绪超时（15s），"
+                                                   f"解码器将继续自行重连")
+
                             # 获取 ZLM 流的原始尺寸（用于坐标映射）
                             if stream_exists:
                                 try:

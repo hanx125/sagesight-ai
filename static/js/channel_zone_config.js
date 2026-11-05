@@ -17,10 +17,12 @@ let zoneConfigContext = {
 
 // 基线状态 → 徽标文案与颜色
 const BASELINE_STATE_BADGES = {
-    uncalibrated: { text: '未校准', color: '#9e9e9e' },
-    monitoring:   { text: '监测中', color: '#4caf50' },
-    alerted:      { text: '已告警', color: '#ff9800' },
-    invalid:      { text: '已失效', color: '#f44336' }
+    uncalibrated:   { text: '未校准', color: '#9e9e9e' },
+    capturing:      { text: '拍摄中...', color: '#2196f3' },
+    monitoring:     { text: '监测中', color: '#4caf50' },
+    alerted:        { text: '已告警', color: '#ff9800' },
+    invalid:        { text: '已失效', color: '#f44336' },
+    capture_failed: { text: '拍摄失败', color: '#f44336' }
 };
 
 /**
@@ -145,6 +147,7 @@ function captureChannelBaseline() {
             const body = await resp.json().catch(() => ({}));
             if (resp.ok) {
                 showToast(body.message || '拍摄请求已下发', 'success');
+                updateBaselineBadge('capturing', null);
                 refreshBaselineStatus();
             } else {
                 showToast(body.error || `拍摄请求失败: ${resp.status}`, 'error');
@@ -175,7 +178,7 @@ function refreshBaselineStatus() {
                 ch => String(ch.channel_id) === String(zoneConfigContext.channelId)
             );
             if (!entry) return;
-            updateBaselineBadge(entry.state, entry.baseline_captured_at);
+            updateBaselineBadge(entry.state, entry.baseline_captured_at, entry.error);
         })
         .catch(err => {
             console.error('[ZoneConfig] 查询基线状态失败:', err);
@@ -185,7 +188,7 @@ function refreshBaselineStatus() {
 /**
  * 更新基线状态徽标与拍摄时间
  */
-function updateBaselineBadge(state, capturedAt) {
+function updateBaselineBadge(state, capturedAt, error) {
     const badge = document.getElementById('zoneBaselineBadge');
     const timeEl = document.getElementById('zoneBaselineTime');
     if (!badge) return;
@@ -195,7 +198,11 @@ function updateBaselineBadge(state, capturedAt) {
     badge.style.background = info.color;
 
     if (timeEl) {
-        timeEl.textContent = capturedAt ? `拍摄于 ${formatBaselineTime(capturedAt)}` : '';
+        if (state === 'capture_failed' && error) {
+            timeEl.textContent = error;
+        } else {
+            timeEl.textContent = capturedAt ? `拍摄于 ${formatBaselineTime(capturedAt)}` : '';
+        }
     }
 }
 

@@ -1135,6 +1135,7 @@ def baseline_status(task_id: int):
             'baseline_captured_at': status.get('captured_at') or meta.get('captured_at'),
             'state': state,
             'zones': status.get('zones', []),
+            'error': status.get('error'),
         })
     return jsonify({'task_id': task_id, 'channels': result})
 
