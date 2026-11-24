@@ -1,16 +1,22 @@
 /**
  * 轻量状态存储：基于 uni storage + 响应式全局对象
  */
+import { reactive } from 'vue'
+
 export const TOKEN_KEY = 'ss_token'
 export const USER_KEY = 'ss_user'
 export const BASE_KEY = 'ss_server_base'
+export const PENDING_EVENT_KEY = 'ss_pending_event'
 
-// 响应式全局状态（Vue3 reactive 由页面按需引入）
-export const state = {
+// 页面展示版本号：与 manifest.json 的 versionName 保持一致，升级时两处都要改
+export const APP_VERSION = '1.0.0'
+
+// 响应式全局状态：个人资料等 computed 直接依赖 state.user，必须是 reactive
+export const state = reactive({
   token: uni.getStorageSync(TOKEN_KEY) || '',
   user: null,
   serverBase: uni.getStorageSync(BASE_KEY) || ''
-}
+})
 
 try {
   const u = uni.getStorageSync(USER_KEY)
@@ -43,6 +49,21 @@ export function getServerBase() {
 export function setServerBase(base) {
   state.serverBase = (base || '').trim().replace(/\/+$/, '')
   uni.setStorageSync(BASE_KEY, state.serverBase)
+}
+
+/** 推送点击时若尚未登录，先记下要打开的事件，登录后再跳 */
+export function setPendingEvent(id) {
+  if (id) uni.setStorageSync(PENDING_EVENT_KEY, id)
+}
+
+export function takePendingEvent() {
+  const id = uni.getStorageSync(PENDING_EVENT_KEY) || ''
+  if (id) uni.removeStorageSync(PENDING_EVENT_KEY)
+  return id
+}
+
+export function clearPendingEvent() {
+  uni.removeStorageSync(PENDING_EVENT_KEY)
 }
 
 /** 把后端相对路径(/output/..、/api/..)转成可访问地址 */

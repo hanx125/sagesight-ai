@@ -26,7 +26,7 @@
       />
       <!-- #endif -->
       <view v-if="mode === 'snapshot'" class="video flex-center">
-        <image class="snap-img" :src="snapUrl" mode="aspectFit" @error="snapError = true" />
+        <image v-if="!snapError" class="snap-img" :src="snapUrl" mode="aspectFit" @error="snapError = true" />
         <view class="snap-tag">
           <view class="dot" />
           <text>快照模式 · 每 2 秒刷新</text>
@@ -43,15 +43,15 @@
     <!-- 控制条 -->
     <view class="ctrl-bar">
       <view class="ctrl-btn" @tap="reload">
-        <image :src="icon('refresh', '#334155')" />
+        <image :src="icon('refresh', '#111210')" />
         <text>重新加载</text>
       </view>
       <view class="ctrl-btn" :class="{ on: mode === 'snapshot' }" @tap="toggleMode">
-        <image :src="icon('image', mode === 'snapshot' ? '#0a5fd9' : '#667085')" />
+        <image :src="icon('image', mode === 'snapshot' ? '#111210' : '#55584F')" />
         <text>{{ mode === 'snapshot' ? '切回直播' : '快照模式' }}</text>
       </view>
       <view class="ctrl-btn danger" @tap="stopStream">
-        <image :src="icon('stop', '#D92D20')" />
+        <image :src="icon('stop', '#E8342C')" />
         <text>停止推流</text>
       </view>
     </view>
@@ -60,15 +60,15 @@
     <view class="talk-bar">
       <view
         class="talk-btn"
-        :class="{ talking: talkState === 'talking', starting: talkState === 'starting' }"
+        :class="{ talking: talkState === 'talking', starting: talkState === 'starting', unsupported: talkSupported === false }"
         @touchstart.prevent="onTalkStart"
         @touchend.prevent="onTalkEnd"
         @touchcancel="onTalkEnd"
       >
-        <image :src="icon('mic', talkState === 'talking' ? '#FFFFFF' : '#D92D20', 2.4)" style="width:40rpx;height:40rpx;" />
-        <text>{{ talkState === 'talking' ? '正在喊话 · 松手结束' : (talkState === 'starting' ? '连接摄像机...' : '按住喊话') }}</text>
+        <image :src="icon('mic', talkState === 'talking' ? '#FFFFFF' : '#E8342C', 2.4)" style="width:40rpx;height:40rpx;" />
+        <text>{{ talkSupported === false ? '该设备不支持语音对讲' : (talkState === 'talking' ? '正在喊话 · 松手结束' : (talkState === 'starting' ? '连接摄像机...' : '按住喊话')) }}</text>
       </view>
-      <text class="talk-tip t-dim">按住按钮对摄像机喊话驱离，松开即结束</text>
+      <text class="talk-tip t-dim">{{ talkSupported === false ? '需摄像机支持 ONVIF 音频回传' : '按住按钮对摄像机喊话驱离，松开即结束' }}</text>
     </view>
 
     <!-- 信息卡 -->
@@ -96,7 +96,7 @@ import navBar from '@/components/nav-bar/nav-bar.vue'
 import icon from '@/utils/icons'
 import { get, post } from '@/utils/api'
 import { resolveUrl, state } from '@/utils/store'
-import { beginTalk, stopTalk, isTalkActive } from '@/utils/talk'
+import { beginTalk, stopTalk, isTalkActive, checkTalkCapability } from '@/utils/talk'
 
 const cameraId = ref('')
 const cameraName = ref('实时画面')
@@ -107,10 +107,21 @@ const snapNonce = ref(Date.now())
 const snapError = ref(false)
 const videoEl = ref(null)
 const talkState = ref('idle') // idle | starting | talking
+const talkSupported = ref(null) // null 未探测/探测失败（保持可用） | false 明确不支持
 
 let snapTimer = null
 let hls = null
-let started = false
+// 集中管理短延时任务，页面卸载时统一清理，避免回调打到已销毁的组件
+const pendingTimers = new Set()
+function later(fn, ms) {
+  const id = setTimeout(() => { pendingTimers.delete(id); fn() }, ms)
+  pendingTimers.add(id)
+  return id
+}
+function clearPendingTimers() {
+  pendingTimers.forEach(id => clearTimeout(id))
+  pendingTimers.clear()
+}
 
 const snapUrl = computed(() => resolveUrl(`/api/stream/snapshot/${cameraId.value}?t=${snapNonce.value}&access_token=${state.token}`))
 const maskedUrl = computed(() => {
@@ -120,9 +131,23 @@ const maskedUrl = computed(() => {
 
 onLoad(async (opt) => {
   cameraId.value = opt.id || ''
-  if (opt.name) cameraName.value = decodeURIComponent(opt.name)
+  if (opt.name) {
+    try { cameraName.value = decodeURIComponent(opt.name) } catch (e) { cameraName.value = opt.name }
+  }
   await startStream()
+  probeTalkCapability()
 })
+
+/** 后台探测喊话能力，不阻塞播放；探测失败时保持按钮可用，避免误伤 */
+async function probeTalkCapability() {
+  if (!cameraId.value) return
+  try {
+    const supported = await checkTalkCapability(cameraId.value)
+    if (!isTalkActive()) talkSupported.value = supported
+  } catch (e) {
+    talkSupported.value = null
+  }
+}
 
 async function startStream() {
   if (!cameraId.value) return
@@ -135,7 +160,7 @@ async function startStream() {
     if (d && d.success && d.play_urls && d.play_urls.hls) {
       playUrl.value = d.play_urls.hls
       // #ifdef H5
-      setTimeout(() => setupHls(d.play_urls.hls), 60)
+      later(() => setupHls(d.play_urls.hls), 60)
       // #endif
     } else {
       fallbackToSnapshot('未获取到播放地址，已切换快照模式')
@@ -160,7 +185,7 @@ async function setupHls(url, retry = 3) {
   const el = resolveVideoEl()
   if (!el) {
     // video 元素由 v-if 控制，可能尚未渲染完成，稍后重试
-    if (retry > 0) setTimeout(() => setupHls(url, retry - 1), 100)
+    if (retry > 0) later(() => setupHls(url, retry - 1), 100)
     return
   }
   // 动态引入本地打包的 hls.js（按需分包，从同源服务器加载，不依赖外网 CDN）
@@ -271,6 +296,10 @@ function destroyHlsSafe() {
 /* ---------- 按住喊话 ---------- */
 async function onTalkStart() {
   if (talkState.value !== 'idle' || isTalkActive()) return
+  if (talkSupported.value === false) {
+    uni.showToast({ title: '该摄像机不支持语音对讲', icon: 'none' })
+    return
+  }
   talkState.value = 'starting'
   try {
     await beginTalk(cameraId.value)
@@ -290,6 +319,7 @@ async function onTalkEnd() {
 }
 
 onBeforeUnmount(() => {
+  clearPendingTimers()
   stopSnapTimer()
   destroyHlsSafe()
   stopTalk().catch(() => {})
@@ -299,110 +329,137 @@ onBeforeUnmount(() => {
 <style lang="scss" scoped>
 .player-page {
   min-height: 100vh;
-  background: $bg-deep;
+  background: $bg;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
-.video-box { padding: 8rpx 24rpx; }
+
+/* 画面：纸面上的一块黑场 */
+.video-box { padding: 16rpx 24rpx 8rpx; }
 .video {
   width: 100%;
   height: 420rpx;
   background: #000;
-  border-radius: $radius;
+  border-radius: 8rpx;
   overflow: hidden;
   position: relative;
+  border: 1rpx solid $line-2;
+  box-shadow: 0 14rpx 32rpx rgba(0, 0, 0, .22);
+}
+/* 监视器安全框：内缩一圈细线，画面外不再是一块纯黑 */
+.video::before {
+  content: '';
+  position: absolute;
+  left: 16rpx;
+  top: 16rpx;
+  right: 16rpx;
+  bottom: 16rpx;
+  border: 1rpx solid rgba(255, 255, 255, .16);
+  pointer-events: none;
+  z-index: 3;
 }
 .snap-img { width: 100%; height: 100%; }
 .snap-tag {
   position: absolute;
-  left: 16rpx;
-  bottom: 16rpx;
+  left: 0;
+  bottom: 0;
   display: flex;
   align-items: center;
   gap: 10rpx;
-  padding: 6rpx 18rpx;
-  border-radius: 999rpx;
-  background: rgba(5, 8, 15, .65);
-  font-size: 20rpx;
-  color: #FBBF24;
+  padding: 4rpx 14rpx;
+  border-radius: 0;
+  background: rgba(10, 9, 5, .78);
+  font-size: 19rpx;
+  letter-spacing: 1rpx;
+  color: #FFFFFF;
 }
 .dot {
-  width: 10rpx;
-  height: 10rpx;
-  border-radius: 50%;
-  background: $warning;
-  animation: blink 1.2s ease infinite;
+  width: 8rpx;
+  height: 8rpx;
+  background: #E0930A;
+  animation: blink 1.2s steps(1) infinite;
 }
-@keyframes blink { 50% { opacity: .3; } }
+@keyframes blink { 50% { opacity: .25; } }
 .loading-col {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 20rpx;
 }
+.loading-col .t-dim { color: rgba(255, 255, 255, .6); }
 .spinner {
-  width: 52rpx;
-  height: 52rpx;
-  border: 5rpx solid rgba(10, 95, 217, .15);
-  border-top-color: $primary;
+  width: 48rpx;
+  height: 48rpx;
+  border: 4rpx solid rgba(255, 255, 255, .22);
+  border-top-color: #FFFFFF;
   border-radius: 50%;
   animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* 控制条：矩形按钮，像设备面板 */
 .ctrl-bar {
   display: flex;
-  gap: 20rpx;
-  padding: 8rpx 24rpx 24rpx;
+  gap: 14rpx;
+  padding: 12rpx 24rpx 20rpx;
 }
 .ctrl-btn {
   flex: 1;
   height: 84rpx;
-  border-radius: $radius-sm;
+  border-radius: 8rpx;
   background: $surface;
-  border: 1rpx solid $border;
+  border: 1rpx solid $line-2;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10rpx;
-  font-size: 24rpx;
+  gap: 8rpx;
+  font-size: 22rpx;
+  letter-spacing: .5rpx;
   color: $text-1;
 }
-.ctrl-btn:active { opacity: .75; }
-.ctrl-btn image { width: 32rpx; height: 32rpx; }
-.ctrl-btn.on { border-color: rgba(10, 95, 217, .4); color: $primary; }
-.ctrl-btn.danger { border-color: rgba(217, 45, 32, .3); }
+.ctrl-btn:active { background: $surface-2; }
+.ctrl-btn image { width: 30rpx; height: 30rpx; }
+.ctrl-btn.on {
+  background: #00A88F;
+  border-color: #00A88F;
+  color: #111210;
+}
+.ctrl-btn.danger { border-color: rgba(163, 47, 34, .3); color: $danger; }
 
 /* 喊话 */
-.talk-bar { padding: 0 24rpx 8rpx; }
+.talk-bar { padding: 0 24rpx 16rpx; }
 .talk-btn {
   height: 96rpx;
-  border-radius: $radius-sm;
+  border-radius: 10rpx;
   background: $surface;
-  border: 1rpx solid rgba(217, 45, 32, .35);
+  border: 1rpx solid $line-2;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 14rpx;
   font-size: 28rpx;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: 1rpx;
   color: $text-1;
 }
+.talk-btn:active { background: $surface-2; }
 .talk-btn.talking {
-  background: #D92D20;
-  border-color: #D92D20;
+  background: $accent;
+  border-color: $accent-deep;
   color: #FFFFFF;
+  animation: talkPulse 1.2s ease infinite;
 }
+@keyframes talkPulse { 50% { opacity: .8; } }
 .talk-btn.starting { opacity: .7; }
-.talk-btn.talking { animation: talkPulse 1.2s ease infinite; }
-@keyframes talkPulse { 50% { opacity: .75; } }
-.talk-tip { display: block; text-align: center; font-size: 22rpx; padding-top: 14rpx; }
+.talk-btn.unsupported { opacity: .55; }
+.talk-tip { display: block; text-align: center; font-size: 21rpx; padding-top: 14rpx; }
 
-.info-card { margin: 0 24rpx; }
+.info-card { margin: 0 24rpx 24rpx; }
 .info-row {
   display: flex;
   padding: 16rpx 0;
-  border-bottom: 1rpx solid $border;
+  border-bottom: 1rpx solid $line;
 }
 .info-row:last-child { border-bottom: none; }
 .k { width: 160rpx; color: $text-3; font-size: 24rpx; flex-shrink: 0; }

@@ -26,7 +26,7 @@
           <picker mode="selector" :range="PROTOCOLS" @change="onProtoChange">
             <view class="picker-box">
               <text>{{ form.protocol || 'rtsp' }}</text>
-              <image :src="icon('chevron-down', '#667085', 2.4)" style="width:32rpx;height:32rpx;" />
+              <image :src="icon('chevron-down', '#55584F', 2.4)" style="width:32rpx;height:32rpx;" />
             </view>
           </picker>
         </view>
@@ -68,7 +68,8 @@
           <view class="form-item form-col">
             <view class="form-label">密码</view>
             <view class="input-box">
-              <input class="input" v-model="form.password" password placeholder="可选" placeholder-class="placeholder" />
+              <input class="input" v-model="form.password" password :placeholder="isEdit ? '留空则不修改密码' : '可选'"
+                placeholder-class="placeholder" />
             </view>
           </view>
         </view>
@@ -82,7 +83,7 @@
             <view class="switch-title">AI 智能检测</view>
             <view class="switch-desc">开启后此摄像机可绑定任务进行分析</view>
           </view>
-          <switch :checked="form.ai_detection" color="#0a5fd9" style="transform:scale(.85);"
+          <switch :checked="form.ai_detection" color="#00A88F" style="transform:scale(.76);"
             @change="form.ai_detection = $event.detail.value" />
         </view>
         <view class="switch-row">
@@ -90,7 +91,7 @@
             <view class="switch-title">启用</view>
             <view class="switch-desc">禁用后不参与检测调度</view>
           </view>
-          <switch :checked="form.enabled" color="#0a5fd9" style="transform:scale(.85);"
+          <switch :checked="form.enabled" color="#00A88F" style="transform:scale(.76);"
             @change="form.enabled = $event.detail.value" />
         </view>
 
@@ -145,6 +146,9 @@ onLoad(async (opt) => {
     try {
       const c = await get('/api/cameras/' + opt.id)
       Object.keys(form).forEach(k => {
+        // 后端详情接口会返回明文密码：不回填，留空表示本次不修改，
+        // 同时避免保存时把明文密码反复提交一遍。
+        if (k === 'password') return
         if (c[k] !== undefined && c[k] !== null) form[k] = c[k]
       })
       if (!form.protocol) form.protocol = 'rtsp'
@@ -163,26 +167,43 @@ async function save() {
     uni.showToast({ title: '请填写摄像机名称', icon: 'none' })
     return
   }
-  if (!form.source.trim()) {
+  const source = form.source.trim()
+  if (!source) {
     uni.showToast({ title: '请填写流地址（RTSP）', icon: 'none' })
     return
+  }
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(source)) {
+    uni.showToast({ title: '流地址格式不正确，需带协议前缀（如 rtsp://）', icon: 'none' })
+    return
+  }
+  if (form.ip.trim() && !/^(\d{1,3}\.){3}\d{1,3}$/.test(form.ip.trim())) {
+    uni.showToast({ title: 'IP 地址格式不正确', icon: 'none' })
+    return
+  }
+  if (form.port !== '' && form.port !== null && form.port !== undefined) {
+    const port = Number(form.port)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      uni.showToast({ title: '端口需在 1-65535 之间', icon: 'none' })
+      return
+    }
   }
   if (saving.value) return
   saving.value = true
 
   const payload = {
     name: form.name.trim(),
-    source: form.source.trim(),
+    source,
     protocol: form.protocol || 'rtsp',
     manufacturer: form.manufacturer.trim(),
     ip: form.ip.trim(),
     port: form.port ? parseInt(form.port) : null,
     username: form.username,
-    password: form.password,
     ai_detection: !!form.ai_detection,
     enabled: !!form.enabled,
     description: form.description
   }
+  // 编辑时密码留空 = 不修改（后端为 merge 语义，不传该字段即保留原值）
+  if (form.password) payload.password = form.password
 
   try {
     if (isEdit.value) {
@@ -207,9 +228,9 @@ async function save() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: $surface-2;
-  border: 1rpx solid $border;
-  border-radius: $radius-sm;
+  background: $surface;
+  border: 1rpx solid $line;
+  border-radius: 12rpx;
   padding: 0 24rpx;
   height: 92rpx;
   font-size: 28rpx;

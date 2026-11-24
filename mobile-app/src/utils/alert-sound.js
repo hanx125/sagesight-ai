@@ -18,6 +18,14 @@ export function isAlertSoundOn() {
 
 export function setAlertSoundOn(on) {
   try { uni.setStorageSync(STORAGE_KEY, !!on) } catch (e) { /* 忽略 */ }
+  if (!on) destroyAlertSound()
+}
+
+/** 关闭提示音或应用退出时释放播放器资源 */
+export function destroyAlertSound() {
+  if (!audio) return
+  try { audio.stop(); audio.destroy() } catch (e) { /* 忽略 */ }
+  audio = null
 }
 
 /** 拉取预置语音文件列表，缓存第一条可播放地址（失败静默） */

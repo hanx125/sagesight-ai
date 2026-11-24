@@ -44,7 +44,7 @@
         </view>
         <view class="info-row">
           <text class="k">摄像机</text>
-          <text class="v">{{ ev.channel_name || (ev.camera_id != null ? '#' + ev.camera_id : '-') }}</text>
+          <text class="v">{{ camText }}</text>
         </view>
         <!-- 区域/徘徊/起止：仅区域相关事件类型显示 -->
         <view class="info-row" v-if="isZoneType">
@@ -77,14 +77,14 @@
       <view class="card">
         <text class="section-title" style="margin-top:0;">AI 分析</text>
         <view class="ai-box" v-if="ev.ai_description">
-          <image class="ai-ic" :src="icon('zap', '#0a5fd9', 2)" />
+          <image class="ai-ic" :src="icon('zap', '#111210', 2)" />
           <view class="ai-body">
             <text class="ai-text">{{ ev.ai_description }}</text>
             <text class="ai-meta" v-if="aiMeta">{{ aiMeta }}</text>
           </view>
         </view>
         <view class="ai-empty" v-else>
-          <image class="ai-ic" :src="icon('zap', '#98A2B3', 2)" />
+          <image class="ai-ic" :src="icon('zap', '#55584F', 2)" />
           <text class="ai-empty-text">暂无 AI 描述</text>
         </view>
       </view>
@@ -113,6 +113,15 @@ const loading = ref(true)
 
 const meta = computed(() => eventStatusMeta(ev.value && ev.value.status))
 const imgUrl = computed(() => resolveUrl(ev.value && ev.value.local_image_url))
+/** 摄像机标识过长（UUID）时截断，避免撑破信息行 */
+const camText = computed(() => {
+  if (!ev.value) return '-'
+  if (ev.value.channel_name) return ev.value.channel_name
+  const id = ev.value.camera_id
+  if (id == null) return '-'
+  const s = String(id)
+  return /^[0-9a-f-]{16,}$/i.test(s) ? s.slice(0, 8) : ('#' + s)
+})
 const confPct = computed(() => {
   const n = Number(ev.value && ev.value.confidence)
   if (isNaN(n)) return '0%'
@@ -167,21 +176,21 @@ function preview() {
 .img { width: 100%; height: 460rpx; display: block; }
 .img-tag {
   position: absolute;
-  left: 20rpx;
-  bottom: 20rpx;
+  left: 16rpx;
+  bottom: 16rpx;
   display: flex;
   align-items: center;
   gap: 8rpx;
-  background: rgba(16, 24, 40, .75);
-  backdrop-filter: blur(8rpx);
-  border-radius: 999rpx;
-  padding: 8rpx 20rpx;
-  font-size: 20rpx;
+  background: rgba(10, 9, 5, .82);
+  border-radius: 4rpx;
+  padding: 6rpx 14rpx;
+  font-size: 19rpx;
   color: #FFFFFF;
-  font-weight: 600;
+  letter-spacing: 1rpx;
 }
 .img-tag text { color: rgba(255,255,255,.9); }
 .img-none { padding: 0; }
+.img-none .empty-box { padding: 64rpx 0; }
 
 .status-row {
   display: flex;
@@ -207,25 +216,28 @@ function preview() {
 .conf-wrap { display: flex; align-items: center; gap: 16rpx; }
 .conf-bar {
   width: 200rpx;
-  height: 10rpx;
-  background: $surface-2;
-  border-radius: 5rpx;
+  height: 6rpx;
+  background: $surface-3;
   overflow: hidden;
 }
 .conf-bar-inner {
   height: 100%;
-  background: $grad-primary;
-  border-radius: 5rpx;
+  background: $text-1;
   transition: width .5s ease;
 }
-.conf-num { font-family: 'DIN Alternate', sans-serif; }
+.conf-num {
+  font-family: $font-num;
+  color: $text-1;
+  font-weight: 800;
+}
 
 .ai-box {
   display: flex;
   gap: 16rpx;
-  background: rgba(10, 95, 217, .05);
-  border: 1rpx solid rgba(10, 95, 217, .15);
-  border-radius: $radius-sm;
+  background: $surface-2;
+  border: 1rpx solid $line;
+  border-left: 3rpx solid $accent;
+  border-radius: 8rpx;
   padding: 20rpx;
 }
 .ai-ic { width: 36rpx; height: 36rpx; flex-shrink: 0; margin-top: 4rpx; }

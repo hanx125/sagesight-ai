@@ -2,12 +2,14 @@
   <view class="nav-bar">
     <view class="nav-status" />
     <view class="nav-body">
-      <view class="nav-side" @tap="handleBack" v-if="back">
-        <image class="nav-icon" :src="icon('arrow-left', '#334155', 2.4)" />
+      <view class="nav-back" v-if="back" @tap="handleBack">
+        <image class="nav-icon" :src="icon('arrow-left', '#111210', 2.4)" />
       </view>
-      <view class="nav-side" v-else />
-      <text class="nav-title t-ellipsis">{{ title }}</text>
-      <view class="nav-side nav-right">
+      <view class="nav-title-wrap">
+        <text class="nav-title t-ellipsis">{{ title }}</text>
+        <text class="nav-sub" v-if="sub">{{ sub }}</text>
+      </view>
+      <view class="nav-right">
         <slot name="right" />
       </view>
     </view>
@@ -19,6 +21,7 @@ import icon from '@/utils/icons'
 
 defineProps({
   title: { type: String, default: '' },
+  sub: { type: String, default: '' },
   back: { type: Boolean, default: true }
 })
 
@@ -34,43 +37,73 @@ function handleBack() {
 
 <style lang="scss" scoped>
 .nav-bar {
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(20rpx);
-  -webkit-backdrop-filter: blur(20rpx);
+  background: #FFFFFF;
   position: sticky;
   top: 0;
   z-index: 100;
-  border-bottom: 1rpx solid $border;
+  border-bottom: $stroke solid $border;
+}
+/* 右下角一小段刻度，替代满屏装饰，只在页头收口 */
+.nav-bar::after {
+  content: '';
+  position: absolute;
+  right: 20rpx;
+  bottom: 0;
+  width: 132rpx;
+  height: 6rpx;
+  @include tex-ruler(rgba(0, 168, 143, .2), 11rpx);
+  background-repeat: repeat-x;
+  background-position: 0 center;
+  pointer-events: none;
 }
 .nav-status {
   height: var(--status-bar-height);
   min-height: 20rpx;
 }
 .nav-body {
-  height: 96rpx;
+  height: 104rpx;
   display: flex;
   align-items: center;
-  padding: 0 24rpx;
+  gap: 8rpx;
+  padding: 0 20rpx 0 12rpx;
 }
-.nav-side {
+/* 返回键：方形描边按钮，直角感的锚点 */
+.nav-back {
   width: 64rpx;
   height: 64rpx;
+  border: 2rpx solid $border;
+  border-radius: $radius-sm;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+  background: $surface;
 }
-.nav-icon {
-  width: 44rpx;
-  height: 44rpx;
+.nav-back:active { background: $surface-3; }
+.nav-icon { width: 36rpx; height: 36rpx; }
+.nav-title-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2rpx;
+  padding-left: 12rpx;
 }
 .nav-title {
-  flex: 1;
-  text-align: center;
-  font-size: 32rpx;
-  font-weight: 700;
+  font-size: 31rpx;
+  font-weight: 800;
   color: $text-1;
+  letter-spacing: .5rpx;
+}
+.nav-sub {
+  font-size: 19rpx;
+  color: $text-3;
+  letter-spacing: 1.5rpx;
 }
 .nav-right {
-  justify-content: flex-end;
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  flex-shrink: 0;
 }
 </style>

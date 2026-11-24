@@ -1,36 +1,141 @@
 /**
- * SageSight 移动端主题变量（每个 vue 文件编译时自动注入，无需 import）
- * 浅色清爽风：浅灰底 + 白卡片 + 青蓝渐变主色
+ * SageSight 移动端设计系统 v5 —— 「信号白 / SIGNAL WHITE」
+ *
+ * 登录后主界面大胆浅色主题：
+ *   · 冷白纸底 #F2F3EE + 纯白卡片，墨黑 #111210 粗描边
+ *   · 硬投影（offset shadow，不模糊）—— 新粗野主义结构感
+ *   · 青绿 #00A88F 承袭品牌 + 荧光黄 #E8FF3D 做大胆点缀
+ *   · 超大排版 / 等宽数字 / 斜纹网点 / 小圆角 / 不对称网格
+ *
+ * 登录页例外：仍在自身 scoped style 内覆盖回深空青绿变量，
+ * 保持与 Web 系统登录页完全一致（双主题共存）。
  */
 
-/* ===== 色板 ===== */
-$bg: #F5F7FA;               // 页面底色
-$bg-deep: #EDF1F7;          // 更深层（播放器）
-$surface: #FFFFFF;          // 卡片
-$surface-2: #F2F5F9;        // 卡片悬浮/输入框
-$surface-3: #E8EEF5;        // 高亮块
-$border: rgba(16, 24, 40, 0.08);
-$border-strong: rgba(16, 24, 40, 0.18);
+/* ===== 主背景与表面 ===== */
+$bg: #F2F3EE;                       // 冷白纸底
+$bg-deep: #111210;                  // 画面区 / 墨块
+$surface: #FFFFFF;                  // 纯白卡片
+$surface-solid: #FFFFFF;
+$surface-2: #EDEFE7;                // 次级填充
+$surface-3: #DEE1D6;                // 三级填充 / 轨道
+$border: #111210;                   // 主描边：墨黑粗线
+$line: #111210;
+$line-2: #D3D7CB;                   // 次要线：浅灰
+$border-strong: #111210;
+$glass-border: #111210;
 
-$primary: #0a5fd9;          // 主色（与 Web 端亮色主题一致）
-$primary-2: #0E9BD8;        // 青蓝（渐变另一端）
-$grad-primary: linear-gradient(135deg, #0E9BD8 0%, #0a5fd9 100%);
+/* ===== 文字三级 ===== */
+$text-1: #111210;                   // 墨黑
+$text-2: #55584F;                   // 中灰
+$text-3: #94988C;                   // 浅灰
+$text-inverse: #FFFFFF;
 
-$success: #079455;
-$warning: #B45309;
-$danger: #D92D20;
-$info: #1570EF;
+/* ===== 强调色：青绿 + 荧光黄 ===== */
+$accent: #00A88F;                   // 品牌青绿（白底上加深保证对比）
+$accent-2: #E8FF3D;                 // 荧光黄（大胆点缀）
+$accent-deep: #007A66;
+$accent-soft: rgba(0, 168, 143, .12);
+$accent-dim: rgba(0, 168, 143, .38);
+$primary: #111210;                  // 主按钮 = 墨块
+$primary-soft: #00A88F;
 
-$text-1: #101828;           // 主文本
-$text-2: #475467;           // 次文本
-$text-3: #98A2B3;           // 弱文本
+/* 旧色名兼容（组件仍在引用） */
+$violet: #00A88F;
+$pink: #00A88F;
+$cyan: #2E6BE6;
+$danger: #E8342C;                   // 信号红
+$danger-bg: rgba(232, 52, 44, .10);
+$warning: #E0930A;                  // 警戒橙黄
+$warning-bg: rgba(224, 147, 10, .12);
+$success: #00A88F;
+$success-bg: rgba(0, 168, 143, .12);
+$info: #2E6BE6;
+$info-bg: rgba(46, 107, 230, .10);
 
-/* ===== 尺寸 ===== */
-$radius: 24rpx;             // 统一圆角
-$radius-sm: 16rpx;
-$radius-lg: 32rpx;
-$pad: 24rpx;                // 统一内边距
+/* ===== 渐变：硬朗短渐变，不做彩色光晕 ===== */
+$grad-primary: linear-gradient(135deg, #2A2C27 0%, #111210 100%);
+$grad-purple: linear-gradient(135deg, #00A88F 0%, #007A66 100%);
+$grad-cyan: linear-gradient(135deg, #00A88F 0%, #E8FF3D 160%);
+$grad-aurora: linear-gradient(100deg, #00A88F 0%, #E8FF3D 120%, #00A88F 200%);
+$grad-copper: linear-gradient(135deg, #111210 0%, #00A88F 100%, #E8FF3D 140%);
 
-/* ===== 阴影 ===== */
-$shadow-card: 0 8rpx 32rpx rgba(16, 24, 40, 0.06);
-$shadow-glow: 0 8rpx 24rpx rgba(6, 182, 212, 0.22);
+/* ===== 尺寸：小圆角 + 硬描边 ===== */
+$radius: 8rpx;
+$radius-sm: 4rpx;
+$radius-lg: 14rpx;
+$pad: 24rpx;
+$stroke: 3rpx;                      // 招牌粗描边
+
+/* ===== 阴影：硬投影（新粗野主义）===== */
+$shadow-card: 5rpx 5rpx 0 $border;
+$shadow-glow: 5rpx 5rpx 0 $accent;
+$shadow-glow-pink: 5rpx 5rpx 0 $accent-2;
+$shadow-glow-cyan: 5rpx 5rpx 0 rgba(0, 168, 143, .5);
+$shadow-stamp: 4rpx 4rpx 0 0 $border;
+
+/* ===== 字体 ===== */
+$font-num: 'DIN Alternate', 'SF Mono', 'Roboto Mono', ui-monospace, monospace;
+
+/* ============================================================
+   纹理层 TEX —— 全部用 CSS 渐变生成，矢量、零包体、双端通用。
+   浅色主题：石墨网点 / 蓝图网格 / 斜纹 / 刻度尺。
+   ============================================================ */
+
+/* 全屏底：细网格 + 双层网点 */
+@mixin tex-paper($grid: 56rpx, $grid-alpha: .045, $grain-alpha: .10) {
+  background-image:
+    radial-gradient(rgba(17, 18, 16, $grain-alpha) 1rpx, transparent 1.3rpx),
+    radial-gradient(rgba(17, 18, 16, $grain-alpha * .6) 1rpx, transparent 1.3rpx),
+    linear-gradient(rgba(17, 18, 16, $grid-alpha) 1rpx, transparent 1rpx),
+    linear-gradient(90deg, rgba(17, 18, 16, $grid-alpha) 1rpx, transparent 1rpx);
+  background-size: 11rpx 11rpx, 19rpx 19rpx, $grid $grid, $grid $grid;
+  background-position: 0 0, 6rpx 9rpx, 0 0, 0 0;
+}
+
+/* 墨底上的青绿细网格（hero / 画面区） */
+@mixin tex-ink($grid: 28rpx, $alpha: .12) {
+  background-color: $bg-deep;
+  background-image:
+    linear-gradient(rgba(0, 168, 143, $alpha) 1rpx, transparent 1rpx),
+    linear-gradient(90deg, rgba(0, 168, 143, $alpha) 1rpx, transparent 1rpx);
+  background-size: $grid $grid, $grid $grid;
+}
+
+/* 印刷网点 */
+@mixin tex-dots($alpha: .16, $cell: 11rpx) {
+  background-image: radial-gradient(rgba(17, 18, 16, $alpha) 1.4rpx, transparent 1.7rpx);
+  background-size: $cell $cell;
+}
+
+/* 45° 斜纹 */
+@mixin tex-hatch($alpha: .10, $step: 14rpx) {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(17, 18, 16, $alpha) 0 1rpx,
+    transparent 1rpx $step
+  );
+}
+
+/* 刻度尺 */
+@mixin tex-ruler($color: rgba(17, 18, 16, .38), $step: 12rpx) {
+  background-image: repeating-linear-gradient(
+    90deg,
+    $color 0 1rpx,
+    transparent 1rpx $step
+  );
+}
+
+/* 卡片顶部青绿流光（登录页会局部覆盖颜色） */
+@mixin light-band($height: 3rpx) {
+  content: '';
+  position: absolute;
+  top: -1rpx;
+  left: 24rpx;
+  right: 24rpx;
+  height: $height;
+  background: linear-gradient(90deg, transparent, $accent, $accent-2, transparent);
+  background-size: 200% 100%;
+  animation: lightSweep 6s linear infinite;
+  opacity: .9;
+  pointer-events: none;
+}

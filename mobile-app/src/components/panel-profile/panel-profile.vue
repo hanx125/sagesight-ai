@@ -2,136 +2,119 @@
   <scroll-view scroll-y class="panel-scroll" :show-scrollbar="false" refresher-enabled
     :refresher-triggered="refreshing" @refresherrefresh="onRefresh">
     <view class="panel-inner">
-      <!-- 用户信息卡 -->
-      <view class="hero">
-        <view class="avatar">{{ avatarChar }}</view>
-        <view class="hero-meta">
-          <view class="hero-row">
-            <text class="hero-name">{{ userName }}</text>
-            <view class="hero-badge">{{ roleText }}</view>
+      <!-- 档案头 -->
+      <view class="dossier">
+        <view class="avatar-box">{{ avatarChar }}</view>
+        <view class="dossier-meta">
+          <view class="name-row">
+            <text class="d-name t-ellipsis">{{ userName }}</text>
+            <text class="d-role">{{ roleText }}</text>
           </view>
-          <text class="hero-uid">@{{ accountName }} · ID {{ userId || '-' }}</text>
-          <text class="hero-sub" v-if="joinedAt">账号创建于 {{ joinedAt }}</text>
+          <text class="d-id">@{{ accountName }} · ID {{ userId || '-' }}</text>
+          <text class="d-join" v-if="joinedAt">加入于 {{ joinedAt }}</text>
         </view>
       </view>
 
-      <!-- 账号与安全 -->
-      <text class="group-label">账号与安全</text>
-      <view class="card menu">
-        <view class="menu-item" @tap="openProfileEdit">
-          <view class="flex-row" style="gap: 20rpx;">
-            <view class="menu-ic" style="background: rgba(10,95,217,.10);">
-              <image :src="icon('edit', '#0a5fd9', 2.2)" />
-            </view>
-            <text class="menu-label">编辑资料</text>
-          </view>
-          <view class="flex-row" style="gap: 12rpx; min-width: 0;">
-            <text class="menu-val">{{ emailText }}</text>
-            <image :src="icon('chevron-right', '#98A2B3', 2.4)" style="width:32rpx;height:32rpx;flex-shrink:0;" />
-          </view>
+      <!-- 01 账号与安全 -->
+      <view class="group-head">
+        <text class="idx">01</text>
+        <text class="txt">账号与安全</text>
+        <view class="rule" />
+      </view>
+      <view class="rows">
+        <view class="row" @tap="openProfileEdit">
+          <image class="row-ic" :src="icon('edit', '#111210', 2)" />
+          <text class="row-label">编辑资料</text>
+          <text class="row-val">{{ emailText }}</text>
+          <image class="row-ar" :src="icon('chevron-right', '#55584F', 2.2)" />
         </view>
-        <view class="menu-item" @tap="openPwdEdit">
-          <view class="flex-row" style="gap: 20rpx;">
-            <view class="menu-ic" style="background: rgba(180,83,9,.10);">
-              <image :src="icon('shield', '#B45309', 2.2)" />
-            </view>
-            <text class="menu-label">修改密码</text>
-          </view>
-          <image :src="icon('chevron-right', '#98A2B3', 2.4)" style="width:32rpx;height:32rpx;" />
+        <view class="row" @tap="openPwdEdit">
+          <image class="row-ic" :src="icon('lock', '#111210', 2)" />
+          <text class="row-label">修改密码</text>
+          <image class="row-ar" :src="icon('chevron-right', '#55584F', 2.2)" />
         </view>
       </view>
 
-      <!-- 通知 -->
-      <text class="group-label">通知</text>
-      <view class="card menu">
-        <view class="menu-item">
-          <view class="flex-row" style="gap: 20rpx;">
-            <view class="menu-ic" style="background: rgba(16,185,129,.10);">
-              <image :src="icon('volume', '#10B981', 2.2)" />
-            </view>
-            <text class="menu-label">告警提示音</text>
-          </view>
-          <switch :checked="alertSoundOn" color="#0a5fd9" style="transform:scale(.8);"
+      <!-- 02 通知 -->
+      <view class="group-head">
+        <text class="idx">02</text>
+        <text class="txt">通知</text>
+        <view class="rule" />
+      </view>
+      <view class="rows">
+        <view class="row">
+          <image class="row-ic" :src="icon('volume', '#111210', 2)" />
+          <text class="row-label">告警提示音</text>
+          <switch :checked="alertSoundOn" color="#00A88F" style="transform:scale(.72);"
             @change="onAlertSoundChange" />
         </view>
-        <view class="menu-item" @tap="onPushTap">
-          <view class="flex-row" style="gap: 20rpx;">
-            <view class="menu-ic" style="background: rgba(245,158,11,.12);">
-              <image :src="icon('bell', '#F59E0B', 2.2)" />
-            </view>
-            <text class="menu-label">事件推送</text>
-          </view>
-          <view class="flex-row" style="gap: 12rpx;">
-            <view class="badge" :class="pushStatus.enabled ? 'badge-success' : 'badge-gray'">
-              {{ pushStatus.enabled ? '服务已开启' : '服务未开启' }}
-            </view>
-            <image :src="icon('chevron-right', '#98A2B3', 2.4)" style="width:32rpx;height:32rpx;" />
-          </view>
+        <view class="row" @tap="onPushTap">
+          <image class="row-ic" :src="icon('bell', '#111210', 2)" />
+          <text class="row-label">事件推送</text>
+          <text class="row-state" :class="{ on: pushStatus.enabled }">
+            {{ pushStatus.enabled ? '已开启' : '未开启' }}
+          </text>
+          <image class="row-ar" :src="icon('chevron-right', '#55584F', 2.2)" />
         </view>
         <!-- #ifdef APP-PLUS -->
-        <view class="menu-item" v-if="bound" @tap="toggleBind">
-          <view class="flex-row" style="gap: 20rpx;">
-            <view class="menu-ic" style="background: rgba(21,112,239,.10);">
-              <image :src="icon('phone', '#1570EF', 2.2)" />
-            </view>
-            <text class="menu-label">本机推送绑定</text>
-          </view>
-          <view class="flex-row" style="gap: 12rpx;">
-            <view class="badge badge-success">已绑定</view>
-            <image :src="icon('chevron-right', '#98A2B3', 2.4)" style="width:32rpx;height:32rpx;" />
-          </view>
+        <view class="row" v-if="bound" @tap="toggleBind">
+          <image class="row-ic" :src="icon('phone', '#111210', 2)" />
+          <text class="row-label">本机推送绑定</text>
+          <text class="row-state on">已绑定</text>
+          <image class="row-ar" :src="icon('chevron-right', '#55584F', 2.2)" />
         </view>
-        <text class="t-dim push-cid t-ellipsis" v-if="clientId">CID: {{ clientId }}</text>
+        <view class="cid-line" v-if="clientId">
+          <text class="micro">CID</text>
+          <text class="cid-val t-ellipsis">{{ clientId }}</text>
+        </view>
         <!-- #endif -->
       </view>
 
-      <!-- 通用 -->
-      <text class="group-label">通用</text>
-      <view class="card menu">
-        <view class="menu-item" @tap="clearCache">
-          <view class="flex-row" style="gap: 20rpx;">
-            <view class="menu-ic" style="background: rgba(217,45,32,.10);">
-              <image :src="icon('trash', '#D92D20', 2.2)" />
-            </view>
-            <text class="menu-label">清除缓存</text>
-          </view>
-          <image :src="icon('chevron-right', '#98A2B3', 2.4)" style="width:32rpx;height:32rpx;" />
+      <!-- 03 通用 -->
+      <view class="group-head">
+        <text class="idx">03</text>
+        <text class="txt">通用</text>
+        <view class="rule" />
+      </view>
+      <view class="rows">
+        <view class="row" @tap="clearCache">
+          <image class="row-ic" :src="icon('hard-drive', '#111210', 2)" />
+          <text class="row-label">清除缓存</text>
+          <image class="row-ar" :src="icon('chevron-right', '#55584F', 2.2)" />
         </view>
-        <view class="menu-item" @tap="checkUpdate">
-          <view class="flex-row" style="gap: 20rpx;">
-            <view class="menu-ic" style="background: rgba(16,185,129,.10);">
-              <image :src="icon('refresh', '#10B981', 2.2)" />
-            </view>
-            <text class="menu-label">检查更新</text>
-          </view>
-          <view class="flex-row" style="gap: 12rpx;">
-            <text class="menu-val">v{{ appVersion }}</text>
-            <image :src="icon('chevron-right', '#98A2B3', 2.4)" style="width:32rpx;height:32rpx;" />
-          </view>
+        <view class="row" @tap="checkUpdate">
+          <image class="row-ic" :src="icon('refresh', '#111210', 2)" />
+          <text class="row-label">检查更新</text>
+          <text class="row-val num">v{{ appVersion }}</text>
+          <image class="row-ar" :src="icon('chevron-right', '#55584F', 2.2)" />
         </view>
-        <view class="menu-item" @tap="aboutShow = true">
-          <view class="flex-row" style="gap: 20rpx;">
-            <view class="menu-ic" style="background: rgba(71,84,103,.10);">
-              <image :src="icon('info', '#475467', 2.2)" />
-            </view>
-            <text class="menu-label">关于睿观</text>
-          </view>
-          <image :src="icon('chevron-right', '#98A2B3', 2.4)" style="width:32rpx;height:32rpx;" />
+        <view class="row" @tap="aboutShow = true">
+          <image class="row-ic" :src="icon('info', '#111210', 2)" />
+          <text class="row-label">关于睿观</text>
+          <image class="row-ar" :src="icon('chevron-right', '#55584F', 2.2)" />
         </view>
       </view>
 
-      <!-- 退出登录 -->
-      <view class="btn btn-danger-ghost logout-btn" @tap="doLogout">
-        <image :src="icon('logout', '#D92D20')" style="width:34rpx;height:34rpx;" />
-        <text style="margin-left: 12rpx;">退出登录</text>
+      <!-- 退出 -->
+      <view class="logout" @tap="doLogout">
+        <image :src="icon('logout', '#E8342C', 2)" style="width:30rpx;height:30rpx;" />
+        <text>退出登录</text>
       </view>
 
-      <view style="height: 60rpx;" />
+      <view class="colophon">
+        <text class="micro">SAGESIGHT · AI VISION</text>
+        <text class="colo-ver num">v{{ appVersion }}</text>
+      </view>
 
       <!-- 编辑资料弹窗 -->
       <view class="mask" v-if="editShow" @tap="editShow = false">
-        <view class="modal-card" @tap.stop>
-          <text class="modal-title">编辑资料</text>
+        <view class="sheet" @tap.stop>
+          <view class="sheet-head">
+            <text class="sheet-title">编辑资料</text>
+            <view class="sheet-x" @tap="editShow = false">
+              <image :src="icon('close', '#94988C', 2.2)" style="width:26rpx;height:26rpx;" />
+            </view>
+          </view>
           <view class="field">
             <text class="field-label">昵称</text>
             <input class="field-input" v-model="editForm.display_name" placeholder="请输入昵称"
@@ -142,7 +125,7 @@
             <input class="field-input" v-model="editForm.email" placeholder="请输入邮箱"
               placeholder-class="ph" />
           </view>
-          <view class="modal-actions">
+          <view class="sheet-actions">
             <view class="btn btn-ghost flex-1" @tap="editShow = false"><text>取消</text></view>
             <view class="btn btn-primary flex-1" @tap="saveProfile"><text>保存</text></view>
           </view>
@@ -151,8 +134,13 @@
 
       <!-- 修改密码弹窗 -->
       <view class="mask" v-if="pwdShow" @tap="pwdShow = false">
-        <view class="modal-card" @tap.stop>
-          <text class="modal-title">修改密码</text>
+        <view class="sheet" @tap.stop>
+          <view class="sheet-head">
+            <text class="sheet-title">修改密码</text>
+            <view class="sheet-x" @tap="pwdShow = false">
+              <image :src="icon('close', '#94988C', 2.2)" style="width:26rpx;height:26rpx;" />
+            </view>
+          </view>
           <view class="field">
             <text class="field-label">新密码</text>
             <input class="field-input" password v-model="pwdForm.p1" placeholder="至少 6 位"
@@ -163,7 +151,7 @@
             <input class="field-input" password v-model="pwdForm.p2" placeholder="再次输入新密码"
               placeholder-class="ph" />
           </view>
-          <view class="modal-actions">
+          <view class="sheet-actions">
             <view class="btn btn-ghost flex-1" @tap="pwdShow = false"><text>取消</text></view>
             <view class="btn btn-primary flex-1" @tap="savePassword"><text>确认修改</text></view>
           </view>
@@ -172,14 +160,14 @@
 
       <!-- 关于弹窗 -->
       <view class="mask" v-if="aboutShow" @tap="aboutShow = false">
-        <view class="modal-card about-card" @tap.stop>
-          <view class="about-logo">
-            <image :src="icon('logo', '#FFFFFF')" style="width:56rpx;height:56rpx;" />
+        <view class="sheet about" @tap.stop>
+          <view class="about-mark">
+            <image :src="icon('logo', '#111210')" style="width:52rpx;height:52rpx;" />
           </view>
           <text class="about-name">睿观 SageSight</text>
-          <text class="about-ver">AI 视频智能检测平台 · v{{ appVersion }}</text>
+          <text class="about-ver micro">AI VISION PLATFORM · v{{ appVersion }}</text>
           <text class="about-desc">面向安防场景的智能视频分析系统，支持区域入侵、徘徊检测、目标跟踪等多种 AI 检测任务。</text>
-          <view class="btn btn-primary modal-btn" @tap="aboutShow = false"><text>知道了</text></view>
+          <view class="btn btn-primary about-btn" @tap="aboutShow = false"><text>知道了</text></view>
         </view>
       </view>
     </view>
@@ -190,7 +178,7 @@
 import { ref, reactive, computed, watch } from 'vue'
 import icon from '@/utils/icons'
 import { get, put, post } from '@/utils/api'
-import { state, clearAuth, setAuth } from '@/utils/store'
+import { state, clearAuth, setAuth, APP_VERSION } from '@/utils/store'
 import { isAlertSoundOn, setAlertSoundOn, loadAlertSound } from '@/utils/alert-sound'
 import { closeWs } from '@/utils/ws'
 
@@ -205,7 +193,7 @@ const pwdShow = ref(false)
 const aboutShow = ref(false)
 const editForm = reactive({ display_name: '', email: '' })
 const pwdForm = reactive({ p1: '', p2: '' })
-const appVersion = '1.0.0'
+const appVersion = APP_VERSION
 let loadedOnce = false
 
 const userName = computed(() => (state.user && (state.user.display_name || state.user.username)) || '-')
@@ -289,17 +277,20 @@ async function savePassword() {
 
 function onPushTap() {
   // #ifdef APP-PLUS
-  if (bound.value) toggleBind()
-  else if (!pushStatus.configured) uni.showToast({ title: '推送服务未在服务端配置', icon: 'none' })
-  else toggleBind()
-  return
+  if (!pushStatus.configured) {
+    uni.showToast({ title: '推送服务未在服务端配置', icon: 'none' })
+    return
+  }
+  toggleBind()
   // #endif
+  // #ifndef APP-PLUS
   uni.showToast({ title: '推送功能需在 App 端使用', icon: 'none' })
+  // #endif
 }
 
 function clearCache() {
   // 保留登录态与服务端地址，仅清理其余本地缓存数据
-  const keep = ['ss_token', 'ss_user', 'ss_server_base']
+  const keep = ['ss_token', 'ss_user', 'ss_server_base', 'ss_alert_sound', 'ss_pending_event']
   try {
     const info = uni.getStorageInfoSync()
     let n = 0
@@ -317,13 +308,24 @@ function checkUpdate() {
 }
 
 // #ifdef APP-PLUS
+/**
+ * uni-push 1.0（老版本）：plus.push.getClientInfo() 同步返回 { clientid }。
+ * SDK 初始化未完成时 clientid 可能为空，做几次短延时重试。
+ */
 function ensureClientId() {
   return new Promise((resolve) => {
     if (clientId.value) return resolve()
-    uni.getPushClientId({
-      success: (res) => { clientId.value = res.cid; resolve() },
-      fail: () => resolve()
-    })
+    let tries = 0
+    const attempt = () => {
+      try {
+        const info = plus.push.getClientInfo()
+        const cid = info && (info.clientid || info.cid)
+        if (cid) { clientId.value = cid; return resolve() }
+      } catch (e) { /* SDK 未就绪 */ }
+      if (++tries < 6) setTimeout(attempt, 300)
+      else resolve()
+    }
+    attempt()
   })
 }
 
@@ -359,7 +361,7 @@ function doLogout() {
   uni.showModal({
     title: '退出登录',
     content: '确定要退出当前账号吗？',
-    confirmColor: '#D92D20',
+    confirmColor: '#E8342C',
     success: async (res) => {
       if (!res.confirm) return
       try { await post('/api/auth/app_logout') } catch (e) { /* 忽略 */ }
@@ -380,142 +382,234 @@ watch(() => props.active, (v) => {
 
 <style lang="scss" scoped>
 .panel-scroll { height: 100%; }
-.panel-inner { padding: calc(var(--status-bar-height) + 40rpx) 24rpx calc(160rpx + env(safe-area-inset-bottom)); }
+.panel-inner {
+  padding: calc(var(--status-bar-height) + 30rpx) 24rpx calc(210rpx + env(safe-area-inset-bottom));
+}
 
-/* 用户信息卡 */
-.hero {
+/* 档案头 */
+.dossier {
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
-  gap: 28rpx;
-  padding: 40rpx 32rpx;
-  border-radius: $radius-lg;
-  background: $grad-primary;
-  box-shadow: $shadow-glow;
+  gap: 24rpx;
+  padding: 10rpx 4rpx 30rpx;
+  border-bottom: $stroke solid $border;
 }
-.avatar {
-  width: 116rpx;
-  height: 116rpx;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, .18);
-  border: 2rpx solid rgba(255, 255, 255, .35);
+/* 档案卡右上角的印刷网点，像证件上的防伪底纹 */
+.dossier::after {
+  content: '';
+  position: absolute;
+  right: -20rpx;
+  top: -10rpx;
+  width: 200rpx;
+  height: 150rpx;
+  @include tex-dots(.085, 10rpx);
+  -webkit-mask-image: linear-gradient(228deg, #000 0%, transparent 70%);
+  mask-image: linear-gradient(228deg, #000 0%, transparent 70%);
+  pointer-events: none;
+}
+.avatar-box {
+  position: relative;
+  z-index: 1;
+  width: 104rpx;
+  height: 104rpx;
+  /* 墨色印章：底上压 12rpx 细网格，白字 + 荧光描边 */
+  @include tex-ink(12rpx, .14);
+  border: 2rpx solid $accent-2;
+  box-shadow: 4rpx 4rpx 0 $border;
   color: #FFFFFF;
-  font-size: 46rpx;
-  font-weight: 800;
+  font-family: $font-num;
+  font-size: 44rpx;
+  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  border-radius: 4rpx;
 }
-.hero-meta { display: flex; flex-direction: column; gap: 8rpx; min-width: 0; }
-.hero-row { display: flex; align-items: center; gap: 16rpx; }
-.hero-name {
-  font-size: 36rpx;
+.dossier-meta { position: relative; z-index: 1; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6rpx; }
+.name-row { display: flex; align-items: center; gap: 14rpx; }
+.d-name {
+  font-size: 40rpx;
   font-weight: 800;
-  color: #FFFFFF;
+  color: $text-1;
+  letter-spacing: -1rpx;
   max-width: 320rpx;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.hero-badge {
-  padding: 4rpx 16rpx;
-  border-radius: 999rpx;
-  background: rgba(255, 255, 255, .2);
-  color: #FFFFFF;
-  font-size: 20rpx;
+.d-role {
+  font-size: 19rpx;
+  font-weight: 700;
+  letter-spacing: 1rpx;
+  color: $accent-deep;
+  background: $accent-soft;
+  padding: 3rpx 12rpx;
+  border-radius: 3rpx;
   flex-shrink: 0;
 }
-.hero-uid { font-size: 24rpx; color: rgba(255, 255, 255, .82); }
-.hero-sub { font-size: 20rpx; color: rgba(255, 255, 255, .6); }
+.d-id { font-size: 22rpx; color: $text-2; letter-spacing: .5rpx; }
+.d-join { font-size: 20rpx; color: $text-3; }
 
-/* 分组标题 */
-.group-label {
-  display: block;
-  font-size: 24rpx;
-  color: $text-3;
-  margin: 32rpx 8rpx 14rpx;
+/* 分组 */
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  margin: 36rpx 0 14rpx;
 }
+.group-head .idx {
+  font-family: $font-num;
+  font-size: 18rpx;
+  font-weight: 800;
+  color: $border;
+  background: $accent-2;
+  border: 2rpx solid $border;
+  padding: 2rpx 7rpx;
+  border-radius: $radius-sm;
+  letter-spacing: 1rpx;
+}
+.group-head .txt {
+  font-size: 25rpx;
+  font-weight: 800;
+  color: $text-1;
+  letter-spacing: .5rpx;
+}
+.group-head .rule { flex: 1; height: $stroke; background: $border; }
 
-/* 菜单 */
-.menu { padding: 8rpx 24rpx; }
-.menu-item {
+/* 行 */
+.rows {
+  background: $surface;
+  border: $stroke solid $border;
+  border-radius: $radius;
+  box-shadow: 5rpx 5rpx 0 $border;
+  overflow: hidden;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 18rpx;
+  padding: 26rpx 24rpx;
+  border-bottom: 2rpx solid $line-2;
+}
+.row:last-child { border-bottom: none; }
+.row:active { background: $surface-2; }
+.row-ic { width: 34rpx; height: 34rpx; flex-shrink: 0; }
+.row-label { flex: 1; font-size: 27rpx; color: $text-1; letter-spacing: .3rpx; }
+.row-val {
+  font-size: 22rpx;
+  color: $text-3;
+  max-width: 300rpx;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.row-state {
+  font-size: 21rpx;
+  color: $text-3;
+  letter-spacing: 1rpx;
+  padding-right: 4rpx;
+}
+.row-state.on { color: $success; font-weight: 700; }
+.row-ar { width: 28rpx; height: 28rpx; flex-shrink: 0; }
+.cid-line {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 14rpx 24rpx 18rpx;
+  border-top: 1rpx solid $line;
+}
+.cid-val { font-size: 19rpx; color: $text-3; }
+
+/* 退出 */
+.logout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12rpx;
+  height: 92rpx;
+  margin-top: 36rpx;
+  border: 1rpx solid rgba(163, 47, 34, .28);
+  border-radius: 12rpx;
+  background: $surface;
+}
+.logout:active { background: $danger-bg; }
+.logout text { font-size: 27rpx; color: $danger; font-weight: 700; letter-spacing: 1rpx; }
+
+.colophon {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 26rpx 0;
-  border-bottom: 1rpx solid $border;
+  margin-top: 34rpx;
+  padding-top: 18rpx;
+  border-top: 1rpx solid $line;
 }
-.menu-item:last-child { border-bottom: none; }
-.menu-item:active { opacity: .7; }
-.menu-ic {
-  width: 64rpx; height: 64rpx;
-  border-radius: 18rpx;
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
-.menu-ic image { width: 34rpx; height: 34rpx; }
-.menu-label { font-size: 28rpx; color: $text-1; }
-.menu-val {
-  font-size: 22rpx;
-  color: $text-3;
-  max-width: 280rpx;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.push-cid { font-size: 20rpx; padding: 0 0 20rpx; display: block; }
-
-/* 退出登录 */
-.logout-btn { margin-top: 40rpx; }
+.colo-ver { font-size: 19rpx; color: $text-3; }
 
 /* 弹窗 */
 .mask {
   position: fixed;
   left: 0; top: 0; right: 0; bottom: 0;
-  background: rgba(16, 24, 40, .55);
+  background: rgba(3, 9, 18, .7);
   z-index: 999;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
-  padding: 48rpx;
+  padding: 0;
 }
-.modal-card {
+.sheet {
   width: 100%;
-  max-width: 600rpx;
+  max-width: 750px;
   background: $surface;
-  border-radius: $radius-lg;
-  padding: 40rpx 32rpx 32rpx;
-  box-shadow: 0 24rpx 60rpx rgba(16, 24, 40, .25);
+  border-radius: 20rpx 20rpx 0 0;
+  padding: 32rpx 32rpx calc(32rpx + env(safe-area-inset-bottom));
+  border-top: 3rpx solid #00A88F;
 }
-.modal-title { display: block; font-size: 32rpx; font-weight: 700; color: $text-1; margin-bottom: 28rpx; }
-.field { margin-bottom: 24rpx; }
-.field-label { display: block; font-size: 24rpx; color: $text-2; margin-bottom: 10rpx; }
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 22rpx;
+  border-bottom: 1rpx solid $line;
+  margin-bottom: 26rpx;
+}
+.sheet-title { font-size: 32rpx; font-weight: 800; color: $text-1; letter-spacing: -.3rpx; }
+.sheet-x {
+  width: 52rpx; height: 52rpx;
+  border: 1rpx solid $line;
+  border-radius: 6rpx;
+  display: flex; align-items: center; justify-content: center;
+}
+.field { margin-bottom: 22rpx; }
+.field-label {
+  display: block;
+  font-size: 21rpx;
+  color: $text-3;
+  letter-spacing: 2rpx;
+  margin-bottom: 10rpx;
+}
 .field-input {
-  height: 84rpx;
-  padding: 0 24rpx;
-  border-radius: $radius-sm;
+  height: 88rpx;
+  padding: 0 22rpx;
+  border-radius: 10rpx;
+  border: 1rpx solid $line;
   background: $surface-2;
   font-size: 28rpx;
   color: $text-1;
 }
 .ph { color: $text-3; }
-.modal-actions { display: flex; gap: 20rpx; margin-top: 32rpx; }
+.sheet-actions { display: flex; gap: 18rpx; margin-top: 26rpx; }
 
-/* 关于弹窗 */
-.about-card { display: flex; flex-direction: column; align-items: center; text-align: center; }
-.about-logo {
-  width: 108rpx;
-  height: 108rpx;
-  border-radius: 28rpx;
-  background: $grad-primary;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: $shadow-glow;
-  margin-bottom: 20rpx;
+/* 关于 */
+.sheet.about { display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
+.about-mark {
+  width: 92rpx; height: 92rpx;
+  background: #00A88F;
+  border-radius: 6rpx;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 22rpx;
 }
-.about-name { font-size: 32rpx; font-weight: 800; color: $text-1; }
-.about-ver { font-size: 22rpx; color: $text-3; margin: 8rpx 0 16rpx; }
-.about-desc { font-size: 24rpx; line-height: 1.7; color: $text-2; margin-bottom: 8rpx; }
-.modal-btn { width: 100%; margin-top: 24rpx; }
+.about-name { font-size: 34rpx; font-weight: 800; color: $text-1; letter-spacing: -.5rpx; }
+.about-ver { margin: 10rpx 0 18rpx; }
+.about-desc { font-size: 24rpx; line-height: 1.75; color: $text-2; }
+.about-btn { width: 100%; margin-top: 30rpx; }
 </style>

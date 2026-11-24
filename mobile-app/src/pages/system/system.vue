@@ -8,7 +8,7 @@
       <view class="card">
         <view class="health-top">
           <view class="health-stat">
-            <text class="health-num" :class="healthAllOk ? 'num-ok' : 'num-bad'">
+            <text class="health-num" :class="health.expected === 0 ? 'num-none' : (healthAllOk ? 'num-ok' : 'num-bad')">
               {{ health.healthy }}/{{ health.expected }}
             </text>
             <text class="health-label">任务进程健康</text>
@@ -51,7 +51,7 @@
 
         <view class="form-item">
           <view class="form-label">启用事件推送</view>
-          <switch :checked="cfg.push_enabled" color="#0a5fd9" style="transform:scale(.85); transform-origin: left;"
+          <switch :checked="cfg.push_enabled" color="#00A88F" style="transform:scale(.76); transform-origin: left;"
             @change="cfg.push_enabled = $event.detail.value" />
         </view>
 
@@ -122,7 +122,7 @@
           </view>
           <view class="flex-1">
             <text class="about-name">睿观 SageSight AI</text>
-            <text class="about-ver">智能视频检测分析平台 · 移动端 v1.0.0</text>
+            <text class="about-ver">智能视频检测分析平台 · 移动端 v{{ appVersion }}</text>
           </view>
         </view>
         <view class="about-meta">
@@ -138,13 +138,15 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import navBar from '@/components/nav-bar/nav-bar.vue'
 import icon from '@/utils/icons'
 import { get, put } from '@/utils/api'
-import { state } from '@/utils/store'
+import { state, APP_VERSION } from '@/utils/store'
 
 const isAdmin = computed(() => state.user && state.user.role === 'admin')
+const appVersion = APP_VERSION
 
 const health = reactive({ tasks: [], expected: 0, healthy: 0 })
 const pushStatus = ref(null)
@@ -165,7 +167,8 @@ const healthPct = computed(() => {
   return Math.round((health.healthy / health.expected) * 100)
 })
 
-onMounted(() => {
+// 用 onShow：从推送配置页或后台返回时也刷新健康状态与推送配置
+onShow(() => {
   loadHealth()
   loadPush()
 })
@@ -173,9 +176,10 @@ onMounted(() => {
 async function loadHealth() {
   try {
     const h = await get('/api/health')
+    const s = h.summary || {}
     health.tasks = h.tasks || []
-    health.expected = h.expected_count || 0
-    health.healthy = h.healthy_count || 0
+    health.expected = s.expected || 0
+    health.healthy = s.healthy || 0
   } catch (e) { /* 静默 */ }
 }
 
@@ -247,19 +251,18 @@ async function saveCfg() {
 }
 .num-ok { color: $success; }
 .num-bad { color: $warning; }
+.num-none { color: $text-3; }
 .health-label { font-size: 24rpx; color: $text-3; margin-top: 4rpx; display: block; }
 
 .health-bar {
-  height: 12rpx;
-  background: $surface-2;
-  border-radius: 6rpx;
+  height: 6rpx;
+  background: $surface-3;
   margin: 20rpx 0;
   overflow: hidden;
 }
 .health-bar-inner {
   height: 100%;
-  background: $grad-primary;
-  border-radius: 6rpx;
+  background: $text-1;
   transition: width .6s ease;
 }
 
@@ -271,9 +274,9 @@ async function saveCfg() {
   border-bottom: 1rpx solid $border;
 }
 .h-task:last-child { border-bottom: none; }
-.dot { width: 12rpx; height: 12rpx; border-radius: 50%; flex-shrink: 0; }
-.dot-ok { background: $success; box-shadow: 0 0 8rpx rgba(18,183,106,.6); }
-.dot-bad { background: $danger; box-shadow: 0 0 8rpx rgba(217,45,32,.5); }
+.dot { width: 12rpx; height: 12rpx; flex-shrink: 0; }
+.dot-ok { background: $success; }
+.dot-bad { background: $danger; }
 .h-name { font-size: 26rpx; color: $text-1; }
 .h-stage { font-size: 22rpx; }
 .h-heart {

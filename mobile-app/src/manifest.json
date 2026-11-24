@@ -1,6 +1,6 @@
 {
     "name" : "SageSight",
-    "appid" : "__UNI__SAGESIGHT",
+    "appid" : "__UNI__40C40C6",
     "description" : "SageSight AI 视频检测平台移动端",
     "versionName" : "1.0.0",
     "versionCode" : "100",
@@ -10,6 +10,8 @@
         "usingComponents" : true,
         "nvueStyleCompiler" : "uni-app",
         "compilerVersion" : 3,
+        /* 安装图标与启动图必须在 HBuilderX 的 manifest 可视化界面中配置后重新云打包。
+           src/static/logo.png 只是应用内 logo，不会生成 App 安装图标。 */
         "splashscreen" : {
             "alwaysShowBeforeRender" : true,
             "waiting" : true,
@@ -24,32 +26,35 @@
         "distribute" : {
             /* android打包配置 */
             "android" : {
+                /* 包名必须与 DCloud uni-push 1.0 后台填写的一致，否则推送注册失败。
+                   证书也必须与此前 DCloud 填的签名 SHA1/SHA256 对应（用 sagesight.keystore）。 */
+                "package" : "com.sagesight.app",
+                /* 仅保留实际用到的权限：网络/推送/喊话录音。
+                   已移除 CAMERA、READ_LOGS、READ_PHONE_STATE、GET_ACCOUNTS、
+                   WRITE_SETTINGS、FLASHLIGHT 等无关敏感权限，避免商店审核被卡。 */
                 "permissions" : [
-                    "<uses-permission android:name=\"android.permission.CHANGE_NETWORK_STATE\"/>",
-                    "<uses-permission android:name=\"android.permission.MOUNT_UNMOUNT_FILESYSTEMS\"/>",
-                    "<uses-permission android:name=\"android.permission.VIBRATE\"/>",
-                    "<uses-permission android:name=\"android.permission.READ_LOGS\"/>",
-                    "<uses-permission android:name=\"android.permission.ACCESS_WIFI_STATE\"/>",
-                    "<uses-feature android:name=\"android.hardware.camera.autofocus\"/>",
+                    "<uses-permission android:name=\"android.permission.INTERNET\"/>",
                     "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>",
-                    "<uses-permission android:name=\"android.permission.CAMERA\"/>",
-                    "<uses-permission android:name=\"android.permission.GET_ACCOUNTS\"/>",
-                    "<uses-permission android:name=\"android.permission.READ_PHONE_STATE\"/>",
-                    "<uses-permission android:name=\"android.permission.CHANGE_WIFI_STATE\"/>",
+                    "<uses-permission android:name=\"android.permission.VIBRATE\"/>",
                     "<uses-permission android:name=\"android.permission.WAKE_LOCK\"/>",
-                    "<uses-permission android:name=\"android.permission.FLASHLIGHT\"/>",
-                    "<uses-feature android:name=\"android.hardware.camera\"/>",
-                    "<uses-permission android:name=\"android.permission.WRITE_SETTINGS\"/>"
+                    "<uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>"
                 ]
             },
-            /* ios打包配置 */
-            "ios" : {},
+            /* ios打包配置：按住喊话需要麦克风用途说明，缺失时 iOS 会直接拒绝授权 */
+            "ios" : {
+                "privacyDescription" : {
+                    "NSMicrophoneUsageDescription" : "用于向监控摄像机喊话"
+                },
+                "dSYMs" : false
+            },
             /* SDK配置 */
             "sdkConfigs" : {
+                /* uni-push 1.0（老版本）：服务端直连个推 REST API V2。
+                   1.0 的密钥在 DCloud「uni-push → 1.0(老版本) → 消息推送 → 应用配置」获取。
+                   offline 字段是 2.0 专有，1.0 的厂商离线在 DCloud 后台配置 + 云打包生成。 */
                 "push" : {
                     "unipush" : {
-                        "version" : "2",
-                        "offline" : true
+                        "version" : "1"
                     }
                 }
             }
@@ -74,8 +79,8 @@
     "mp-toutiao" : {
         "usingComponents" : true
     },
-    "uniStatistics": {
-        "enable": false
+    "uniStatistics" : {
+        "enable" : false
     },
     "vueVersion" : "3"
 }

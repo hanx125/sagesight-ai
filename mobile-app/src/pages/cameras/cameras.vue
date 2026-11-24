@@ -3,7 +3,7 @@
     <nav-bar title="摄像机管理">
       <template #right>
         <view class="nav-add" @tap="goEdit()">
-          <image :src="icon('plus', '#0a5fd9', 2.6)" style="width:40rpx;height:40rpx;" />
+          <image :src="icon('plus', '#111210', 2.6)" style="width:40rpx;height:40rpx;" />
         </view>
       </template>
     </nav-bar>
@@ -15,7 +15,7 @@
           <image v-if="snapUrl(c, i)" class="snap" :src="snapUrl(c, i)" mode="aspectFill"
             @error="onSnapError(c.id)" />
           <view class="snap-fallback" v-else>
-            <image :src="icon('video', '#98A2B3', 2)" style="width:64rpx;height:64rpx;" />
+            <image :src="icon('video', '#55584F', 2)" style="width:64rpx;height:64rpx;" />
           </view>
           <view class="online-tag" :class="isOnline(c) ? 'tag-on' : 'tag-off'">
             <view class="tag-dot" />
@@ -38,11 +38,11 @@
                 <text>直播</text>
               </view>
               <view class="btn btn-sm btn-ghost" @tap="goEdit(c.id)">
-                <image :src="icon('edit', '#98A2B3', 2.2)" style="width:26rpx;height:26rpx;" />
+                <image :src="icon('edit', '#55584F', 2.2)" style="width:26rpx;height:26rpx;" />
                 <text>编辑</text>
               </view>
               <view class="btn btn-sm btn-danger-ghost" @tap="remove(c)">
-                <image :src="icon('trash', '#D92D20', 2.2)" style="width:26rpx;height:26rpx;" />
+                <image :src="icon('trash', '#E8342C', 2.2)" style="width:26rpx;height:26rpx;" />
                 <text>删除</text>
               </view>
             </view>
@@ -57,7 +57,7 @@
 
     <!-- FAB -->
     <view class="fab safe-bottom" @tap="goEdit()">
-      <image :src="icon('plus', '#FFFFFF', 3)" style="width:44rpx;height:44rpx;" />
+      <image :src="icon('plus', '#111210', 3)" style="width:44rpx;height:44rpx;" />
     </view>
   </view>
 </template>
@@ -68,7 +68,7 @@ import { onLoad, onShow, onPullDownRefresh } from '@dcloudio/uni-app'
 import navBar from '@/components/nav-bar/nav-bar.vue'
 import emptyState from '@/components/empty-state/empty-state.vue'
 import icon from '@/utils/icons'
-import { get, del } from '@/utils/api'
+import { getAllCameras, del } from '@/utils/api'
 import { resolveUrl, state } from '@/utils/store'
 
 const cameras = ref([])
@@ -104,8 +104,7 @@ function onSnapError(id) {
 async function load(silent) {
   if (!silent) loading.value = true
   try {
-    const d = await get('/api/cameras')
-    const list = (d && d.cameras) || (Array.isArray(d) ? d : [])
+    const list = await getAllCameras()
     cameras.value = list.map(c => ({ ...c, _loaded: true }))
   } catch (e) {
     uni.showToast({ title: e.message || '加载失败', icon: 'none' })
@@ -133,7 +132,7 @@ function remove(c) {
   uni.showModal({
     title: '删除摄像机',
     content: `确定删除「${c.name || '摄像机 #' + c.id}」吗？`,
-    confirmColor: '#D92D20',
+    confirmColor: '#E8342C',
     success: async (r) => {
       if (!r.confirm) return
       try {
@@ -155,31 +154,33 @@ function remove(c) {
 .snap-wrap {
   position: relative;
   height: 320rpx;
-  background: #0A1020;
+  background: #111210;
 }
 .snap { width: 100%; height: 100%; display: block; }
 .snap-fallback {
   width: 100%; height: 100%;
   display: flex; align-items: center; justify-content: center;
-  background: linear-gradient(135deg, rgba(10, 95, 217, .06), rgba(14, 155, 216, .08));
+  background:
+    repeating-linear-gradient(45deg, rgba(17, 18, 16, .045) 0, rgba(17, 18, 16, .045) 2rpx, transparent 2rpx, transparent 16rpx),
+    #FFFFFF;
 }
 .online-tag {
   position: absolute;
-  left: 20rpx;
-  top: 20rpx;
+  left: 16rpx;
+  top: 16rpx;
   display: flex;
   align-items: center;
   gap: 8rpx;
-  padding: 6rpx 16rpx;
-  border-radius: 999rpx;
-  font-size: 20rpx;
-  font-weight: 600;
-  backdrop-filter: blur(8rpx);
+  padding: 5rpx 14rpx;
+  border-radius: 4rpx;
+  font-size: 19rpx;
+  font-weight: 700;
+  letter-spacing: 1rpx;
 }
-.tag-on { background: rgba(4, 18, 29, .72); color: #34D399; }
-.tag-off { background: rgba(4, 18, 29, .72); color: #98A2B3; }
-.tag-dot { width: 10rpx; height: 10rpx; border-radius: 50%; }
-.tag-on .tag-dot { background: $success; box-shadow: 0 0 10rpx rgba(18,183,106,.8); }
+.tag-on { background: rgba(10, 9, 5, .78); color: #4ADE80; }
+.tag-off { background: rgba(10, 9, 5, .78); color: rgba(255, 255, 255, .6); }
+.tag-dot { width: 9rpx; height: 9rpx; }
+.tag-on .tag-dot { background: $success; box-shadow: 0 0 10rpx rgba(0, 168, 143,.8); }
 .tag-off .tag-dot { background: $text-3; }
 
 .cam-body { padding: 24rpx; }
@@ -202,25 +203,29 @@ function remove(c) {
 .foot-btns { display: flex; gap: 14rpx; }
 .btn-sm text { margin-left: 8rpx; }
 
+/* 新建按钮：墨块方印 */
 .fab {
   position: fixed;
   right: 32rpx;
-  bottom: 48rpx;
+  bottom: calc(52rpx + env(safe-area-inset-bottom));
   width: 104rpx;
   height: 104rpx;
-  border-radius: 50%;
-  background: $grad-primary;
-  box-shadow: $shadow-glow;
+  border-radius: 10rpx;
+  background: #00A88F;
+  box-shadow: 0 8rpx 0 rgba(0, 0, 0, .18);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 50;
-  transition: transform .12s;
+  transition: transform .1s, box-shadow .1s;
 }
-.fab:active { transform: scale(.9); }
+.fab:active { transform: translateY(4rpx); box-shadow: 0 4rpx 0 rgba(0, 0, 0, .18); }
 /* #ifdef H5 */
-.fab {
-  right: calc(50% - 375px + 32rpx);
+/* 仅在宽屏桌面端把悬浮元素对齐到 750px 内容列的右边缘；手机上保持贴边 */
+@media (min-width: 800px) {
+  .fab {
+    right: calc(50% - 375px + 32rpx);
+  }
 }
 /* #endif */
 </style>

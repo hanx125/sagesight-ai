@@ -1,13 +1,13 @@
 # SageSight 移动端（uni-app）
 
-SageSight 智能视频分析平台的手机端，基于 **uni-app + Vue 3 + Vite**，深色专业主题，配套后端接口实现完整管理：首页总览、实时监控、事件中心、任务管理、摄像机管理、系统设置（健康状态 + UniPush 推送配置）。
+SageSight 智能视频分析平台的手机端，基于 **uni-app + Vue 3 + Vite**，浅色主题。定位为手持端常用与必要功能：登录、首页总览、实时监控、事件中心、任务管理、摄像机管理、系统设置（健康状态 + UniPush 推送配置）；PTZ 云台、Zone 可视化配置、算法库等桌面端重型操作不在此端实现。
 
 ## 目录结构
 
 ```
 mobile-app/
 ├── src/
-│   ├── pages.json              # 路由与导航配置（9 个页面）
+│   ├── pages.json              # 路由与导航配置（10 个页面）
 │   ├── manifest.json           # 应用配置（Push 模块 + UniPush 2.0）
 │   ├── uni.scss                # 主题变量（色板/圆角/阴影）
 │   ├── App.vue                 # 全局样式（card/badge/btn/input 等）
@@ -41,7 +41,7 @@ npm install
 npm run dev:h5     # http://localhost:5173
 ```
 
-- vite 已配置代理：`/api`、`/output` → `http://localhost:5556`，H5 调试时服务器地址留空即可。
+- vite 已配置代理：`/api`、`/output`、`/uploads` → `http://localhost:5556`，`/ws/raw` 为 WebSocket 代理；H5 调试时服务器地址**留空**（填了会绕过代理，可能因跨域或混合内容失败）。
 - 登录页默认账号密码同 Web 端管理员。
 
 ## App 打包（HBuilderX 云打包）
@@ -51,7 +51,40 @@ npm run dev:h5     # http://localhost:5173
 3. 发行 → 原生 App-云打包：
    - 包名建议 `com.sagesight.app`
    - 勾选「uni-app 云打包」，使用 DCloud 公共测试证书或自有证书
-   - 打包前在 manifest.json → App 常用其它设置确认 AppID（`__UNI__SAGESIGHT` 或自己申请）
+   - 打包前在 manifest.json → App 常用其它设置确认 AppID（当前为 `__UNI__40C40C6`，须与 DCloud 开发者中心「我的应用」一致）
+4. **上架前必须补齐**（否则审核会被卡或安装后无图标）：
+   - 在 HBuilderX 的 manifest 可视化界面配置**安装图标**（Android 各密度 + iOS）和**启动图**并重新云打包；`src/static/logo.png` 只是应用内 logo，不会生成安装图标。
+   - Android 权限已收敛为网络/推送/录音五项；如后续新增拍照或定位功能，再按需申请对应权限并填写用途说明。
+   - UniPush 离线打包需使用**自定义基座**才包含推送与录音权限配置。
+
+## 生产环境 H5 部署
+
+后端与 H5 不同域时，反向代理必须同时转发 API、图片和 WebSocket，否则页面能开但实时报警收不到：
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain;
+
+    location / {
+        root /path/to/mobile-app/dist/build/h5;
+        try_files $uri $uri/ /index.html;
+    }
+    location ~ ^/(api|output|uploads)/ {
+        proxy_pass http://127.0.0.1:5556;
+        proxy_set_header Host $host;
+    }
+    location /ws/raw {
+        proxy_pass http://127.0.0.1:5556;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+    }
+}
+```
+
+> HTTPS 站点必须用 `wss://` 同源转发，否则浏览器会拦截 WebSocket 握手。
 
 ## 开通 UniPush 2.0（个推）
 

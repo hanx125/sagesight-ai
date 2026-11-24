@@ -14,7 +14,7 @@
           <view class="sw-row" v-for="(it, i) in g.items" :key="it.key"
             :class="{ last: i === g.items.length - 1 && !g.extras }">
             <text class="sw-label">{{ it.label }}</text>
-            <switch :checked="sw[it.key]" color="#0a5fd9" style="transform:scale(.8);"
+            <switch :checked="sw[it.key]" color="#00A88F" style="transform:scale(.7);"
               @change="sw[it.key] = $event.detail.value" />
           </view>
 
@@ -22,7 +22,7 @@
           <template v-if="g.voice">
             <view class="sw-row">
               <text class="sw-label">报警时播放语音</text>
-              <switch :checked="voice.enabled" color="#0a5fd9" style="transform:scale(.8);"
+              <switch :checked="voice.enabled" color="#00A88F" style="transform:scale(.7);"
                 @change="voice.enabled = $event.detail.value" />
             </view>
             <template v-if="voice.enabled">
@@ -31,7 +31,7 @@
                 <picker mode="selector" :range="voiceOptions" @change="onVoiceMp3Change">
                   <view class="picker-box">
                     <text>{{ voice.mp3 || '使用全局默认' }}</text>
-                    <image :src="icon('chevron-down', '#667085', 2.4)" style="width:32rpx;height:32rpx;" />
+                    <image :src="icon('chevron-down', '#55584F', 2.4)" style="width:32rpx;height:32rpx;" />
                   </view>
                 </picker>
                 <view class="form-tip">来源于系统管理-报警语音播报配置的预置文件</view>
@@ -56,7 +56,7 @@
                 <view class="form-label">音量（0-1）</view>
                 <view class="slider-row">
                   <slider class="slider flex-1" :value="volumePercent" :min="0" :max="100" :step="10"
-                    activeColor="#0a5fd9" backgroundColor="rgba(148,163,184,.15)" block-size="22"
+                    activeColor="#00A88F" backgroundColor="rgba(17, 18, 16, .08)" block-size="22"
                     @change="e => voice.volume = Number(e.detail.value) / 100" />
                   <text class="slider-val">{{ volumePercent }}%</text>
                 </view>
@@ -304,9 +304,9 @@ async function save() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: $surface-2;
-  border: 1rpx solid $border;
-  border-radius: $radius-sm;
+  background: $surface;
+  border: 1rpx solid $line;
+  border-radius: 12rpx;
   padding: 0 24rpx;
   height: 92rpx;
   font-size: 28rpx;

@@ -18,7 +18,7 @@
       "path": "pages/player/player",
       "style": {
         "navigationStyle": "custom",
-        "backgroundColor": "#101828"
+        "backgroundColor": "#F2F3EE"
       }
     },
     {
@@ -67,8 +67,8 @@
   "globalStyle": {
     "navigationStyle": "custom",
     "navigationBarTitleText": "SageSight",
-    "navigationBarBackgroundColor": "#F5F7FA",
+    "navigationBarBackgroundColor": "#F2F3EE",
     "navigationBarTextStyle": "black",
-    "backgroundColor": "#F5F7FA"
+    "backgroundColor": "#F2F3EE"
   }
 }

@@ -55,17 +55,22 @@ function pushPcm(buffer) {
 /* ---------------- App 端：RecorderManager ---------------- */
 
 let recorder = null
+let recorderBoundInstance = null
 
 function startCaptureApp() {
   recorder = uni.getRecorderManager()
-  recorder.onStart(() => { /* 录音开始 */ })
-  recorder.onFrameRecorded((res) => {
-    if (res && res.frameBuffer) pushPcm(res.frameBuffer)
-  })
-  recorder.onError(() => {
-    stopTalk()
-    uni.showToast({ title: '录音失败，请检查麦克风权限', icon: 'none' })
-  })
+  // getRecorderManager 是全局单例，重复 on* 会造成回调叠加，只绑定一次
+  if (recorderBoundInstance !== recorder) {
+    recorder.onStart(() => { /* 录音开始 */ })
+    recorder.onFrameRecorded((res) => {
+      if (res && res.frameBuffer) pushPcm(res.frameBuffer)
+    })
+    recorder.onError(() => {
+      stopTalk()
+      uni.showToast({ title: '录音失败，请检查麦克风权限', icon: 'none' })
+    })
+    recorderBoundInstance = recorder
+  }
   recorder.start({
     duration: 600000,          // 上限 10 分钟，由松手主动停止
     sampleRate: 8000,
@@ -88,6 +93,7 @@ let audioCtx = null
 let mediaStream = null
 let processor = null
 let source = null
+let muteGain = null
 let resampleRatio = 1
 let pending = []        // 待发送的采样值（Int16）
 let pendingCount = 0
@@ -122,7 +128,12 @@ function startCaptureH5() {
         }
       }
       source.connect(processor)
-      processor.connect(audioCtx.destination)
+      // ScriptProcessorNode 必须连到 destination 才会持续触发 onaudioprocess，
+      // 但直接连会把麦克风声音送进扬声器形成啸叫。经增益为 0 的节点隔离。
+      muteGain = audioCtx.createGain()
+      muteGain.gain.value = 0
+      processor.connect(muteGain)
+      muteGain.connect(audioCtx.destination)
     })
     .catch(() => {
       stopTalk()
@@ -133,10 +144,12 @@ function startCaptureH5() {
 function stopCaptureH5() {
   try { if (processor) processor.disconnect() } catch (e) { /* 忽略 */ }
   try { if (source) source.disconnect() } catch (e) { /* 忽略 */ }
+  try { if (muteGain) muteGain.disconnect() } catch (e) { /* 忽略 */ }
   try { if (mediaStream) mediaStream.getTracks().forEach(t => t.stop()) } catch (e) { /* 忽略 */ }
   try { if (audioCtx) audioCtx.close() } catch (e) { /* 忽略 */ }
   processor = null
   source = null
+  muteGain = null
   mediaStream = null
   audioCtx = null
   pending = []

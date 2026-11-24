@@ -54,6 +54,7 @@ export function eventStatusMeta(status) {
     case 'initial': return { text: '待确认', type: 'warning' }
     case 'final': return { text: '已确认', type: 'success' }
     case 'duplicate': return { text: '重复', type: 'gray' }
+    case 'gif_ready': return { text: 'GIF 就绪', type: 'info' }
     default: return { text: status || '-', type: 'gray' }
   }
 }

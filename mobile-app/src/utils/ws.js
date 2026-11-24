@@ -11,12 +11,15 @@ let reconnectTimer = null
 let backoff = 2000
 let lastBase = null
 let closedByUser = false
+// 连接代次：每次重建连接自增。旧 socket 的 onClose/onError 是异步到达的，
+// 必须用代次校验，否则它会把新连接误清空并额外启动一个重连定时器。
+let socketGeneration = 0
 
 const handlers = {} // event -> Set<fn>
 
 function wsUrl() {
   let base = state.serverBase || ''
-  // H5 留空时使用当前站点源（vite 代理不含 ws/raw，需直连后端场景由 serverBase 指定）
+  // H5 留空时走当前站点源，由 dev 的 vite 代理或生产的 nginx 转发 /ws/raw
   // #ifdef H5
   if (!base) base = `${location.protocol}//${location.host}`
   // #endif
@@ -38,40 +41,64 @@ function dispatch(event, data) {
   })
 }
 
+/** 拆掉当前连接并让它的所有回调失效（不设置 closedByUser） */
+function teardownSocket() {
+  socketGeneration += 1
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  if (socket) {
+    try { socket.close({}) } catch (e) { /* 忽略 */ }
+    socket = null
+  }
+}
+
 export function connectWs() {
   if (!state.token) return
   const base = state.serverBase
-  // 登录未变且连接存活时不重连
+  const url = wsUrl()
+  // 同一地址且已有连接（含正在建立）时不重复创建
   if (socket && base === lastBase) return
-  closeWs()
 
+  teardownSocket()
+  const generation = socketGeneration
   lastBase = base
   closedByUser = false
 
+  let ws = null
   try {
-    socket = uni.connectSocket({
-      url: wsUrl(),
-      complete: () => {}
-    })
+    ws = uni.connectSocket({ url, complete: () => {} })
   } catch (e) {
     scheduleReconnect()
     return
   }
+  if (!ws) { scheduleReconnect(); return }
 
-  if (!socket) { scheduleReconnect(); return }
+  socket = ws
+  const isCurrent = () => generation === socketGeneration
 
-  socket.onOpen(() => { backoff = 2000 })
-  socket.onMessage((msg) => {
+  ws.onOpen(() => { if (isCurrent()) backoff = 2000 })
+  ws.onMessage((msg) => {
+    if (!isCurrent()) return
     try {
       const payload = JSON.parse(msg.data)
       if (payload && payload.event) dispatch(payload.event, payload.data)
     } catch (e) { /* 非 JSON 消息忽略 */ }
   })
-  socket.onClose(() => {
+  ws.onClose(() => {
+    // 关键：旧连接的关闭回调不得影响后来新建的连接
+    if (!isCurrent()) return
     socket = null
     if (!closedByUser) scheduleReconnect()
   })
-  socket.onError(() => { /* 由 onClose 触发重连 */ })
+  ws.onError(() => {
+    // 部分平台只回调 error 不回调 close，这里主动收尾；
+    // generation 已变说明已被新连接取代，直接忽略。
+    if (!isCurrent()) return
+    teardownSocket()
+    if (!closedByUser) scheduleReconnect()
+  })
 }
 
 function scheduleReconnect() {
@@ -85,12 +112,5 @@ function scheduleReconnect() {
 
 export function closeWs() {
   closedByUser = true
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer)
-    reconnectTimer = null
-  }
-  if (socket) {
-    try { socket.close({}) } catch (e) { /* 忽略 */ }
-    socket = null
-  }
+  teardownSocket()
 }

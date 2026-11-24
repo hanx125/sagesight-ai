@@ -18,7 +18,7 @@
           <view class="form-label">启用状态</view>
           <view class="switch-row">
             <text class="switch-desc">启用后可纳入调度运行</text>
-            <switch :checked="form.enabled" color="#0a5fd9" style="transform:scale(.85);"
+            <switch :checked="form.enabled" color="#00A88F" style="transform:scale(.76);"
               @change="form.enabled = $event.detail.value" />
           </view>
         </view>
@@ -32,7 +32,7 @@
           <picker mode="selector" :range="DETECT_TYPES.map(d => d.label)" @change="onDetectChange">
             <view class="picker-box">
               <text>{{ detectLabel }}</text>
-              <image :src="icon('chevron-down', '#667085', 2.4)" style="width:32rpx;height:32rpx;" />
+              <image :src="icon('chevron-down', '#55584F', 2.4)" style="width:32rpx;height:32rpx;" />
             </view>
           </picker>
         </view>
@@ -42,7 +42,7 @@
           <picker mode="selector" :range="algoOptions" @change="onAlgoChange">
             <view class="picker-box" :class="{ 'picker-empty': !selectedAlgo }">
               <text>{{ selectedAlgo ? `${selectedAlgo.name} (${selectedAlgo.type})` : '-- 请选择算法配置 --' }}</text>
-              <image :src="icon('chevron-down', '#667085', 2.4)" style="width:32rpx;height:32rpx;" />
+              <image :src="icon('chevron-down', '#55584F', 2.4)" style="width:32rpx;height:32rpx;" />
             </view>
           </picker>
         </view>
@@ -52,7 +52,7 @@
           <picker mode="selector" :range="EVENT_TYPES.map(d => d.label)" @change="onEventChange">
             <view class="picker-box">
               <text>{{ eventLabel }}</text>
-              <image :src="icon('chevron-down', '#667085', 2.4)" style="width:32rpx;height:32rpx;" />
+              <image :src="icon('chevron-down', '#55584F', 2.4)" style="width:32rpx;height:32rpx;" />
             </view>
           </picker>
         </view>
@@ -111,7 +111,7 @@
           <view class="form-label">循环处理</view>
           <view class="switch-row">
             <text class="switch-desc">文件列表处理完成后从头再播</text>
-            <switch :checked="form.file_loop" color="#0a5fd9" style="transform:scale(.85);"
+            <switch :checked="form.file_loop" color="#00A88F" style="transform:scale(.76);"
               @change="form.file_loop = $event.detail.value" />
           </view>
         </view>
@@ -125,20 +125,21 @@
         </view>
 
         <view class="form-item">
-          <view class="form-label">目标类别<text class="req">*</text></view>
+          <view class="form-label">目标类别</view>
           <view class="input-box classes-box" @tap="openClasses">
             <text class="classes-text" :class="{ 'picker-empty-text': !form.target_classes.length }">
               {{ form.target_classes.length ? form.target_classes.join('、') : '点击选择目标类别' }}
             </text>
             <view class="classes-btn">选择</view>
           </view>
+          <view class="form-tip">留空表示不限制类别，检测该算法的全部目标</view>
         </view>
 
         <view class="form-item">
           <view class="form-label">运动检测</view>
           <view class="switch-row">
             <text class="switch-desc">启用后仅对运动区域进行检测</text>
-            <switch :checked="form.motion_detection_enabled" color="#0a5fd9" style="transform:scale(.85);"
+            <switch :checked="form.motion_detection_enabled" color="#00A88F" style="transform:scale(.76);"
               @change="form.motion_detection_enabled = $event.detail.value" />
           </view>
         </view>
@@ -147,7 +148,7 @@
           <view class="form-label">目标跟踪</view>
           <view class="switch-row">
             <text class="switch-desc">对检测目标进行跨帧跟踪</text>
-            <switch :checked="form.tracking_enabled" color="#0a5fd9" style="transform:scale(.85);"
+            <switch :checked="form.tracking_enabled" color="#00A88F" style="transform:scale(.76);"
               @change="form.tracking_enabled = $event.detail.value" />
           </view>
         </view>
@@ -159,7 +160,7 @@
         <view class="pool-head">
           <text class="pool-count">已选择 {{ selectedCameraIds.length }} 个通道</text>
           <view class="btn btn-sm btn-primary" @tap="openChannelPicker">
-            <image :src="icon('plus', '#FFFFFF', 3)" style="width:24rpx;height:24rpx;" />
+            <image :src="icon('plus', '#111210', 3)" style="width:24rpx;height:24rpx;" />
             <text>添加通道</text>
           </view>
         </view>
@@ -173,7 +174,7 @@
             <text class="pool-url t-ellipsis">{{ c.rtsp_url }}</text>
           </view>
           <view class="pool-remove" @tap="removeChannel(c.camera_id)">
-            <image :src="icon('trash', '#D92D20', 2.2)" style="width:30rpx;height:30rpx;" />
+            <image :src="icon('trash', '#E8342C', 2.2)" style="width:30rpx;height:30rpx;" />
           </view>
         </view>
         <view v-if="!poolChannels.length" class="pool-empty">
@@ -193,7 +194,7 @@
         <view class="sheet-head">
           <text class="sheet-title">选择目标类别</text>
           <view @tap="classesShow = false">
-            <image :src="icon('close', '#667085', 2.4)" style="width:36rpx;height:36rpx;" />
+            <image :src="icon('close', '#55584F', 2.4)" style="width:36rpx;height:36rpx;" />
           </view>
         </view>
         <view class="input-box sheet-search">
@@ -202,7 +203,7 @@
         <scroll-view scroll-y class="sheet-list">
           <view class="check-item" v-for="c in filteredClasses" :key="c" @tap="toggleClass(c)">
             <view class="check-box" :class="{ checked: classSelected.includes(c) }">
-              <image v-if="classSelected.includes(c)" :src="icon('check', '#FFFFFF', 3)" style="width:26rpx;height:26rpx;" />
+              <image v-if="classSelected.includes(c)" :src="icon('check', '#111210', 3)" style="width:26rpx;height:26rpx;" />
             </view>
             <text class="check-label flex-1">{{ c }}</text>
           </view>
@@ -225,7 +226,7 @@
         <view class="sheet-head">
           <text class="sheet-title">选择设备通道</text>
           <view @tap="channelShow = false">
-            <image :src="icon('close', '#667085', 2.4)" style="width:36rpx;height:36rpx;" />
+            <image :src="icon('close', '#55584F', 2.4)" style="width:36rpx;height:36rpx;" />
           </view>
         </view>
         <view class="input-box sheet-search">
@@ -234,7 +235,7 @@
         <scroll-view scroll-y class="sheet-list">
           <view class="check-item" v-for="cam in filteredCameras" :key="cam.id" @tap="togglePick(cam.id)">
             <view class="check-box" :class="{ checked: picking.includes(cam.id) }">
-              <image v-if="picking.includes(cam.id)" :src="icon('check', '#FFFFFF', 3)" style="width:26rpx;height:26rpx;" />
+              <image v-if="picking.includes(cam.id)" :src="icon('check', '#111210', 3)" style="width:26rpx;height:26rpx;" />
             </view>
             <view class="flex-1" style="min-width:0;">
               <text class="check-label">{{ cam.name || '未命名设备' }}</text>
@@ -264,7 +265,7 @@ import { ref, reactive, computed } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import navBar from '@/components/nav-bar/nav-bar.vue'
 import icon from '@/utils/icons'
-import { get, post, put } from '@/utils/api'
+import { get, post, put, getAllCameras } from '@/utils/api'
 
 const DETECT_TYPES = [
   { value: 'realtime', label: '实时检测' },
@@ -407,8 +408,7 @@ async function loadAlgorithms() {
 
 async function loadCameras() {
   try {
-    const d = await get('/api/cameras')
-    cameras.value = (d && d.cameras) || []
+    cameras.value = await getAllCameras()
   } catch (e) { cameras.value = [] }
 }
 
@@ -482,6 +482,26 @@ async function save() {
   if (!form.task_name.trim()) { uni.showToast({ title: '请填写任务名称', icon: 'none' }); return }
   if (!form.algorithm) { uni.showToast({ title: '请选择算法配置', icon: 'none' }); return }
   if (!selectedCameraIds.value.length) { uni.showToast({ title: '请至少选择一个设备通道', icon: 'none' }); return }
+
+  const conf = parseFloat(form.conf_threshold)
+  if (isNaN(conf) || conf < 0 || conf > 1) {
+    uni.showToast({ title: '置信度阈值需在 0-1 之间', icon: 'none' }); return
+  }
+  if (form.detection_type === 'polling') {
+    const n = parseInt(form.polling_interval_frames, 10)
+    if (!Number.isInteger(n) || n < 1 || n > 10000) {
+      uni.showToast({ title: '轮询间隔需为 1-10000 的整数', icon: 'none' }); return
+    }
+  }
+  if (form.detection_type === 'motion_gated') {
+    const n = parseInt(form.motion_gate_fallback_interval, 10)
+    if (!Number.isInteger(n) || n < 1 || n > 100000) {
+      uni.showToast({ title: '兜底补抽间隔需为 1-100000 的整数', icon: 'none' }); return
+    }
+  }
+  if (form.detection_type === 'scheduled' && !form.schedule_cron.trim()) {
+    uni.showToast({ title: '定时模式需填写 Cron 表达式', icon: 'none' }); return
+  }
   if (saving.value) return
   saving.value = true
 
@@ -505,13 +525,12 @@ async function save() {
       }
     })
 
-  const conf = parseFloat(form.conf_threshold)
   const payload = {
     task_name: form.task_name.trim(),
     enabled: !!form.enabled,
     detection_type: form.detection_type,
     event_type: form.event_type || 'tracking',
-    conf_threshold: isNaN(conf) ? 0.25 : conf,
+    conf_threshold: conf,
     polling_interval_frames: parseInt(form.polling_interval_frames, 10) || 5,
     motion_gate_fallback_interval: parseInt(form.motion_gate_fallback_interval, 10) || 30,
     schedule_cron: form.schedule_cron || '',
@@ -550,9 +569,9 @@ async function save() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: $surface-2;
-  border: 1rpx solid $border;
-  border-radius: $radius-sm;
+  background: $surface;
+  border: 1rpx solid $line;
+  border-radius: 12rpx;
   padding: 0 24rpx;
   height: 92rpx;
   font-size: 28rpx;
@@ -609,7 +628,7 @@ async function save() {
 .mask {
   position: fixed;
   left: 0; top: 0; right: 0; bottom: 0;
-  background: rgba(16, 24, 40, .55);
+  background: rgba(3, 9, 18, .72);
   z-index: 999;
   display: flex;
   align-items: flex-end;

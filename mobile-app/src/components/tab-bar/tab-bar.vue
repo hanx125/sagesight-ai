@@ -1,17 +1,10 @@
 <template>
   <view class="tab-bar safe-bottom">
-    <view
-      v-for="t in tabs"
-      :key="t.key"
-      class="tab-item"
-      :class="{ active: modelValue === t.key }"
-      @tap="switchTab(t.key)"
-    >
-      <view class="tab-icon-wrap">
-        <image class="tab-icon" :src="icon(t.icon, modelValue === t.key ? '#0a5fd9' : '#667085', 2.2)" />
-        <view v-if="modelValue === t.key" class="tab-dot" />
+    <view class="tab-item" v-for="t in tabs" :key="t.key" @tap="switchTab(t.key)">
+      <view class="tab-box" :class="{ on: modelValue === t.key }">
+        <image class="tab-icon" :src="icon(t.icon, modelValue === t.key ? '#FFFFFF' : '#111210', 2.2, modelValue === t.key)" />
       </view>
-      <text class="tab-label">{{ t.label }}</text>
+      <text class="tab-label" :class="{ on: modelValue === t.key }">{{ t.label }}</text>
     </view>
   </view>
 </template>
@@ -25,7 +18,7 @@ defineProps({
 const emit = defineEmits(['update:modelValue', 'change'])
 
 const tabs = [
-  { key: 'home', label: '首页', icon: 'home' },
+  { key: 'home', label: '总览', icon: 'home' },
   { key: 'monitor', label: '监控', icon: 'video' },
   { key: 'events', label: '事件', icon: 'bell' },
   { key: 'profile', label: '我的', icon: 'user' }
@@ -38,61 +31,51 @@ function switchTab(key) {
 </script>
 
 <style lang="scss" scoped>
+/* 信号白标签栏：白底 + 粗顶线 + 激活项青绿方印 */
 .tab-bar {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  left: 0; right: 0; bottom: 0;
   z-index: 200;
   display: flex;
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(20rpx);
-  -webkit-backdrop-filter: blur(20rpx);
-  border-top: 1rpx solid $border;
-  padding-top: 10rpx;
+  align-items: flex-start;
+  padding: 12rpx 8rpx calc(10rpx + env(safe-area-inset-bottom));
+  background: #FFFFFF;
+  border-top: $stroke solid $border;
+  box-shadow: 0 -6rpx 20rpx rgba(17, 18, 16, .06);
 }
 .tab-item {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8rpx 0 6rpx;
-  transition: transform .15s ease;
+  gap: 6rpx;
 }
-.tab-item:active { transform: scale(.92); }
-.tab-icon-wrap {
-  position: relative;
-  width: 48rpx;
-  height: 48rpx;
+.tab-item:active .tab-box { transform: scale(.88); }
+.tab-box {
+  width: 66rpx;
+  height: 46rpx;
+  border-radius: $radius-sm;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 2rpx solid transparent;
+  transition: background .16s ease, transform .12s ease;
 }
-.tab-icon {
-  width: 46rpx;
-  height: 46rpx;
+.tab-box.on {
+  background: $accent;
+  border-color: $border;
+  box-shadow: 3rpx 3rpx 0 $border;
 }
-.tab-dot {
-  position: absolute;
-  bottom: -10rpx;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 28rpx;
-  height: 6rpx;
-  border-radius: 3rpx;
-  background: $grad-primary;
-  box-shadow: 0 2rpx 12rpx rgba(10, 95, 217, .35);
-}
+.tab-icon { width: 36rpx; height: 36rpx; }
 .tab-label {
   font-size: 20rpx;
   color: $text-3;
-  margin-top: 10rpx;
-  transition: color .15s;
+  letter-spacing: 1rpx;
+  font-weight: 700;
+  transition: color .16s;
 }
-.tab-item.active .tab-label {
-  color: $primary;
-  font-weight: 600;
-}
+.tab-label.on { color: $text-1; font-weight: 800; }
+
 /* #ifdef H5 */
 .tab-bar {
   left: 50%;
